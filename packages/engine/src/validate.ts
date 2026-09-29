@@ -1,4 +1,5 @@
 import { isExpression, parseTemplate, TemplateSyntaxError } from './expressions/template.js';
+import { UNSUPPORTED_NODE_TYPE } from './n8n/import.js';
 import { defaultRegistry, type NodeRegistry } from './registry.js';
 import type { JsonValue, WorkflowDefinition } from './types.js';
 
@@ -23,6 +24,9 @@ export function validateWorkflow(workflow: WorkflowDefinition, registry: NodeReg
     if (!type) {
       issues.push({ nodeId: node.id, message: `Tipo de nó desconhecido: ${node.type}` });
       continue;
+    }
+    if (node.type === UNSUPPORTED_NODE_TYPE) {
+      issues.push({ nodeId: node.id, message: `"${node.name}" veio do n8n sem equivalente; substitua-o por outros nós` });
     }
     const values = Object.fromEntries(type.description.properties.map((p) => [p.name, node.parameters[p.name] ?? p.default]));
     for (const prop of type.description.properties) {

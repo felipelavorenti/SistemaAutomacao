@@ -41,6 +41,8 @@ export interface NodeTypeDescription {
   displayName: string;
   description: string;
   group: 'trigger' | 'action' | 'logic' | 'data';
+  /** Não aparece na paleta do editor (ex.: nó do n8n não convertido). */
+  hidden?: boolean;
   inputs: number;
   outputs: number;
   outputNames?: string[];

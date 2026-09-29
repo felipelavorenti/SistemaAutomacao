@@ -127,8 +127,10 @@ function cardParameters(card: JsonObject): CardParameter[] {
   const params = Array.isArray(card.parameters) ? card.parameters.filter(isPlainObject) : [];
   if (params.length) return params as unknown as CardParameter[];
   const query = isPlainObject(card.dataset_query) ? card.dataset_query : {};
+  // Formato antigo: dataset_query.native['template-tags']; novo (MBQL 5): stages[n]['template-tags'].
   const native = isPlainObject(query.native) ? query.native : {};
-  const tags = isPlainObject(native['template-tags']) ? native['template-tags'] : {};
+  const stages = Array.isArray(query.stages) ? query.stages.filter(isPlainObject) : [];
+  const tags = [native, ...stages].reduce<JsonObject>((all, block) => (isPlainObject(block['template-tags']) ? { ...all, ...block['template-tags'] } : all), {});
   return Object.values(tags)
     .filter(isPlainObject)
     .map((tag) => ({

@@ -1,7 +1,8 @@
 import { CronExpressionParser } from 'cron-parser';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { defaultRegistry, ExpressionSandbox, validateWorkflow, type Item, type WorkflowDefinition } from '@sa/engine';
+import { randomUUID } from 'node:crypto';
+import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
@@ -389,6 +390,71 @@ export const workflowRoutes =
       ]);
       await audit(db, { userId: user.id, action: 'import', entityType: 'workflow', entityId: row!.id, entityName: b.name, ip: request.ip });
       return load(user, row!.id);
+    });
+
+    /**
+     * Importa fluxos exportados do n8n (um arquivo com um fluxo ou uma lista).
+     * Os fluxos entram desativados, e o Execute Workflow aponta para o subfluxo
+     * importado agora ou antes, pelo ID que ele tinha no n8n.
+     */
+    app.post('/workflows/import-n8n', { bodyLimit: 50 * 1024 * 1024 }, async (request) => {
+      const user = currentUser(request);
+      requireCap(user, 'workflow:edit');
+      const b = z.object({ folderId: z.string().uuid(), data: z.unknown() }).parse(request.body);
+      checkFolder(user, b.folderId);
+      let list: N8nWorkflow[];
+      try {
+        list = readN8nExport(b.data);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+
+      const n8nIds = list.map((w) => (w.id === undefined || w.id === null ? null : String(w.id))).filter((id): id is string => !!id);
+      const existing = await many<{ id: string; name: string; n8n_id: string; folder_id: string }>(
+        db,
+        'SELECT id, name, n8n_id, folder_id FROM workflows WHERE n8n_id IS NOT NULL',
+      );
+      const known = new Map(existing.filter((w) => canSeeFolder(user, w.folder_id)).map((w) => [w.n8n_id, w.id]));
+      const already = new Map(existing.map((w) => [w.n8n_id, w]));
+      const fresh = new Map<string, string>();
+      for (const id of n8nIds) if (!already.has(id) && !fresh.has(id)) fresh.set(id, randomUUID());
+
+      const results: { n8nId: string | null; name: string; status: 'imported' | 'skipped'; id?: string; wasActive?: boolean; warnings: { node?: string; message: string }[] }[] =
+        [];
+      await transaction(db, async (tx) => {
+        for (const wf of list) {
+          const n8nId = wf.id === undefined || wf.id === null ? null : String(wf.id);
+          const previous = n8nId ? already.get(n8nId) : undefined;
+          if (previous) {
+            results.push({ n8nId, name: wf.name ?? previous.name, status: 'skipped', id: previous.id, warnings: [{ message: `já foi importado antes como "${previous.name}"` }] });
+            continue;
+          }
+          if (n8nId && results.some((r) => r.n8nId === n8nId)) continue;
+          const converted = convertN8nWorkflow(wf, { workflowId: (id) => known.get(id) ?? fresh.get(id) });
+          const id = (n8nId && fresh.get(n8nId)) || randomUUID();
+          await tx.query(
+            `INSERT INTO workflows (id, name, folder_id, definition, n8n_id, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+            [id, converted.name, b.folderId, JSON.stringify(converted.definition), n8nId, user.id],
+          );
+          await tx.query('INSERT INTO workflow_versions (workflow_id, version, name, definition, created_by) VALUES ($1, 1, $2, $3, $4)', [
+            id,
+            converted.name,
+            JSON.stringify(converted.definition),
+            user.id,
+          ]);
+          await audit(tx, {
+            userId: user.id,
+            action: 'import',
+            entityType: 'workflow',
+            entityId: id,
+            entityName: converted.name,
+            after: { origem: 'n8n', n8nId, avisos: converted.warnings.length },
+            ip: request.ip,
+          });
+          results.push({ n8nId, name: converted.name, status: 'imported', id, wasActive: converted.wasActive, warnings: converted.warnings });
+        }
+      });
+      return results;
     });
 
     /** Executa o fluxo agora. O editor pode mandar a definição ainda não salva. */
