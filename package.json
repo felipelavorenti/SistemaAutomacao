@@ -1,0 +1,21 @@
+{
+  "name": "sistema-automacao",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/engine",
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "build": "npm run build -w @sa/engine && npm run build -w @sa/server && npm run build -w @sa/web",
+    "test": "npm test -w @sa/engine && npm test -w @sa/server",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:server": "npm run dev -w @sa/server",
+    "dev:worker": "npm run dev:worker -w @sa/server",
+    "dev:web": "npm run dev -w @sa/web"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
