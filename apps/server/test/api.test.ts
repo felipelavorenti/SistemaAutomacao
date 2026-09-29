@@ -428,4 +428,58 @@ describe.skipIf(!available)('API', () => {
     expect((await call(editor, 'DELETE', `/api/erp-clients/${erpClient.body.id}`)).status).toBe(409);
     expect((await call(editor, 'DELETE', `/api/erps/${erp.body.id}`)).status).toBe(409);
   });
+
+  it('importa fluxos do n8n e liga os subfluxos pelo ID antigo', async () => {
+    const sub = {
+      id: 'n8n-sub',
+      name: 'Sub do n8n',
+      nodes: [
+        { name: 'Recebe', type: 'n8n-nodes-base.executeWorkflowTrigger', typeVersion: 1, position: [0, 0], parameters: {} },
+        { name: 'Marca', type: 'n8n-nodes-base.code', typeVersion: 2, position: [200, 0], parameters: { jsCode: 'return $input.all().map((i) => ({ ...i.json, sub: true }));' } },
+      ],
+      connections: { Recebe: { main: [[{ node: 'Marca', type: 'main', index: 0 }]] } },
+    };
+    const parent = {
+      id: 'n8n-pai',
+      name: 'Pai do n8n',
+      active: true,
+      nodes: [
+        { name: 'Início', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, position: [0, 0], parameters: {} },
+        { name: 'Chama', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.1, position: [200, 0], parameters: { workflowId: { __rl: true, value: 'n8n-sub' } } },
+        { name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 200], parameters: { path: 'x' } },
+      ],
+      connections: { Início: { main: [[{ node: 'Chama', type: 'main', index: 0 }]] } },
+    };
+    // O pai vem antes do subfluxo no arquivo, e mesmo assim aponta para ele.
+    const first = await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: [parent, sub] });
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(first.body.map((r: { name: string; status: string }) => [r.name, r.status])).toEqual([
+      ['Pai do n8n', 'imported'],
+      ['Sub do n8n', 'imported'],
+    ]);
+    const [pai, filho] = first.body;
+    expect(pai.wasActive).toBe(true);
+    expect(pai.warnings.map((w: { node?: string }) => w.node)).toContain('Webhook');
+
+    const imported = await call(editor, 'GET', `/api/workflows/${pai.id}`);
+    expect(imported.body.active).toBe(false);
+    expect(imported.body.definition.nodes.find((n: { name: string }) => n.name === 'Chama').parameters.workflowId).toBe(filho.id);
+    expect(imported.body.issues.map((i: { message: string }) => i.message)).toContain('"Webhook" veio do n8n sem equivalente; substitua-o por outros nós');
+
+    // Sem o nó não convertido, o fluxo importado roda chamando o subfluxo importado.
+    const definition = { ...imported.body.definition, nodes: imported.body.definition.nodes.filter((n: { name: string }) => n.name !== 'Webhook') };
+    const run = await call(editor, 'POST', `/api/workflows/${pai.id}/run`, { definition, input: [{ json: { sku: 'A' } }] });
+    const execution = await waitExecution(editor, run.body.executionId);
+    expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+    expect(execution.runs.at(-1).output[0]).toEqual([{ json: { sku: 'A', sub: true } }]);
+
+    // Importar de novo não duplica; um fluxo novo que chama o sub já importado aponta para ele.
+    const again = await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: { data: [sub, { ...parent, id: 'n8n-pai-2', name: 'Pai 2' }] } });
+    expect(again.body.map((r: { status: string }) => r.status)).toEqual(['skipped', 'imported']);
+    const pai2 = await call(editor, 'GET', `/api/workflows/${again.body[1].id}`);
+    expect(pai2.body.definition.nodes.find((n: { name: string }) => n.name === 'Chama').parameters.workflowId).toBe(filho.id);
+
+    expect((await call(viewer, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: sub })).status).toBe(403);
+    expect((await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: { nome: 'x' } })).body.error).toMatch(/não parece um fluxo/);
+  });
 });

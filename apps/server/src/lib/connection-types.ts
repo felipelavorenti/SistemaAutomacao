@@ -118,6 +118,38 @@ export const connectionTypes: ConnectionTypeDescription[] = [
       timeoutField,
     ],
   },
+  {
+    type: 'metabase',
+    displayName: 'Metabase',
+    testable: true,
+    fields: [
+      { name: 'url', displayName: 'URL do Metabase', secret: false, required: true, placeholder: 'https://metabase.empresa.com.br' },
+      {
+        name: 'apiKey',
+        displayName: 'API key',
+        secret: true,
+        required: false,
+        hint: 'Com a API key, usuário e senha não são usados. Sem ela, o nó faz login com usuário e senha.',
+      },
+      { name: 'username', displayName: 'Usuário (e-mail)', secret: false, required: false },
+      { name: 'password', displayName: 'Senha', secret: true, required: false },
+    ],
+  },
+  {
+    type: 'clickup',
+    displayName: 'ClickUp',
+    testable: true,
+    fields: [
+      {
+        name: 'token',
+        displayName: 'Token pessoal da API',
+        secret: true,
+        required: true,
+        placeholder: 'pk_...',
+        hint: 'No ClickUp: Configurações > Apps > API Token.',
+      },
+    ],
+  },
 ];
 
 export function getConnectionType(type: string): ConnectionTypeDescription | undefined {
@@ -151,5 +183,6 @@ export function mergeData(type: ConnectionTypeDescription, incoming: Record<stri
 export function missingFields(type: ConnectionTypeDescription, data: JsonObject): string[] {
   const missing = type.fields.filter((f) => f.required && !data[f.name]).map((f) => f.displayName);
   if (type.type === 'oracle' && !data.connectString && !(data.host && data.serviceName)) missing.push('Servidor e service name, ou a connect string');
+  if (type.type === 'metabase' && !data.apiKey && !(data.username && data.password)) missing.push('API key, ou usuário e senha');
   return missing;
 }

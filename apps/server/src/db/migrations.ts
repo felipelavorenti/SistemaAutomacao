@@ -222,4 +222,11 @@ CREATE TABLE erp_clients (
 );
 `,
   },
+  {
+    id: '004_importacao_n8n',
+    sql: `
+-- ID que o fluxo tinha no n8n, para ligar os subfluxos importados em momentos diferentes.
+ALTER TABLE workflows ADD COLUMN n8n_id text UNIQUE;
+`,
+  },
 ];

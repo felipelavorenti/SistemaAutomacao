@@ -145,7 +145,7 @@ export function RunMeta({ meta }: { meta: NodeRun['meta'] }) {
       )}
       {meta.logs && meta.logs.length > 0 && (
         <details className="logs" open>
-          <summary>console.log ({meta.logs.length})</summary>
+          <summary>Logs ({meta.logs.length})</summary>
           <pre>{meta.logs.join('\n')}</pre>
         </details>
       )}

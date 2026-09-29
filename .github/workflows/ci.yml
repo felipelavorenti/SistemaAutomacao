@@ -33,6 +33,9 @@ jobs:
           APP_USER: teste
           APP_USER_PASSWORD: Teste_Forte_123
         ports: ["1521:1521"]
+      metabase:
+        image: metabase/metabase:latest
+        ports: ["3001:3000"]
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/automacao_test
       TEST_REDIS_URL: redis://localhost:6379/15
@@ -41,6 +44,7 @@ jobs:
       TEST_ORACLE_CONNECT: localhost:1521/FREEPDB1
       TEST_ORACLE_USER: teste
       TEST_ORACLE_PASSWORD: Teste_Forte_123
+      TEST_METABASE_URL: http://localhost:3001
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

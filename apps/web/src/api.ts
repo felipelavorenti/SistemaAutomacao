@@ -61,7 +61,17 @@ export interface NodeTypeDescription {
   outputs: number;
   outputNames?: string[];
   inputNames?: string[];
+  hidden?: boolean;
   properties: PropertyDescription[];
+}
+
+export interface N8nImportResult {
+  n8nId: string | null;
+  name: string;
+  status: 'imported' | 'skipped';
+  id?: string;
+  wasActive?: boolean;
+  warnings: { node?: string; message: string }[];
 }
 
 export interface NodeRun {
