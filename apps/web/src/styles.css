@@ -598,6 +598,9 @@ fieldset {
   width: 100%;
   text-align: left;
   margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .canvas {
   flex: 1;
@@ -784,4 +787,45 @@ fieldset {
   cursor: pointer;
   color: var(--muted);
   margin-bottom: 6px;
+}
+
+/* Fase 2: rótulos das entradas, editor de código, logs e subfluxos */
+.handle-label-in {
+  left: auto;
+  right: 12px;
+}
+textarea.code-editor {
+  font-size: 12.5px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
+}
+.logs {
+  margin: 8px 0 12px;
+}
+.logs summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.logs pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--code-bg, rgba(127, 127, 127, 0.08));
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.sub-links {
+  font-size: 13px;
+  margin: 6px 0 10px;
+}
+.run-list.children {
+  margin-bottom: 20px;
+}
+.run-list.children tr {
+  cursor: pointer;
 }

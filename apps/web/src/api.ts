@@ -40,7 +40,7 @@ export interface WorkflowDefinition {
 export interface PropertyDescription {
   name: string;
   displayName: string;
-  type: 'string' | 'number' | 'boolean' | 'options' | 'json' | 'code' | 'connection' | 'list';
+  type: 'string' | 'number' | 'boolean' | 'options' | 'json' | 'code' | 'connection' | 'workflow' | 'list';
   default: JsonValue;
   description?: string;
   placeholder?: string;
@@ -59,6 +59,7 @@ export interface NodeTypeDescription {
   inputs: number;
   outputs: number;
   outputNames?: string[];
+  inputNames?: string[];
   properties: PropertyDescription[];
 }
 
@@ -74,6 +75,7 @@ export interface NodeRun {
   input: Item[][];
   output: Item[][];
   error?: { message: string; details?: JsonValue };
+  meta?: { logs?: string[]; subExecutionIds?: string[] };
 }
 
 export interface NodeRunSummary {
@@ -84,6 +86,7 @@ export interface NodeRunSummary {
   startedAt: string;
   durationMs: number;
   tries: number;
+  runs?: number;
   inputItems: number;
   outputItems: number[];
   error?: string;
@@ -105,6 +108,7 @@ export interface ExecutionListItem {
   triggered_by_name: string | null;
   duration_ms: number | null;
   data_size: number | null;
+  parent_execution_id: string | null;
 }
 
 export interface ExecutionDetail extends ExecutionListItem {
@@ -115,6 +119,7 @@ export interface ExecutionDetail extends ExecutionListItem {
   error: { message: string; details?: JsonValue; nodeName?: string } | null;
   summary: NodeRunSummary[] | null;
   runs: NodeRun[] | null;
+  children: { id: string; workflow_id: string; workflow_name: string; status: ExecutionStatus; created_at: string; error_message: string | null }[];
 }
 
 export interface WorkflowListItem {
@@ -124,6 +129,7 @@ export interface WorkflowListItem {
   folder_name: string;
   active: boolean;
   scheduled: boolean;
+  callable: boolean;
   version: number;
   updated_at: string;
   updated_by_name: string | null;

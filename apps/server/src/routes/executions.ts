@@ -17,6 +17,7 @@ interface ExecutionRow {
   status: string;
   triggered_by_name: string | null;
   retry_of: string | null;
+  parent_execution_id: string | null;
   definition: WorkflowDefinition;
   input: unknown;
   created_at: Date;
@@ -53,6 +54,7 @@ export const executionRoutes =
           workflowId: z.string().uuid().optional(),
           status: z.enum(['queued', 'running', 'success', 'error', 'canceled']).optional(),
           mode: z.enum(['manual', 'schedule', 'subworkflow', 'retry']).optional(),
+          parentId: z.string().uuid().optional(),
           from: z.string().datetime({ offset: true }).optional(),
           to: z.string().datetime({ offset: true }).optional(),
           search: z.string().trim().optional(),
@@ -63,7 +65,7 @@ export const executionRoutes =
       return many(
         db,
         `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.mode, e.status, e.created_at, e.started_at, e.finished_at,
-                e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size,
+                e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size, e.parent_execution_id,
                 extract(epoch FROM (e.finished_at - e.started_at)) * 1000 AS duration_ms
          FROM executions e JOIN workflows w ON w.id = e.workflow_id LEFT JOIN users u ON u.id = e.triggered_by
          WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
@@ -74,8 +76,20 @@ export const executionRoutes =
            AND ($6::timestamptz IS NULL OR e.created_at <= $6)
            AND ($7::text IS NULL OR w.name ILIKE '%' || $7 || '%' OR e.error_message ILIKE '%' || $7 || '%' OR e.error_node ILIKE '%' || $7 || '%')
            AND ($8::timestamptz IS NULL OR e.created_at < $8)
+           AND ($10::uuid IS NULL OR e.parent_execution_id = $10)
          ORDER BY e.created_at DESC LIMIT $9`,
-        [user.folderIds, q.workflowId ?? null, q.status ?? null, q.mode ?? null, q.from ?? null, q.to ?? null, q.search || null, q.before ?? null, q.limit],
+        [
+          user.folderIds,
+          q.workflowId ?? null,
+          q.status ?? null,
+          q.mode ?? null,
+          q.from ?? null,
+          q.to ?? null,
+          q.search || null,
+          q.before ?? null,
+          q.limit,
+          q.parentId ?? null,
+        ],
       );
     });
 
@@ -85,7 +99,16 @@ export const executionRoutes =
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
       const { data, ...rest } = row;
-      return { ...rest, runs: decodeData(data)?.runs ?? null };
+      // Subfluxos que esta execução chamou, só os que o usuário pode ver.
+      const children = await many(
+        db,
+        `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.status, e.created_at, e.error_message
+         FROM executions e JOIN workflows w ON w.id = e.workflow_id
+         WHERE e.parent_execution_id = $1 AND ($2::uuid[] IS NULL OR w.folder_id = ANY($2))
+         ORDER BY e.created_at LIMIT 500`,
+        [id, user.folderIds],
+      );
+      return { ...rest, runs: decodeData(data)?.runs ?? null, children };
     });
 
     app.post('/executions/:id/cancel', async (request) => {

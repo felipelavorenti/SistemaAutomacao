@@ -75,6 +75,26 @@ export const workflowRoutes =
       }
     };
 
+    /** Os subfluxos chamados com ID fixo precisam existir e estar numa pasta que o usuário enxerga. */
+    const checkSubworkflows = async (user: CurrentUser, definition: WorkflowDefinition, selfId?: string) => {
+      const ids = new Set<string>();
+      for (const node of definition.nodes) {
+        if (node.type !== 'executeWorkflow') continue;
+        const target = node.parameters.workflowId;
+        if (typeof target !== 'string' || !target || target.startsWith('=')) continue;
+        if (target === selfId) throw new HttpError(400, `O nó "${node.name}" chama o próprio fluxo`);
+        if (!z.string().uuid().safeParse(target).success) throw new HttpError(400, `O nó "${node.name}" aponta para um fluxo que não existe`);
+        ids.add(target);
+      }
+      if (!ids.size) return;
+      const rows = await many<{ id: string; folder_id: string }>(db, 'SELECT id, folder_id FROM workflows WHERE id = ANY($1)', [[...ids]]);
+      for (const id of ids) {
+        const row = rows.find((r) => r.id === id);
+        if (!row) throw new HttpError(400, 'O fluxo chama um subfluxo que não existe mais');
+        if (!canSeeFolder(user, row.folder_id)) throw forbidden('O fluxo chama um subfluxo de uma pasta à qual você não tem acesso');
+      }
+    };
+
     const checkSchedule = (definition: WorkflowDefinition) => {
       for (const node of definition.nodes) {
         if (node.type !== 'scheduleTrigger' || node.parameters.mode !== 'cron') continue;
@@ -122,7 +142,8 @@ export const workflowRoutes =
         `SELECT w.id, w.name, w.folder_id, f.name AS folder_name, w.active, w.version, w.updated_at, u.name AS updated_by_name,
                 (SELECT jsonb_build_object('id', e.id, 'status', e.status, 'createdAt', e.created_at)
                    FROM executions e WHERE e.workflow_id = w.id ORDER BY e.created_at DESC LIMIT 1) AS last_execution,
-                EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'scheduleTrigger') AS scheduled
+                EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'scheduleTrigger') AS scheduled,
+                EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'executeWorkflowTrigger') AS callable
          FROM workflows w JOIN folders f ON f.id = w.folder_id LEFT JOIN users u ON u.id = w.updated_by
          WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
          ORDER BY f.name, w.name`,
@@ -149,6 +170,7 @@ export const workflowRoutes =
         connections: [],
       };
       await checkConnections(user, definition);
+      await checkSubworkflows(user, definition);
       const id = await transaction(db, async (tx) => {
         const row = await one<{ id: string }>(
           tx,
@@ -180,6 +202,7 @@ export const workflowRoutes =
         throw new HttpError(409, 'Outra pessoa salvou este fluxo enquanto você editava. Recarregue para ver a versão atual.');
       }
       await checkConnections(user, b.definition);
+      await checkSubworkflows(user, b.definition, id);
       checkSchedule(b.definition);
       const issues = validateWorkflow(b.definition);
       if (before.active && issues.length) {
@@ -242,6 +265,17 @@ export const workflowRoutes =
       requireCap(user, 'workflow:edit');
       const { id } = idParam.parse(request.params);
       const wf = await load(user, id);
+      const callers = await many<{ name: string }>(
+        db,
+        `SELECT name FROM workflows WHERE id <> $1 AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(definition->'nodes') n
+           WHERE n->>'type' = 'executeWorkflow' AND n->'parameters'->>'workflowId' = $1::text)
+         ORDER BY name`,
+        [id],
+      );
+      if (callers.length) {
+        throw new HttpError(400, `Este fluxo é chamado por outros fluxos: ${callers.map((c) => c.name).join(', ')}. Remova as chamadas antes de excluir.`);
+      }
       await queue.syncSchedule({ ...wf, active: false });
       await db.query('DELETE FROM workflows WHERE id = $1', [id]);
       await audit(db, {
@@ -274,6 +308,21 @@ export const workflowRoutes =
       ]);
       await audit(db, { userId: user.id, action: 'duplicate', entityType: 'workflow', entityId: row!.id, entityName: `${wf.name} (cópia)`, after: { from: id }, ip: request.ip });
       return load(user, row!.id);
+    });
+
+    /** Fluxos que chamam este como subfluxo. */
+    app.get('/workflows/:id/callers', async (request) => {
+      const user = currentUser(request);
+      const { id } = idParam.parse(request.params);
+      await load(user, id);
+      return many(
+        db,
+        `SELECT id, name FROM workflows WHERE ($2::uuid[] IS NULL OR folder_id = ANY($2)) AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(definition->'nodes') n
+           WHERE n->>'type' = 'executeWorkflow' AND n->'parameters'->>'workflowId' = $1::text)
+         ORDER BY name`,
+        [id, user.folderIds],
+      );
     });
 
     app.get('/workflows/:id/versions', async (request) => {
@@ -310,6 +359,7 @@ export const workflowRoutes =
       const b = z.object({ name: z.string().trim().min(1), folderId: z.string().uuid(), definition: definitionSchema }).parse(request.body);
       checkFolder(user, b.folderId);
       await checkConnections(user, b.definition);
+      await checkSubworkflows(user, b.definition);
       const row = await one<{ id: string }>(
         db,
         `INSERT INTO workflows (name, folder_id, definition, created_by, updated_by) VALUES ($1, $2, $3, $4, $4) RETURNING id`,
@@ -340,6 +390,7 @@ export const workflowRoutes =
       if (b.definition) {
         requireCap(user, 'workflow:edit');
         await checkConnections(user, b.definition);
+        await checkSubworkflows(user, b.definition, id);
       }
       const definition = b.definition ?? wf.definition;
       const executionId = await createExecution(db, {

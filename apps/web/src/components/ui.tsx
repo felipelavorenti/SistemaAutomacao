@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { errorMessage, STATUS_LABEL, type ExecutionStatus, type JsonValue } from '../api';
+import { Link } from 'react-router-dom';
+import { errorMessage, STATUS_LABEL, type ExecutionStatus, type JsonValue, type NodeRun } from '../api';
 
 /** Carrega dados de forma assíncrona e expõe recarga. */
 export function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
@@ -123,5 +124,31 @@ export function Field({ label, children, hint }: { label: string; children: Reac
       {children}
       {hint && <span className="field-hint">{hint}</span>}
     </label>
+  );
+}
+
+/** Logs do nó Code e links para as execuções dos subfluxos chamados. */
+export function RunMeta({ meta }: { meta: NodeRun['meta'] }) {
+  if (!meta) return null;
+  return (
+    <>
+      {meta.subExecutionIds && meta.subExecutionIds.length > 0 && (
+        <p className="sub-links">
+          Execuções do subfluxo:{' '}
+          {meta.subExecutionIds.map((id, i) => (
+            <span key={id}>
+              {i > 0 && ', '}
+              <Link to={`/execucoes/${id}`}>{i + 1}</Link>
+            </span>
+          ))}
+        </p>
+      )}
+      {meta.logs && meta.logs.length > 0 && (
+        <details className="logs" open>
+          <summary>console.log ({meta.logs.length})</summary>
+          <pre>{meta.logs.join('\n')}</pre>
+        </details>
+      )}
+    </>
   );
 }
