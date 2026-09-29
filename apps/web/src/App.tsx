@@ -15,6 +15,7 @@ import { LoginPage } from './pages/LoginPage';
 import { UsersPage } from './pages/UsersPage';
 import { WorkflowsPage } from './pages/WorkflowsPage';
 import { EditorPage } from './editor/EditorPage';
+import { Icon, Logo } from './components/icons';
 
 interface AuthState {
   me: Me;
@@ -93,34 +94,54 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <div className="brand">Automações</div>
+        <div className="brand">
+          <Logo />
+          <span>Info8n</span>
+        </div>
         <nav>
-          <NavLink to="/fluxos">Fluxos</NavLink>
-          <NavLink to="/execucoes">Execuções</NavLink>
-          <NavLink to="/conexoes">Conexões</NavLink>
-          <NavLink to="/erps">APIs dos ERPs</NavLink>
-          <NavLink to="/comandos-sql">Comandos SQL</NavLink>
-          <NavLink to="/clientes">Clientes</NavLink>
+          <NavItem to="/fluxos" icon="flows" label="Fluxos" />
+          <NavItem to="/execucoes" icon="executions" label="Execuções" />
+          <NavItem to="/conexoes" icon="connections" label="Conexões" />
+          <NavItem to="/erps" icon="erp" label="APIs dos ERPs" />
+          <NavItem to="/comandos-sql" icon="sql" label="Comandos SQL" />
+          <NavItem to="/clientes" icon="clients" label="Clientes" />
           {me.permissions.admin && (
             <>
               <div className="nav-section">Administração</div>
-              <NavLink to="/usuarios">Usuários</NavLink>
-              <NavLink to="/pastas">Pastas</NavLink>
-              <NavLink to="/auditoria">Auditoria</NavLink>
+              <NavItem to="/usuarios" icon="users" label="Usuários" />
+              <NavItem to="/pastas" icon="folders" label="Pastas" />
+              <NavItem to="/auditoria" icon="audit" label="Auditoria" />
             </>
           )}
         </nav>
         <div className="sidebar-footer">
           <NavLink to="/conta" className="user-link">
-            <strong>{me.name}</strong>
-            <span className="muted">{ROLE_LABEL[me.role]}</span>
+            <span className="avatar">{initials(me.name)}</span>
+            <span className="user-text">
+              <strong>{me.name}</strong>
+              <span className="muted small">{ROLE_LABEL[me.role]}</span>
+            </span>
           </NavLink>
-          <button className="link" onClick={logout}>
-            Sair
+          <button className="icon" onClick={logout} title="Sair" aria-label="Sair">
+            <Icon name="logout" />
           </button>
         </div>
       </aside>
       <main className="content">{children}</main>
     </div>
   );
+}
+
+function NavItem({ to, icon, label }: { to: string; icon: string; label: string }) {
+  return (
+    <NavLink to={to}>
+      <Icon name={icon} />
+      {label}
+    </NavLink>
+  );
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }

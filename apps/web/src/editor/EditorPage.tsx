@@ -1,6 +1,8 @@
 import {
   Background,
+  BackgroundVariant,
   Controls,
+  MarkerType,
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
@@ -34,6 +36,7 @@ import { useMe } from '../App';
 import { ErrorBox, Modal, StatusBadge } from '../components/ui';
 import { FlowNode, type FlowNodeType } from './FlowNode';
 import { NodePanel } from './NodePanel';
+import { Icon, NODE_COLOR } from '../components/icons';
 
 const nodeTypes = { sa: FlowNode };
 
@@ -155,6 +158,7 @@ function Editor() {
     target: c.to,
     targetHandle: `in-${c.toInput}`,
     animated: running,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: '#9f9f9f' },
   }));
 
   const onNodesChange = (changes: NodeChange<FlowNodeType>[]) => {
@@ -204,7 +208,7 @@ function Editor() {
   const addNode = (desc: NodeTypeDescription) => {
     const center = flow.screenToFlowPosition({ x: window.innerWidth / 2 - 150, y: window.innerHeight / 2 });
     const selected = definition.nodes.find((n) => n.id === selectedId);
-    const position = selected ? { x: selected.position.x + 260, y: selected.position.y } : center;
+    const position = selected ? { x: selected.position.x + 200, y: selected.position.y } : center;
     const node: NodeInstance = {
       id: crypto.randomUUID(),
       name: uniqueName(desc.displayName),
@@ -309,8 +313,8 @@ function Editor() {
   return (
     <div className="editor">
       <header className="editor-toolbar">
-        <Link to="/fluxos" onClick={(e) => dirty && !confirm('Sair sem salvar?') && e.preventDefault()}>
-          ← Fluxos
+        <Link className="back-link" to="/fluxos" onClick={(e) => dirty && !confirm('Sair sem salvar?') && e.preventDefault()}>
+          <Icon name="back" size={16} /> Fluxos
         </Link>
         <input className="workflow-name" value={name} disabled={readOnly} onChange={(e) => (setName(e.target.value), setDirty(true))} />
         <select value={folderId} disabled={readOnly} onChange={(e) => (setFolderId(e.target.value), setDirty(true))}>
@@ -327,14 +331,15 @@ function Editor() {
         <div className="spacer" />
         {notice && <span className="ok-text">{notice}</span>}
         {hasSchedule && (
-          <label className="check" title="Fluxos ativos rodam sozinhos no agendamento">
+          <label className="check switch" title="Fluxos ativos rodam sozinhos no agendamento">
             <input type="checkbox" checked={workflow.active} disabled={readOnly} onChange={(e) => setActive(e.target.checked)} /> Ativo
           </label>
         )}
         <button onClick={() => setShowVersions(true)}>Versões</button>
         <button onClick={exportJson}>Exportar</button>
         {me.permissions.executeWorkflows && (
-          <button onClick={execute} disabled={running}>
+          <button className="run-button" onClick={execute} disabled={running}>
+            <Icon name="play" size={14} />
             {running ? 'Executando…' : 'Executar'}
           </button>
         )}
@@ -369,6 +374,9 @@ function Editor() {
                 <div className="palette-group">{GROUP_LABEL[group]}</div>
                 {list.map((d) => (
                   <button key={d.type} className="palette-item" title={d.description} onClick={() => addNode(d)}>
+                    <span className="palette-icon" style={{ color: NODE_COLOR[d.type] ?? 'var(--primary)' }}>
+                      <Icon name={d.type} size={18} />
+                    </span>
                     {d.displayName}
                   </button>
                 ))}
@@ -399,9 +407,9 @@ function Editor() {
             fitView
             fitViewOptions={{ maxZoom: 1 }}
           >
-            <Background />
+            <Background variant={BackgroundVariant.Dots} gap={20} size={1.4} color="#c9ccd6" />
             <Controls />
-            <MiniMap pannable zoomable />
+            <MiniMap pannable zoomable nodeColor={(n) => NODE_COLOR[(n.data as FlowNodeType['data']).node.type] ?? '#b8bcc6'} nodeBorderRadius={8} maskColor="rgb(247 247 250 / 70%)" />
           </ReactFlow>
         </div>
         {selected && (

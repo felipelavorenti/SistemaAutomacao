@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { del, errorMessage, formatDate, get, post, type Folder, type N8nImportResult, type Workflow, type WorkflowDefinition, type WorkflowListItem } from '../api';
 import { useMe } from '../App';
 import { ErrorBox, Field, Modal, PageHeader, StatusBadge, useLoad } from '../components/ui';
+import { Icon } from '../components/icons';
 
 export function WorkflowsPage() {
   const me = useMe();
@@ -30,13 +31,16 @@ export function WorkflowsPage() {
   return (
     <div>
       <PageHeader title="Fluxos">
-        <input placeholder="Buscar fluxo" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <label className="search">
+          <Icon name="search" size={16} />
+          <input placeholder="Buscar fluxo" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </label>
         {me.permissions.editWorkflows && (
           <>
             <button onClick={() => setCreating('n8n')}>Importar do n8n</button>
             <button onClick={() => setCreating('import')}>Importar JSON</button>
             <button className="primary" onClick={() => setCreating('new')}>
-              Novo fluxo
+              <Icon name="plus" size={16} /> Novo fluxo
             </button>
           </>
         )}
@@ -46,54 +50,51 @@ export function WorkflowsPage() {
       {[...byFolder.entries()].map(([folder, items]) => (
         <section key={folder} className="folder-section">
           <h2>{folder}</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Agendamento</th>
-                <th>Última execução</th>
-                <th>Alterado em</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((w) => (
-                <tr key={w.id}>
-                  <td>
-                    <Link to={`/fluxos/${w.id}`}>{w.name}</Link>
-                  </td>
-                  <td>{w.scheduled ? w.active ? <span className="badge badge-success">Ativo</span> : <span className="badge">Inativo</span> : <span className="muted">Manual</span>}</td>
-                  <td>
+          <div className="wf-list">
+            {items.map((w) => (
+              <div key={w.id} className="wf-row" onClick={() => navigate(`/fluxos/${w.id}`)}>
+                <div className="wf-main">
+                  <Link to={`/fluxos/${w.id}`} className="wf-name" onClick={(e) => e.stopPropagation()}>
+                    {w.name}
+                  </Link>
+                  <div className="wf-meta">
+                    Alterado em {formatDate(w.updated_at)}
+                    {w.updated_by_name && ` por ${w.updated_by_name}`}
                     {w.last_execution ? (
-                      <Link to={`/execucoes/${w.last_execution.id}`}>
-                        <StatusBadge status={w.last_execution.status} /> <span className="muted">{formatDate(w.last_execution.createdAt)}</span>
-                      </Link>
-                    ) : (
-                      <span className="muted">Nunca executado</span>
-                    )}
-                  </td>
-                  <td>
-                    {formatDate(w.updated_at)} <span className="muted">{w.updated_by_name}</span>
-                  </td>
-                  <td className="row-actions">
-                    {me.permissions.editWorkflows && (
                       <>
-                        <button className="link" onClick={() => act(async () => navigate(`/fluxos/${(await post<Workflow>(`/workflows/${w.id}/duplicate`)).id}`))}>
-                          Duplicar
-                        </button>
-                        <button
-                          className="link danger"
-                          onClick={() => confirm(`Excluir o fluxo "${w.name}" e todo o histórico de execuções?`) && act(() => del(`/workflows/${w.id}`))}
-                        >
-                          Excluir
-                        </button>
+                        {' | '}Última execução{' '}
+                        <Link to={`/execucoes/${w.last_execution.id}`} onClick={(e) => e.stopPropagation()}>
+                          <StatusBadge status={w.last_execution.status} /> {formatDate(w.last_execution.createdAt)}
+                        </Link>
                       </>
+                    ) : (
+                      ' | Nunca executado'
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                </div>
+                {w.scheduled ? (
+                  <span className={`state ${w.active ? 'on' : ''}`}>{w.active ? 'Ativo' : 'Inativo'}</span>
+                ) : (
+                  <span className="state manual">Manual</span>
+                )}
+                <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+                  {me.permissions.editWorkflows && (
+                    <>
+                      <button className="link" onClick={() => act(async () => navigate(`/fluxos/${(await post<Workflow>(`/workflows/${w.id}/duplicate`)).id}`))}>
+                        Duplicar
+                      </button>
+                      <button
+                        className="link danger"
+                        onClick={() => confirm(`Excluir o fluxo "${w.name}" e todo o histórico de execuções?`) && act(() => del(`/workflows/${w.id}`))}
+                      >
+                        Excluir
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       ))}
       {creating === 'n8n' && folders.data && (

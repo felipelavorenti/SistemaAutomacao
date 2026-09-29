@@ -1,6 +1,6 @@
-# SistemaAutomacao
+# Info8n
 
-Plataforma de automação de processos baseada em fluxos de nós, focada em integrações com APIs REST e bancos de dados de clientes. Substitui o n8n self-hosted com controle de usuários, permissões por pasta e por cliente, e logs completos.
+Info8n é a plataforma de automação de processos baseada em fluxos de nós, focada em integrações com APIs REST e bancos de dados de clientes. Substitui o n8n self-hosted com controle de usuários, permissões por pasta e por cliente, e logs completos.
 
 ## O que já funciona (fases 1 a 4)
 
