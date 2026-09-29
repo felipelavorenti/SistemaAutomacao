@@ -37,6 +37,16 @@ describe('ExpressionScope', () => {
     s.release();
   });
 
+  it('aceita .toJsonString() como no n8n', async () => {
+    const s = await scope();
+    const input = [{ json: { sku: 'A', precos: [1, 2] } }];
+    expect(await s.resolve('={{ $json.toJsonString() }}', input, 0)).toBe('{"sku":"A","precos":[1,2]}');
+    expect(await s.resolve('={{ $json.precos.toJsonString() }}', input, 0)).toBe('[1,2]');
+    expect(await s.resolve('={{ $json.sku.toJsonString() }}', input, 0)).toBe('"A"');
+    expect(await s.resolve('={{ Object.keys($json) }}', input, 0)).toEqual(['sku', 'precos']);
+    s.release();
+  });
+
   it('monta texto com várias expressões', async () => {
     const s = await scope();
     const value = await s.resolve("={{ $vars.baseUrl }}/pedidos/{{ $json.id }}?t={{ $node['Login'].json.token }}", [{ json: { id: 7 } }], 0);

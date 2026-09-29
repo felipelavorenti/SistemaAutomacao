@@ -38,6 +38,13 @@ export class ExpressionError extends Error {
 // A saída de cada nó só é copiada para o isolate quando alguém a usa.
 const BOOTSTRAP = `
 const __meta = JSON.parse(__rawMeta);
+// Como no n8n: qualquer valor vira texto JSON com .toJsonString().
+Object.defineProperty(Object.prototype, 'toJsonString', {
+  value: function () { return JSON.stringify(this.valueOf()); },
+  enumerable: false,
+  writable: true,
+  configurable: true,
+});
 const __nodeCache = {};
 const __wrap = (items) => ({
   all: () => items,
