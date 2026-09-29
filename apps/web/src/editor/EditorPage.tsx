@@ -299,7 +299,7 @@ function Editor() {
 
   const selected = definition.nodes.find((n) => n.id === selectedId);
   const hasSchedule = definition.nodes.some((n) => n.type === 'scheduleTrigger');
-  const groups = ['trigger', 'action', 'logic', 'data'].map((g) => [g, descriptions.filter((d) => d.group === g)] as const).filter(([, list]) => list.length);
+  const groups = ['trigger', 'action', 'logic', 'data'].map((g) => [g, descriptions.filter((d) => d.group === g && !d.hidden)] as const).filter(([, list]) => list.length);
 
   return (
     <div className="editor">

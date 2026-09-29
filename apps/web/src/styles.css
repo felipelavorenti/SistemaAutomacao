@@ -301,6 +301,21 @@ fieldset {
   background: #fff3bf;
   color: #7a4d00;
 }
+.badge-warning {
+  background: #fff4e6;
+  color: var(--warning);
+}
+.import-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.import-result ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--muted);
+}
 .dot {
   display: inline-block;
   width: 8px;
