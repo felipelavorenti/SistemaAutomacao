@@ -1,7 +1,8 @@
 export * from './types.js';
 export * from './node-types.js';
 export { NodeRegistry, defaultRegistry } from './registry.js';
-export { executeWorkflow, type ExecuteOptions } from './executor.js';
+export { closeDefaultPythonRunner, defaultPythonRunner, executeWorkflow, type ExecuteOptions } from './executor.js';
+export { PythonRunner, type PythonRunnerOptions } from './python/runner.js';
 export { CodeError, ExpressionSandbox, ExpressionScope, ExpressionError, type ExpressionData } from './expressions/sandbox.js';
 export { isExpression, parseTemplate, TemplateSyntaxError } from './expressions/template.js';
 export { HTTP_CONNECTION_TYPES } from './nodes/http-request.js';
@@ -26,3 +27,6 @@ export {
   type ApiEndpointData,
   type ApiVariable,
 } from './catalog.js';
+export { testConnection, TESTABLE_CONNECTION_TYPES } from './connection-test.js';
+export { METABASE_CONNECTION_TYPES } from './nodes/metabase.js';
+export { CLICKUP_CONNECTION_TYPES } from './nodes/clickup.js';

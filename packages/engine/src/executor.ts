@@ -3,6 +3,7 @@ import type { ApiEndpointData } from './catalog.js';
 import { DatabasePools } from './database/drivers.js';
 import type { ConnectionData, DatabaseCommandLog, DatabaseSession, NodeType, SubworkflowResult } from './node-types.js';
 import { NodeOperationError } from './node-types.js';
+import { PythonRunner, referencedNodes } from './python/runner.js';
 import { defaultRegistry, NodeRegistry } from './registry.js';
 import type {
   Connection,
@@ -42,6 +43,21 @@ export interface ExecuteOptions {
   onDatabaseCommand?: (entry: DatabaseCommandLog) => void | Promise<void>;
   /** Limite de execuções de nós, para um loop sem fim não travar o worker. */
   maxNodeRuns?: number;
+  /** Processos que rodam o Python do nó Code; por padrão, um conjunto compartilhado pelo processo. */
+  python?: PythonRunner;
+}
+
+let sharedPython: PythonRunner | null = null;
+
+/** Conjunto de processos Python usado quando a execução não recebe um próprio. */
+export function defaultPythonRunner(): PythonRunner {
+  sharedPython ??= new PythonRunner();
+  return sharedPython;
+}
+
+export async function closeDefaultPythonRunner(): Promise<void> {
+  await sharedPython?.close();
+  sharedPython = null;
 }
 
 class ExecutionCanceled extends Error {}
@@ -261,6 +277,17 @@ async function runNode(
             return options.getApiEndpoint(erpClientId, endpointId);
           },
           runCode: (code, itemIndex) => scope.runCode(code, inputs[0] ?? [], itemIndex, timeoutMs),
+          runPython: (code, mode) =>
+            (options.python ?? defaultPythonRunner()).run({
+              code,
+              mode,
+              input: inputs[0] ?? [],
+              nodeOutputs: Object.fromEntries(referencedNodes(code).flatMap((name) => (nodeOutputs[name] ? [[name, nodeOutputs[name]]] : []))),
+              execution: { id: options.executionId, mode: options.mode },
+              vars: options.vars ?? {},
+              timeoutMs,
+              signal,
+            }),
           executeWorkflow: async (workflowId, items) => {
             if (!options.executeSubworkflow) throw new NodeOperationError('Não é possível executar outro fluxo nesta execução');
             return options.executeSubworkflow({ workflowId, items, signal });

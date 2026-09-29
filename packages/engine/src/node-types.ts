@@ -69,6 +69,8 @@ export interface NodeExecuteContext {
   database(connectionId: string): Promise<DatabaseSession>;
   /** Roda código JavaScript do usuário no isolate da execução. */
   runCode(code: string, itemIndex: number): Promise<{ result: JsonValue; logs: string[] }>;
+  /** Roda código Python num processo isolado: uma vez com todos os itens ou uma vez por item. */
+  runPython(code: string, mode: 'all' | 'each'): Promise<{ results: JsonValue[]; logs: string[] }>;
   /** Executa outro fluxo e devolve a saída dele. */
   executeWorkflow(workflowId: string, items: Item[]): Promise<SubworkflowResult>;
   /** Estado do nó que dura a execução inteira (ex.: os lotes pendentes do Loop). */

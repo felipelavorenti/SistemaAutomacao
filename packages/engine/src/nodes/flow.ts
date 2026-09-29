@@ -108,11 +108,17 @@ for (const item of $input.all()) {
 }
 return saida;`;
 
+const PYTHON_ALL = `# _input.all() traz todos os itens. Devolva uma lista de dicionários.
+saida = []
+for item in _input.all():
+    saida.append({**item.json, "processado": True})
+return saida`;
+
 export const code: NodeType = {
   description: {
     type: 'code',
     displayName: 'Code',
-    description: 'Roda JavaScript sobre os itens. console.log aparece nos dados do nó.',
+    description: 'Roda JavaScript ou Python sobre os itens. console.log e print aparecem nos dados do nó.',
     group: 'data',
     inputs: 1,
     outputs: 1,
@@ -128,21 +134,54 @@ export const code: NodeType = {
         ],
       },
       {
+        name: 'language',
+        displayName: 'Linguagem',
+        type: 'options',
+        default: 'javaScript',
+        options: [
+          { name: 'JavaScript', value: 'javaScript' },
+          { name: 'Python', value: 'python' },
+        ],
+      },
+      {
         name: 'jsCode',
         displayName: 'Código JavaScript',
         type: 'code',
         default: CODE_ALL,
+        showWhen: { language: ['javaScript'] },
         description:
           'Disponível: $input.all(), $json (item atual), $("Nó").first(), $execution, $vars. Pode usar await. No modo "cada item", devolva um objeto.',
+      },
+      {
+        name: 'pythonCode',
+        displayName: 'Código Python',
+        type: 'code',
+        default: PYTHON_ALL,
+        showWhen: { language: ['python'] },
+        description:
+          'Disponível: _input.all(), _json (item atual), _("Nó").first(), _execution, _vars e a biblioteca padrão do Python. item.json.campo e item.json["campo"] funcionam. No modo "cada item", devolva um dicionário.',
       },
     ],
   },
   async execute(ctx) {
     const input = ctx.inputs[0] ?? [];
     const mode = await ctx.getParam('mode', 0);
-    const source = String(ctx.node.parameters.jsCode ?? CODE_ALL);
     const logs: string[] = [];
     const out: Item[] = [];
+
+    if (ctx.node.parameters.language === 'python') {
+      const source = String(ctx.node.parameters.pythonCode ?? PYTHON_ALL);
+      try {
+        const { results, logs: runLogs } = await ctx.runPython(source, mode === 'each' ? 'each' : 'all');
+        logs.push(...runLogs);
+        results.forEach((result, i) => out.push(...toItems(result, mode === 'each' ? i : undefined)));
+      } finally {
+        if (logs.length) ctx.meta.logs = logs.slice(0, 500);
+      }
+      return [out];
+    }
+
+    const source = String(ctx.node.parameters.jsCode ?? CODE_ALL);
 
     const collect = async (index: number) => {
       const { result, logs: runLogs } = await ctx.runCode(source, index);

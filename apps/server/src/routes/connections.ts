@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { testDatabaseConnection, type JsonObject } from '@sa/engine';
+import { testConnection, type JsonObject } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
 import { audit } from '../lib/audit.js';
@@ -77,8 +77,8 @@ export const connectionRoutes =
       const started = Date.now();
       try {
         await Promise.race([
-          testDatabaseConnection({ id: b.id ?? 'teste', type: b.type, data }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('O banco não respondeu em 20 s')), 20_000)),
+          testConnection({ id: b.id ?? 'teste', type: b.type, data }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Não respondeu em 20 s')), 20_000)),
         ]);
         return { ok: true, durationMs: Date.now() - started };
       } catch (err) {

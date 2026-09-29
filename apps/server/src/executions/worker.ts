@@ -1,6 +1,7 @@
 import { Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import {
+  closeDefaultPythonRunner,
   DatabasePools,
   executeWorkflow,
   NodeOperationError,
@@ -238,6 +239,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       for (const c of running.values()) c.abort();
       await worker.close();
       await pools.closeAll();
+      await closeDefaultPythonRunner();
       await subscriber.unsubscribe(CANCEL_CHANNEL);
     },
   };

@@ -3,7 +3,9 @@ import { httpRequest } from './nodes/http-request.js';
 import { ifNode } from './nodes/if.js';
 import { manualTrigger, scheduleTrigger } from './nodes/triggers.js';
 import { aggregate, merge, splitOut } from './nodes/data.js';
+import { clickup } from './nodes/clickup.js';
 import { database } from './nodes/database.js';
+import { metabase } from './nodes/metabase.js';
 import { code, executeWorkflow, executeWorkflowTrigger, loop, stopAndError } from './nodes/flow.js';
 
 export class NodeRegistry {
@@ -32,6 +34,8 @@ export const defaultRegistry = new NodeRegistry([
   executeWorkflowTrigger,
   httpRequest,
   database,
+  metabase,
+  clickup,
   executeWorkflow,
   ifNode,
   loop,
