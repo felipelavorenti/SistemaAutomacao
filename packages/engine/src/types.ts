@@ -81,6 +81,8 @@ export interface NodeRun {
   input: Item[][];
   output: Item[][];
   error?: NodeError;
+  /** Informações extras do nó, ex.: logs do Code e IDs das execuções de subfluxo. */
+  meta?: JsonObject;
 }
 
 export type ExecutionStatus = 'success' | 'error' | 'canceled';

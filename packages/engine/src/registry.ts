@@ -2,6 +2,8 @@ import type { NodeType, NodeTypeDescription } from './node-types.js';
 import { httpRequest } from './nodes/http-request.js';
 import { ifNode } from './nodes/if.js';
 import { manualTrigger, scheduleTrigger } from './nodes/triggers.js';
+import { aggregate, merge, splitOut } from './nodes/data.js';
+import { code, executeWorkflow, executeWorkflowTrigger, loop, stopAndError } from './nodes/flow.js';
 
 export class NodeRegistry {
   private types = new Map<string, NodeType>();
@@ -23,4 +25,17 @@ export class NodeRegistry {
   }
 }
 
-export const defaultRegistry = new NodeRegistry([manualTrigger, scheduleTrigger, httpRequest, ifNode]);
+export const defaultRegistry = new NodeRegistry([
+  manualTrigger,
+  scheduleTrigger,
+  executeWorkflowTrigger,
+  httpRequest,
+  executeWorkflow,
+  ifNode,
+  loop,
+  stopAndError,
+  splitOut,
+  aggregate,
+  merge,
+  code,
+]);

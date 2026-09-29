@@ -27,6 +27,7 @@ import {
   type NodeTypeDescription,
   type Workflow,
   type WorkflowDefinition,
+  type WorkflowListItem,
 } from '../api';
 import { useMe } from '../App';
 import { ErrorBox, Modal, StatusBadge } from '../components/ui';
@@ -60,6 +61,7 @@ function Editor() {
   const [descriptions, setDescriptions] = useState<NodeTypeDescription[]>([]);
   const [connections, setConnections] = useState<ConnectionItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [running, setRunning] = useState(false);
@@ -71,11 +73,12 @@ function Editor() {
   useEffect(() => {
     (async () => {
       try {
-        const [wf, types, conns, fs] = await Promise.all([
+        const [wf, types, conns, fs, wfs] = await Promise.all([
           get<Workflow>(`/workflows/${id}`),
           get<NodeTypeDescription[]>('/node-types'),
           get<ConnectionItem[]>('/connections'),
           get<Folder[]>('/folders'),
+          get<WorkflowListItem[]>('/workflows'),
         ]);
         setWorkflow(wf);
         setDefinition(wf.definition);
@@ -84,6 +87,7 @@ function Editor() {
         setDescriptions(types);
         setConnections(conns);
         setFolders(fs);
+        setWorkflows(wfs.filter((w) => w.id !== id));
       } catch (err) {
         setError(errorMessage(err));
       }
@@ -106,15 +110,24 @@ function Editor() {
     setDirty(true);
   };
 
+  // Última execução de cada nó e quantas vezes ele rodou (nós dentro de loop rodam várias).
   const runsByNode = useMemo(() => {
     const map = new Map<string, NodeRun>();
     for (const r of execution?.runs ?? []) map.set(r.nodeId, r);
     return map;
   }, [execution]);
+  const runCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of execution?.runs ?? []) map.set(r.nodeId, (map.get(r.nodeId) ?? 0) + 1);
+    return map;
+  }, [execution]);
 
   const previewOutputs = useMemo(() => {
     const out: Record<string, Item[]> = {};
-    for (const r of execution?.runs ?? []) out[r.nodeName] = r.output.find((o) => o.length) ?? [];
+    for (const r of execution?.runs ?? []) {
+      const items = r.output.find((o) => o.length);
+      if (items || !out[r.nodeName]) out[r.nodeName] = items ?? [];
+    }
     return out;
   }, [execution]);
 
@@ -125,7 +138,7 @@ function Editor() {
     type: 'sa',
     position: n.position,
     selected: n.id === selectedId,
-    data: { node: n, description: describe(n.type), run: runsByNode.get(n.id), hasIssue: issueNodes.has(n.id) },
+    data: { node: n, description: describe(n.type), run: runsByNode.get(n.id), runCount: runCounts.get(n.id) ?? 0, hasIssue: issueNodes.has(n.id) },
   }));
 
   const edges: Edge[] = definition.connections.map((c) => ({
@@ -383,6 +396,8 @@ function Editor() {
             run={runsByNode.get(selected.id)}
             previewOutputs={previewOutputs}
             connections={connections}
+            workflows={workflows}
+            runCount={runCounts.get(selectedId!) ?? 0}
             readOnly={readOnly}
             nameTaken={(n) => definition.nodes.some((x) => x.id !== selected.id && x.name === n)}
             testInput={testInput}

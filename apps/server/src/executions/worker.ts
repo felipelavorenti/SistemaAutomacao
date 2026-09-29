@@ -1,6 +1,14 @@
 import { Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
-import { executeWorkflow, type ConnectionData, type Item, type JsonObject, type WorkflowDefinition } from '@sa/engine';
+import {
+  executeWorkflow,
+  NodeOperationError,
+  type ConnectionData,
+  type ExecuteOptions,
+  type Item,
+  type JsonObject,
+  type WorkflowDefinition,
+} from '@sa/engine';
 import type { Config } from '../config.js';
 import { one, type Db } from '../db/db.js';
 import { decryptJson } from '../lib/crypto.js';
@@ -15,6 +23,10 @@ interface ExecutionRow {
   definition: WorkflowDefinition;
   input: Item[] | null;
 }
+
+/** Quantos subfluxos podem ser chamados um dentro do outro. */
+const MAX_SUBWORKFLOW_DEPTH = 10;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface WorkerHandle {
   close(): Promise<void>;
@@ -35,6 +47,65 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     return { id: row.id, type: row.type, data: decryptJson<JsonObject>(config.encryptionKey, row.data_encrypted) };
   };
 
+  /**
+   * Roda um subfluxo dentro da execução de quem chamou (sem passar pela fila,
+   * para não disputar vaga com o próprio pai) e registra a execução filha.
+   */
+  const subworkflowRunner =
+    (parentId: string, rootMode: ExecutionMode, depth: number): ExecuteOptions['executeSubworkflow'] =>
+    async ({ workflowId, items, signal }) => {
+      if (depth > MAX_SUBWORKFLOW_DEPTH) {
+        throw new NodeOperationError(`Passou do limite de ${MAX_SUBWORKFLOW_DEPTH} subfluxos chamados um dentro do outro`);
+      }
+      const wf = UUID.test(workflowId)
+        ? await one<{ id: string; name: string; version: number; definition: WorkflowDefinition }>(
+            db,
+            'SELECT id, name, version, definition FROM workflows WHERE id = $1',
+            [workflowId],
+          )
+        : null;
+      if (!wf) throw new NodeOperationError(`O fluxo ${workflowId} não existe`);
+      const start = wf.definition.nodes.find((n) => n.type === 'executeWorkflowTrigger' && !n.disabled);
+      if (!start) throw new NodeOperationError(`O fluxo "${wf.name}" não começa pelo gatilho "Chamado por outro fluxo"`);
+
+      const id = await createExecution(db, {
+        workflowId: wf.id,
+        workflowVersion: wf.version,
+        mode: 'subworkflow',
+        triggeredBy: null,
+        definition: wf.definition,
+        input: items,
+        parentExecutionId: parentId,
+        status: 'running',
+      });
+      const controller = new AbortController();
+      const onParentAbort = () => controller.abort();
+      signal.addEventListener('abort', onParentAbort, { once: true });
+      running.set(id, controller);
+      try {
+        const result = await executeWorkflow({
+          workflow: wf.definition,
+          executionId: id,
+          mode: 'subworkflow',
+          startNodeId: start.id,
+          triggerItems: items,
+          getConnection,
+          signal: controller.signal,
+          executeSubworkflow: subworkflowRunner(id, rootMode, depth + 1),
+        });
+        // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
+        const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
+        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData));
+        return { executionId: id, status: result.status, output: result.lastOutput, error: result.error };
+      } catch (err) {
+        await failExecution(db, id, err instanceof Error ? err.message : String(err));
+        throw err;
+      } finally {
+        signal.removeEventListener('abort', onParentAbort);
+        running.delete(id);
+      }
+    };
+
   const run = async (executionId: string) => {
     const claimed = await one<ExecutionRow>(
       db,
@@ -54,6 +125,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         triggerItems: claimed.input ?? undefined,
         getConnection,
         signal: controller.signal,
+        executeSubworkflow: subworkflowRunner(executionId, claimed.mode, 1),
       });
       await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData));
     } catch (err) {

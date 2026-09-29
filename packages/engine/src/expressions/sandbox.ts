@@ -15,6 +15,16 @@ export interface SandboxOptions {
   timeoutMs?: number;
 }
 
+/** Erro lançado pelo código do usuário no nó Code, com o que ele já tinha logado. */
+export class CodeError extends Error {
+  constructor(
+    message: string,
+    readonly logs: string[],
+  ) {
+    super(message);
+  }
+}
+
 export class ExpressionError extends Error {
   constructor(
     message: string,
@@ -24,9 +34,11 @@ export class ExpressionError extends Error {
   }
 }
 
-// Roda dentro do isolate. Monta as variáveis que o usuário usa nas expressões.
+// Roda dentro do isolate. Monta as variáveis que o usuário usa nas expressões e no nó Code.
+// A saída de cada nó só é copiada para o isolate quando alguém a usa.
 const BOOTSTRAP = `
-const __data = JSON.parse(__rawData);
+const __meta = JSON.parse(__rawMeta);
+const __nodeCache = {};
 const __wrap = (items) => ({
   all: () => items,
   first: () => items[0],
@@ -36,21 +48,29 @@ const __wrap = (items) => ({
 });
 const $node = new Proxy({}, {
   get(_, name) {
-    const items = __data.nodeOutputs[name];
-    if (!items) throw new Error('Nó "' + String(name) + '" não foi executado antes deste nó');
-    return __wrap(items);
+    if (typeof name !== 'string') return undefined;
+    if (!(name in __nodeCache)) {
+      const raw = __nodeJson(name);
+      if (raw === null) throw new Error('Nó "' + name + '" não foi executado antes deste nó');
+      __nodeCache[name] = JSON.parse(raw);
+    }
+    return __wrap(__nodeCache[name]);
   },
 });
 const $ = (name) => $node[name];
-const $execution = __data.execution;
-const $vars = __data.vars;
+const $execution = __meta.execution;
+const $vars = __meta.vars;
+const __logs = [];
+const __fmt = (v) => typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })();
+const __log = (...args) => { if (__logs.length < 200) __logs.push(args.map(__fmt).join(' ')); };
+globalThis.console = { log: __log, info: __log, warn: __log, error: __log, debug: __log };
 let __index = 0;
 let __input = [];
 let $json = {};
 let $input = __wrap([]);
 let $itemIndex = 0;
 const __setItem = (rawInput, index) => {
-  __input = JSON.parse(rawInput);
+  if (rawInput !== null) __input = JSON.parse(rawInput);
   __index = index;
   $itemIndex = index;
   $input = __wrap(__input);
@@ -71,11 +91,21 @@ export class ExpressionSandbox {
     this.timeoutMs = options.timeoutMs ?? 2000;
   }
 
+  /** O contexto V8 só é criado quando o nó avalia a primeira expressão. */
   async createScope(data: ExpressionData): Promise<ExpressionScope> {
-    const context = await this.isolate.createContext();
-    await context.global.set('__rawData', JSON.stringify(data));
-    await context.eval(BOOTSTRAP + '; globalThis.__setItem = __setItem;', { timeout: this.timeoutMs });
-    return new ExpressionScope(context, this.timeoutMs);
+    return new ExpressionScope(async () => {
+      const context = await this.isolate.createContext();
+      await context.global.set('__rawMeta', JSON.stringify({ execution: data.execution, vars: data.vars }));
+      await context.global.set(
+        '__nodeJson',
+        new ivm.Callback((name: string) => {
+          const items = data.nodeOutputs[name];
+          return items ? JSON.stringify(items) : null;
+        }),
+      );
+      await context.eval(BOOTSTRAP + '; globalThis.__setItem = __setItem;', { timeout: this.timeoutMs });
+      return context;
+    }, this.timeoutMs);
   }
 
   dispose(): void {
@@ -86,11 +116,17 @@ export class ExpressionSandbox {
 export class ExpressionScope {
   private currentInput: Item[] | null = null;
   private currentIndex = -1;
+  private context: Promise<ivm.Context> | null = null;
 
   constructor(
-    private context: ivm.Context,
+    private createContext: () => Promise<ivm.Context>,
     private timeoutMs: number,
   ) {}
+
+  private getContext(): Promise<ivm.Context> {
+    this.context ??= this.createContext();
+    return this.context;
+  }
 
   /** Resolve um valor de parâmetro: expressões são avaliadas, o resto passa direto. */
   async resolve(value: JsonValue, input: Item[], index: number): Promise<JsonValue> {
@@ -128,10 +164,11 @@ export class ExpressionScope {
   }
 
   async evaluate(code: string, input: Item[], index: number): Promise<JsonValue> {
+    const context = await this.getContext();
     await this.setItem(input, index);
     const wrapped = `(() => { const __r = (${code}\n); return __r === undefined ? 'null' : JSON.stringify(__r); })()`;
     try {
-      const raw = (await this.context.eval(wrapped, { timeout: this.timeoutMs, copy: true })) as string;
+      const raw = (await context.eval(wrapped, { timeout: this.timeoutMs, copy: true })) as string;
       return JSON.parse(raw) as JsonValue;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -139,15 +176,46 @@ export class ExpressionScope {
     }
   }
 
+  /**
+   * Roda o corpo de uma função assíncrona escrita pelo usuário (nó Code).
+   * Devolve o que o código retornou e o que ele escreveu com console.log.
+   */
+  async runCode(code: string, input: Item[], index: number, timeoutMs: number): Promise<{ result: JsonValue; logs: string[] }> {
+    const context = await this.getContext();
+    await this.setItem(input, index);
+    const wrapped = `(async () => {
+      __logs.length = 0;
+      try {
+        const __r = await (async () => {\n${code}\n})();
+        return JSON.stringify({ ok: true, result: __r === undefined ? null : __r, logs: __logs });
+      } catch (e) {
+        return JSON.stringify({ ok: false, message: e instanceof Error ? e.message : String(e), logs: __logs });
+      }
+    })()`;
+    let raw: string;
+    try {
+      raw = (await context.eval(wrapped, { timeout: timeoutMs, promise: true, copy: true })) as string;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new CodeError(/timed out/i.test(message) ? `O código passou do tempo limite de ${timeoutMs / 1000} s` : message, []);
+    }
+    const out = JSON.parse(raw) as { ok: boolean; result?: JsonValue; message?: string; logs: string[] };
+    if (!out.ok) throw new CodeError(out.message ?? 'Erro no código', out.logs);
+    return { result: out.result ?? null, logs: out.logs };
+  }
+
   private async setItem(input: Item[], index: number): Promise<void> {
     if (input === this.currentInput && index === this.currentIndex) return;
-    const fn = (await this.context.global.get('__setItem', { reference: true })) as ivm.Reference;
-    await fn.apply(undefined, [JSON.stringify(input), index], { timeout: this.timeoutMs });
+    const context = await this.getContext();
+    const fn = (await context.global.get('__setItem', { reference: true })) as ivm.Reference;
+    const raw = input === this.currentInput ? null : JSON.stringify(input);
+    await fn.apply(undefined, [raw, index], { timeout: this.timeoutMs });
     this.currentInput = input;
     this.currentIndex = index;
   }
 
   release(): void {
-    this.context.release();
+    if (!this.context) return;
+    void this.context.then((c) => c.release()).catch(() => undefined);
   }
 }

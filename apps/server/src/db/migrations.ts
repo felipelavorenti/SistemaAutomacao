@@ -139,4 +139,11 @@ CREATE INDEX audit_entity_idx ON audit_log(entity_type, entity_id);
 INSERT INTO folders (name) VALUES ('Geral');
 `,
   },
+  {
+    id: '002_subfluxos',
+    sql: `
+ALTER TABLE executions ADD COLUMN parent_execution_id uuid REFERENCES executions(id) ON DELETE SET NULL;
+CREATE INDEX executions_parent_idx ON executions(parent_execution_id) WHERE parent_execution_id IS NOT NULL;
+`,
+  },
 ];

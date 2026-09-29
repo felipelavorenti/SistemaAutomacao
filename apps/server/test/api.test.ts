@@ -277,4 +277,52 @@ describe.skipIf(!available)('API', () => {
     expect(audit.body.map((a: { action: string }) => a.action)).toEqual(['deactivate', 'activate', 'update', 'update', 'create']);
     expect(audit.body[0].user_email).toBe('editor@teste.com');
   });
+
+  it('chama subfluxo, registra a execução filha e devolve o erro da API', async () => {
+    const node = (id: string, type: string, parameters: Record<string, unknown> = {}) => ({ id, name: id, type, position: { x: 0, y: 0 }, parameters });
+    const sub = await call(editor, 'POST', '/api/workflows', { name: 'Subfluxo preço', folderId: folderA });
+    const subDefinition = (url: string) => ({
+      nodes: [node('Recebe', 'executeWorkflowTrigger'), node('API', 'httpRequest', { url })],
+      connections: [{ from: 'Recebe', fromOutput: 0, to: 'API', toInput: 0 }],
+    });
+    expect((await call(editor, 'PUT', `/api/workflows/${sub.body.id}`, { name: 'Subfluxo preço', folderId: folderA, definition: subDefinition(`=${apiBase}/sub/{{ $json.sku }}`) })).status).toBe(200);
+
+    const parent = await call(editor, 'POST', '/api/workflows', { name: 'Chama subfluxo', folderId: folderA });
+    const parentDefinition = {
+      nodes: [node('Início', 'manualTrigger'), node('Sub', 'executeWorkflow', { workflowId: sub.body.id, mode: 'each' })],
+      connections: [{ from: 'Início', fromOutput: 0, to: 'Sub', toInput: 0 }],
+    };
+    const saved = await call(editor, 'PUT', `/api/workflows/${parent.body.id}`, { name: 'Chama subfluxo', folderId: folderA, definition: parentDefinition });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect((await call(editor, 'GET', `/api/workflows/${sub.body.id}/callers`)).body.map((w: { name: string }) => w.name)).toEqual(['Chama subfluxo']);
+
+    const run = await call(editor, 'POST', `/api/workflows/${parent.body.id}/run`, { input: [{ json: { sku: 'A' } }, { json: { sku: 'B' } }] });
+    const execution = await waitExecution(editor, run.body.executionId);
+    expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+    expect(execution.runs[1].output[0].map((i: { json: { path: string } }) => i.json.path)).toEqual(['/sub/A', '/sub/B']);
+    expect(execution.children).toHaveLength(2);
+    expect(execution.runs[1].meta.subExecutionIds).toEqual(execution.children.map((c: { id: string }) => c.id));
+    const child = await call(editor, 'GET', `/api/executions/${execution.children[0].id}`);
+    expect(child.body).toMatchObject({ mode: 'subworkflow', status: 'success', parent_execution_id: run.body.executionId });
+    expect(child.body.runs).not.toBeNull();
+
+    // Erro dentro do subfluxo chega no pai com o retorno da API.
+    await call(editor, 'PUT', `/api/workflows/${sub.body.id}`, { name: 'Subfluxo preço', folderId: folderA, definition: subDefinition(`${apiBase}/erro`) });
+    const failed = await waitExecution(editor, (await call(editor, 'POST', `/api/workflows/${parent.body.id}/run`, {})).body.executionId);
+    expect(failed.status).toBe('error');
+    expect(failed.error_message).toContain('O subfluxo falhou no nó "API"');
+    expect(failed.error.details.details.body).toEqual({ motivo: 'SKU não encontrado' });
+
+    // Não dá para excluir um fluxo que outro chama, nem chamar fluxo de pasta sem acesso.
+    expect((await call(editor, 'DELETE', `/api/workflows/${sub.body.id}`)).body.error).toMatch(/chamado por outros fluxos/);
+    const hidden = await call(admin, 'POST', '/api/workflows', { name: 'Oculto', folderId: folderB });
+    const bad = { ...parentDefinition, nodes: [parentDefinition.nodes[0], node('Sub', 'executeWorkflow', { workflowId: hidden.body.id })] };
+    expect((await call(editor, 'PUT', `/api/workflows/${parent.body.id}`, { name: 'Chama subfluxo', folderId: folderA, definition: bad })).status).toBe(403);
+
+    // Subfluxo sem o gatilho certo.
+    const plain = await call(editor, 'POST', '/api/workflows', { name: 'Sem gatilho', folderId: folderA });
+    const noTrigger = { ...parentDefinition, nodes: [parentDefinition.nodes[0], node('Sub', 'executeWorkflow', { workflowId: plain.body.id })] };
+    const wrong = await waitExecution(editor, (await call(editor, 'POST', `/api/workflows/${parent.body.id}/run`, { definition: noTrigger })).body.executionId);
+    expect(wrong.error_message).toMatch(/não começa pelo gatilho/);
+  });
 });

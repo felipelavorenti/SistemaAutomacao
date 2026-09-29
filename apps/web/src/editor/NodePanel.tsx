@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import type { ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription } from '../api';
-import { ErrorBox, Field, JsonView } from '../components/ui';
+import type { ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription, WorkflowListItem } from '../api';
+import { ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
 
 type Tab = 'params' | 'settings' | 'data';
@@ -11,6 +11,8 @@ export function NodePanel({
   run,
   previewOutputs,
   connections,
+  workflows,
+  runCount,
   readOnly,
   nameTaken,
   testInput,
@@ -24,6 +26,8 @@ export function NodePanel({
   run?: NodeRun;
   previewOutputs: Record<string, Item[]>;
   connections: ConnectionItem[];
+  workflows: WorkflowListItem[];
+  runCount: number;
   readOnly: boolean;
   nameTaken: (name: string) => boolean;
   testInput: string;
@@ -37,7 +41,10 @@ export function NodePanel({
   const [nameError, setNameError] = useState<string | null>(null);
 
   const input = useMemo(() => run?.input[0] ?? [], [run]);
-  const ctx: FieldContext = useMemo(() => ({ connections, previewInput: input, previewOutputs, readOnly }), [connections, input, previewOutputs, readOnly]);
+  const ctx: FieldContext = useMemo(
+    () => ({ connections, workflows, previewInput: input, previewOutputs, readOnly }),
+    [connections, workflows, input, previewOutputs, readOnly],
+  );
 
   const values: Record<string, JsonValue> = {};
   for (const p of description?.properties ?? []) values[p.name] = node.parameters[p.name] !== undefined ? node.parameters[p.name] : p.default;
@@ -78,7 +85,7 @@ export function NodePanel({
 
       {tab === 'params' && (
         <div className="panel-body">
-          {node.type === 'manualTrigger' && (
+          {(node.type === 'manualTrigger' || node.type === 'executeWorkflowTrigger') && (
             <Field label="JSON de entrada para testes" hint="Usado quando você clica em Executar no editor. Não é salvo no fluxo.">
               <textarea className="code" rows={5} value={testInput} onChange={(e) => onTestInputChange(e.target.value)} placeholder='{ "sku": "123" }' />
             </Field>
@@ -88,7 +95,10 @@ export function NodePanel({
             .map((p) => (
               <ParameterField key={p.name} prop={p} value={values[p.name]} onChange={(v) => setParam(p.name, v)} ctx={ctx} />
             ))}
-          {description && !description.properties.length && node.type !== 'manualTrigger' && <p className="muted">Este nó não tem parâmetros.</p>}
+          {description && !description.properties.length && description.group !== 'trigger' && <p className="muted">Este nó não tem parâmetros.</p>}
+          {node.type === 'executeWorkflowTrigger' && (
+            <p className="muted small">Os itens enviados pelo nó Execute Workflow do outro fluxo chegam aqui.</p>
+          )}
           {input.length > 0 && (
             <details className="input-help" open>
               <summary>Entrada da última execução ({input.length} itens) · arraste um campo para uma expressão</summary>
@@ -162,6 +172,8 @@ export function NodePanel({
       {tab === 'data' && (
         <div className="panel-body">
           {!run && <p className="muted">Execute o fluxo para ver os dados deste nó.</p>}
+          {runCount > 1 && <p className="muted small">O nó rodou {runCount} vezes; estes são os dados da última. Todas estão na tela da execução.</p>}
+          {run && <RunMeta meta={run.meta} />}
           {run?.error && (
             <div className="error-panel">
               <strong>{run.error.message}</strong>

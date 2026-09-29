@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { post, type ConnectionItem, type Item, type JsonValue, type PropertyDescription } from '../api';
+import { post, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
 
 export interface FieldContext {
   connections: ConnectionItem[];
+  /** Fluxos que o usuário enxerga, para o nó Execute Workflow. */
+  workflows: WorkflowListItem[];
   /** Entrada da última execução deste nó, para a prévia das expressões. */
   previewInput: Item[];
   /** Saída de cada nó na última execução, pelo nome. */
@@ -10,7 +12,7 @@ export interface FieldContext {
   readOnly: boolean;
 }
 
-const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection']);
+const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection', 'workflow']);
 
 export function isExpression(value: JsonValue): value is string {
   return typeof value === 'string' && value.startsWith('=');
@@ -98,8 +100,9 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
           ))}
         </select>
       );
-    case 'json':
     case 'code':
+      return <CodeInput value={typeof value === 'string' ? value : ''} disabled={disabled} onChange={onChange} />;
+    case 'json':
       return (
         <textarea
           className="code"
@@ -123,11 +126,66 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
         </select>
       );
     }
+    case 'workflow': {
+      const callable = ctx.workflows.filter((w) => w.callable);
+      const others = ctx.workflows.filter((w) => !w.callable);
+      const current = ctx.workflows.find((w) => w.id === value);
+      return (
+        <>
+          <select disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+            <option value="">Escolha o fluxo</option>
+            {callable.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name} ({w.folder_name})
+              </option>
+            ))}
+            {others.length > 0 && (
+              <optgroup label="Sem o gatilho Chamado por outro fluxo">
+                {others.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.name} ({w.folder_name})
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {value && !current && <option value={String(value)}>Fluxo sem acesso ou excluído</option>}
+          </select>
+          {current && (
+            <div className="field-hint">
+              ID {current.id} · <a href={`/fluxos/${current.id}`} target="_blank" rel="noreferrer">abrir em outra aba</a>
+              {!current.callable && <span className="required"> · este fluxo precisa começar pelo gatilho "Chamado por outro fluxo"</span>}
+            </div>
+          )}
+        </>
+      );
+    }
     case 'list':
       return <ListInput prop={prop} value={value} onChange={onChange} ctx={ctx} />;
     default:
       return <input disabled={disabled} value={value === null ? '' : String(value)} placeholder={prop.placeholder} onChange={(e) => onChange(e.target.value)} />;
   }
+}
+
+/** Editor de código simples: fonte monoespaçada e Tab insere espaços. */
+function CodeInput({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (v: JsonValue) => void }) {
+  return (
+    <textarea
+      className="code code-editor"
+      rows={Math.min(24, Math.max(10, value.split('\n').length + 1))}
+      spellCheck={false}
+      disabled={disabled}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key !== 'Tab' || e.shiftKey) return;
+        e.preventDefault();
+        const el = e.currentTarget;
+        const { selectionStart: start, selectionEnd: end } = el;
+        onChange(value.slice(0, start) + '  ' + value.slice(end));
+        requestAnimationFrame(() => el.setSelectionRange(start + 2, start + 2));
+      }}
+    />
+  );
 }
 
 function ListInput({ prop, value, onChange, ctx }: { prop: PropertyDescription; value: JsonValue; onChange: (v: JsonValue) => void; ctx: FieldContext }) {
