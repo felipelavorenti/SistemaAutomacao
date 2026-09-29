@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { executeWorkflow } from '../src/executor.js';
 import { ExpressionSandbox } from '../src/expressions/sandbox.js';
@@ -212,5 +214,62 @@ describe('importador do n8n', () => {
     ]);
     scope.release();
     sandbox.dispose();
+  });
+
+  it('HTTP Request antigo com "JSON Parameters" leva headers, query, corpo e resposta completa', async () => {
+    const seen: { url?: string; headers?: Record<string, unknown>; body?: string }[] = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        seen.push({ url: req.url, headers: req.headers, body });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ access_token: 'tok' }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const wf: N8nWorkflow = {
+        id: 'wf-legado',
+        name: 'Login legado',
+        nodes: [
+          { id: 'a', name: 'Início', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, position: [0, 0], parameters: {} },
+          {
+            id: 'b',
+            name: 'Login',
+            type: 'n8n-nodes-base.httpRequest',
+            typeVersion: 2,
+            position: [200, 0],
+            parameters: {
+              requestMethod: 'POST',
+              url: `${base}/oauth/token`,
+              jsonParameters: true,
+              options: { bodyContentType: 'form-urlencoded', fullResponse: true },
+              headerParametersJson: '{"Authorization": "Basic YWJjOjEyMw=="}',
+              queryParametersJson: '={"username": "{{ $json.ipa.username }}", "grant_type": "password", "tentativa": {{ $json.n }} }',
+              bodyParametersJson: '={"password": "{{ $json.ipa.password }}"}',
+            },
+          },
+        ],
+        connections: { Início: { main: [[{ node: 'Login', type: 'main', index: 0 }]] } },
+      };
+      const converted = convertN8nWorkflow(wf);
+      const run = await executeWorkflow({
+        workflow: converted.definition,
+        executionId: 'x',
+        mode: 'manual',
+        triggerItems: [{ json: { n: 2, ipa: { username: 'loja', password: 's3nha' } } }],
+      });
+      expect(run.status, JSON.stringify(run.error)).toBe('success');
+      const url = new URL(seen[0]!.url!, base);
+      expect(seen[0]!.headers!.authorization).toBe('Basic YWJjOjEyMw==');
+      expect(Object.fromEntries(url.searchParams)).toEqual({ username: 'loja', grant_type: 'password', tentativa: '2' });
+      expect(seen[0]!.headers!['content-type']).toBe('application/x-www-form-urlencoded');
+      expect(seen[0]!.body).toBe('password=s3nha');
+      expect(run.lastOutput[0]!.json).toMatchObject({ statusCode: 200, body: { access_token: 'tok' } });
+    } finally {
+      server.close();
+    }
   });
 });

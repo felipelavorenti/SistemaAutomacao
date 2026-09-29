@@ -348,22 +348,41 @@ function httpRequest(ctx: Ctx): Converted {
   const settings: NodeSettings = {};
 
   if (version < 3) {
-    // Versões 1 e 2 do nó (fluxos antigos).
+    // Versões 1 e 2 do nó (fluxos antigos). Com "JSON Parameters" ligado, query, headers e corpo vêm como texto JSON.
+    const legacyOpts = isObject(params.options) ? params.options : {};
+    const contentType = String(legacyOpts.bodyContentType ?? 'json');
     out.method = String(params.requestMethod ?? 'GET');
-    out.queryParameters = pairsOf(params.queryParametersUi);
-    out.headers = pairsOf(params.headerParametersUi);
     if (params.jsonParameters) {
-      if (params.bodyParametersJson) {
+      out.queryParameters = jsonToPairs(params.queryParametersJson, 'os parâmetros de query', warn);
+      out.headers = jsonToPairs(params.headerParametersJson, 'os headers', warn);
+      const raw = typeof params.bodyParametersJson === 'string' ? params.bodyParametersJson : '';
+      if (raw.trim() && raw.trim() !== '=' && contentType === 'form-urlencoded') {
+        out.bodyType = 'form';
+        out.formBody = jsonToPairs(raw, 'o corpo', warn);
+      } else if (raw.trim() && raw.trim() !== '=' && contentType === 'raw') {
+        out.bodyType = 'text';
+        out.textBody = raw;
+      } else if (raw.trim() && raw.trim() !== '=') {
         out.bodyType = 'json';
-        out.jsonBody = String(params.bodyParametersJson);
+        out.jsonBody = raw;
       }
     } else {
+      out.queryParameters = pairsOf(params.queryParametersUi);
+      out.headers = pairsOf(params.headerParametersUi);
       const body = pairsOf(params.bodyParametersUi);
-      if (body.length) {
+      if (body.length && contentType === 'form-urlencoded') {
+        out.bodyType = 'form';
+        out.formBody = body;
+      } else if (body.length) {
         out.bodyType = 'json';
         out.jsonBody = pairsToJsonBody(body);
       }
     }
+    if (contentType === 'raw' && legacyOpts.bodyContentCustomMimeType) {
+      out.headers = [...((out.headers as JsonObject[] | undefined) ?? []), { name: 'content-type', value: String(legacyOpts.bodyContentCustomMimeType) }];
+    }
+    if (contentType === 'multipart-form-data') warn('o corpo multipart do n8n não existe aqui');
+    if (legacyOpts.fullResponse) out.fullResponse = true;
     warn('HTTP Request de versão antiga do n8n: confira método, corpo e autenticação');
   } else {
     out.method = String(params.method ?? 'GET');
@@ -402,6 +421,36 @@ function httpRequest(ctx: Ctx): Converted {
   if (isObject(opts.pagination)) warn('a paginação automática do n8n não existe aqui; use um Loop');
   if (isObject(opts.batching)) warn('o envio em lotes do n8n não foi importado');
   return { type: 'httpRequest', parameters: out, settings };
+}
+
+/**
+ * Texto JSON do n8n (headers, query ou corpo com "JSON Parameters") em pares nome/valor.
+ * Aceita {{ }} dentro das aspas ou soltos; cada valor com {{ }} vira uma expressão.
+ */
+function jsonToPairs(value: unknown, what: string, warn: (message: string) => void): { name: string; value: string }[] {
+  if (isObject(value)) return Object.entries(value).map(([name, v]) => ({ name, value: typeof v === 'string' ? v : JSON.stringify(v) }));
+  if (typeof value !== 'string') return [];
+  const text = (value.startsWith('=') ? value.slice(1) : value).trim();
+  if (!text) return [];
+  const exprs: string[] = [];
+  const marked = text.replace(/\{\{([\s\S]*?)\}\}/g, (_, expr: string) => `__SA_EXPR_${exprs.push(expr.trim()) - 1}__`);
+  const attempts = [marked, marked.replace(/(^|[^"\w])(__SA_EXPR_\d+__)(?=[^"\w]|$)/g, '$1"$2"')];
+  for (const attempt of attempts) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(attempt);
+    } catch {
+      continue;
+    }
+    if (!isObject(parsed)) break;
+    return Object.entries(parsed).map(([name, v]) => {
+      const raw = typeof v === 'string' ? v : JSON.stringify(v);
+      const restored = raw.replace(/__SA_EXPR_(\d+)__/g, (_, n: string) => `{{ ${exprs[Number(n)]} }}`);
+      return { name, value: restored === raw ? raw : `=${restored}` };
+    });
+  }
+  warn(`não deu para ler ${what} em JSON do n8n; preencha a lista à mão a partir de: ${value}`);
+  return [];
 }
 
 /** Pares nome/valor do n8n viram o corpo JSON; valores com {{ }} viram uma expressão. */
