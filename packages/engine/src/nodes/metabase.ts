@@ -126,13 +126,19 @@ const normalize = (text: string) =>
 function cardParameters(card: JsonObject): CardParameter[] {
   const params = Array.isArray(card.parameters) ? card.parameters.filter(isPlainObject) : [];
   if (params.length) return params as unknown as CardParameter[];
-  const query = isPlainObject(card.dataset_query) ? card.dataset_query : {};
-  // Formato antigo: dataset_query.native['template-tags']; novo (MBQL 5): stages[n]['template-tags'].
-  const native = isPlainObject(query.native) ? query.native : {};
-  const stages = Array.isArray(query.stages) ? query.stages.filter(isPlainObject) : [];
-  const tags = [native, ...stages].reduce<JsonObject>((all, block) => (isPlainObject(block['template-tags']) ? { ...all, ...block['template-tags'] } : all), {});
-  return Object.values(tags)
-    .filter(isPlainObject)
+  // O lugar dos template tags muda entre versões do Metabase (native, stages[n], lista ou mapa): procura em todo o dataset_query.
+  const tags: JsonObject[] = [];
+  const collect = (value: JsonValue | undefined, depth: number): void => {
+    if (depth > 6 || value === null || typeof value !== 'object') return;
+    if (Array.isArray(value)) return value.forEach((v) => collect(v, depth + 1));
+    for (const [key, v] of Object.entries(value)) {
+      if (key === 'template-tags') tags.push(...(Array.isArray(v) ? v : isPlainObject(v) ? Object.values(v) : []).filter(isPlainObject));
+      else collect(v, depth + 1);
+    }
+  };
+  collect(card.dataset_query, 0);
+  return tags
+    .filter((tag) => typeof tag.name === 'string' && tag.type !== 'snippet' && tag.type !== 'card')
     .map((tag) => ({
       id: String(tag.id ?? tag.name),
       type: tag.type === 'dimension' ? String(tag['widget-type'] ?? 'category') : tag.type === 'number' ? 'number/=' : 'category',

@@ -91,6 +91,9 @@ describe.skipIf(!url)('Metabase de verdade', { timeout: 420_000 }, () => {
       ])
     ).id;
     cardOnlyTags = (await card('Produtos só com variáveis')).id;
+    // Mostra no log do CI como esta versão do Metabase devolve a question.
+    const saved = await api(`/api/card/${cardOnlyTags}`, { session });
+    console.log('Metabase', (await api('/api/session/properties', { session }))?.version?.tag, JSON.stringify({ parameters: saved.parameters, dataset_query: saved.dataset_query }));
 
     const groups = await api('/api/permissions/group', { session });
     const admins = groups.find((g: JsonObject) => g.name === 'Administrators');
