@@ -9,6 +9,8 @@ import { authenticate, SESSION_COOKIE } from './lib/auth.js';
 import { HttpError, type CurrentUser } from './lib/permissions.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
+import { catalogRoutes } from './routes/catalog.js';
+import { dbCommandRoutes } from './routes/db-commands.js';
 import { connectionRoutes } from './routes/connections.js';
 import { executionRoutes } from './routes/executions.js';
 import { workflowRoutes } from './routes/workflows.js';
@@ -75,6 +77,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(connectionRoutes(deps), { prefix: '/api' });
   await app.register(workflowRoutes(deps), { prefix: '/api' });
   await app.register(executionRoutes(deps), { prefix: '/api' });
+  await app.register(catalogRoutes(deps), { prefix: '/api' });
+  await app.register(dbCommandRoutes(deps), { prefix: '/api' });
 
   if (deps.config.webDistDir) {
     await app.register(fastifyStatic, { root: deps.config.webDistDir });

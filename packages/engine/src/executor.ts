@@ -1,5 +1,7 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
-import type { ConnectionData, NodeType, SubworkflowResult } from './node-types.js';
+import type { ApiEndpointData } from './catalog.js';
+import { DatabasePools } from './database/drivers.js';
+import type { ConnectionData, DatabaseCommandLog, DatabaseSession, NodeType, SubworkflowResult } from './node-types.js';
 import { NodeOperationError } from './node-types.js';
 import { defaultRegistry, NodeRegistry } from './registry.js';
 import type {
@@ -32,6 +34,12 @@ export interface ExecuteOptions {
   defaultNodeTimeoutMs?: number;
   /** Executa outro fluxo (nó Execute Workflow). Quem chama cuida de registrar a execução filha. */
   executeSubworkflow?: (args: { workflowId: string; items: Item[]; signal: AbortSignal }) => Promise<SubworkflowResult>;
+  /** Busca um endpoint do catálogo de APIs já combinado com o cliente no ERP. */
+  getApiEndpoint?: (erpClientId: string, endpointId: string) => Promise<ApiEndpointData>;
+  /** Pools de conexão com os bancos; o worker compartilha um entre execuções. */
+  databases?: DatabasePools;
+  /** Chamado a cada comando executado num banco (auditoria). */
+  onDatabaseCommand?: (entry: DatabaseCommandLog) => void | Promise<void>;
   /** Limite de execuções de nós, para um loop sem fim não travar o worker. */
   maxNodeRuns?: number;
 }
@@ -62,6 +70,9 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
 
   const start = findStartNode(workflow, registry, options.startNodeId);
   const sandbox = new ExpressionSandbox(options.sandbox);
+  // Sem pools compartilhados, a execução usa os seus e fecha no fim.
+  const ownPools = options.databases ? null : new DatabasePools();
+  const pools = options.databases ?? ownPools!;
 
   // Nós prontos para rodar, com os itens de cada entrada. Nós de várias
   // entradas (ex.: Merge) esperam em `waiting` até receber todas.
@@ -76,6 +87,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
 
   const finish = (status: ExecutionResult['status'], error?: ExecutionResult['error']): ExecutionResult => {
     sandbox.dispose();
+    void ownPools?.closeAll();
     return { status, startedAt, finishedAt: new Date().toISOString(), runs, error, lastOutput };
   };
 
@@ -117,7 +129,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
 
       const state = nodeState.get(node.id) ?? {};
       nodeState.set(node.id, state);
-      const run = await runNode(node, type, inputs, nodeOutputs, options, sandbox, state);
+      const run = await runNode(node, type, inputs, nodeOutputs, options, sandbox, state, pools);
       runs.push(run);
       seq++;
       await options.onNodeFinished?.(run);
@@ -169,6 +181,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
   } catch (err) {
     if (err instanceof ExecutionCanceled) return finish('canceled', { message: 'Execução cancelada' });
     sandbox.dispose();
+    void ownPools?.closeAll();
     throw err;
   }
 }
@@ -192,6 +205,7 @@ async function runNode(
   options: ExecuteOptions,
   sandbox: ExpressionSandbox,
   state: Record<string, unknown>,
+  pools: DatabasePools,
 ): Promise<NodeRun> {
   const started = Date.now();
   const base = {
@@ -241,6 +255,11 @@ async function runNode(
             if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
             return options.getConnection(id);
           },
+          database: (connectionId) => openDatabase(connectionId, node, options, pools),
+          getApiEndpoint: async (erpClientId, endpointId) => {
+            if (!options.getApiEndpoint) throw new NodeOperationError('O catálogo de APIs não está disponível nesta execução');
+            return options.getApiEndpoint(erpClientId, endpointId);
+          },
           runCode: (code, itemIndex) => scope.runCode(code, inputs[0] ?? [], itemIndex, timeoutMs),
           executeWorkflow: async (workflowId, items) => {
             if (!options.executeSubworkflow) throw new NodeOperationError('Não é possível executar outro fluxo nesta execução');
@@ -266,6 +285,44 @@ async function runNode(
     return done({ status: 'error', output: [[errorItem]], tries: maxTries, error: lastError });
   }
   return done({ status: 'error', output: [], tries: maxTries, error: lastError });
+}
+
+async function openDatabase(connectionId: string, node: NodeInstance, options: ExecuteOptions, pools: DatabasePools): Promise<DatabaseSession> {
+  if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
+  const connection = await options.getConnection(connectionId);
+  const client = pools.get(connection);
+
+  const logged = async <T extends { rows: unknown[]; rowsAffected: number | null }>(
+    operation: DatabaseCommandLog['operation'],
+    sql: string,
+    params: JsonValue,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const started = Date.now();
+    const entry = { nodeName: node.name, connectionId, connectionType: connection.type, operation, sql, params };
+    const report = async (fields: Pick<DatabaseCommandLog, 'rows' | 'rowsAffected' | 'error'>) => {
+      try {
+        await options.onDatabaseCommand?.({ ...entry, ...fields, durationMs: Date.now() - started });
+      } catch {
+        // A auditoria não pode derrubar a execução.
+      }
+    };
+    try {
+      const result = await run();
+      await report({ rows: result.rows.length, rowsAffected: result.rowsAffected });
+      return result;
+    } catch (err) {
+      await report({ rows: null, rowsAffected: null, error: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
+  };
+
+  return {
+    dialect: client.dialect,
+    query: (sql, params, operation = 'query') => logged(operation, sql, params, () => client.query(sql, params)),
+    procedure: (name, params) =>
+      logged('procedure', name, params.map((p) => ({ name: p.name, direction: p.direction, type: p.type, value: p.value })), () => client.procedure(name, params)),
+  };
 }
 
 function toNodeError(err: unknown, timedOutAfterMs?: number): NodeError {

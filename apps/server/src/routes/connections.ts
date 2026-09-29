@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import type { JsonObject } from '@sa/engine';
+import { testDatabaseConnection, type JsonObject } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
 import { audit } from '../lib/audit.js';
@@ -62,6 +62,29 @@ export const connectionRoutes =
     };
 
     app.get('/connection-types', async () => connectionTypes);
+
+    /** Testa os dados do formulário; ao editar, as senhas em branco usam as já salvas. */
+    app.post('/connections/test', async (request) => {
+      const user = currentUser(request);
+      requireCap(user, 'connection:edit');
+      const b = z.object({ id: z.string().uuid().optional(), type: z.string(), data: z.record(z.unknown()).default({}) }).parse(request.body);
+      const type = getConnectionType(b.type);
+      if (!type?.testable) throw new HttpError(400, 'Este tipo de conexão é testado no próprio nó');
+      const existing = b.id ? await load(user, b.id) : null;
+      const data = mergeData(type, b.data, existing ? decryptJson<JsonObject>(config.encryptionKey, existing.data_encrypted) : {});
+      const missing = missingFields(type, data);
+      if (missing.length) throw new HttpError(400, `Preencha: ${missing.join(', ')}`);
+      const started = Date.now();
+      try {
+        await Promise.race([
+          testDatabaseConnection({ id: b.id ?? 'teste', type: b.type, data }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('O banco não respondeu em 20 s')), 20_000)),
+        ]);
+        return { ok: true, durationMs: Date.now() - started };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : String(err) };
+      }
+    });
 
     app.get('/connections', async (request) => {
       const user = currentUser(request);

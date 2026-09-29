@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { post, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
+import { post, type ApiCatalog, type ApiVariable, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
 
 export interface FieldContext {
   connections: ConnectionItem[];
   /** Fluxos que o usuário enxerga, para o nó Execute Workflow. */
   workflows: WorkflowListItem[];
+  /** Clientes e endpoints cadastrados nos ERPs, para o nó HTTP com API cadastrada. */
+  catalog: ApiCatalog;
+  /** Valores atuais dos parâmetros do nó (o endpoint depende do cliente escolhido). */
+  values: Record<string, JsonValue>;
   /** Entrada da última execução deste nó, para a prévia das expressões. */
   previewInput: Item[];
   /** Saída de cada nó na última execução, pelo nome. */
@@ -12,7 +16,7 @@ export interface FieldContext {
   readOnly: boolean;
 }
 
-const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection', 'workflow']);
+const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection', 'workflow', 'erpClient', 'erpEndpoint']);
 
 export function isExpression(value: JsonValue): value is string {
   return typeof value === 'string' && value.startsWith('=');
@@ -159,11 +163,104 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
         </>
       );
     }
+    case 'erpClient': {
+      const current = ctx.catalog.clients.find((c) => c.id === value);
+      const erps = [...new Set(ctx.catalog.clients.map((c) => c.erpName))];
+      return (
+        <select disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Escolha o cliente</option>
+          {erps.map((erp) => (
+            <optgroup key={erp} label={erp}>
+              {ctx.catalog.clients
+                .filter((c) => c.erpName === erp)
+                .map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.clientName}
+                    {c.label ? ` · ${c.label}` : ''}
+                  </option>
+                ))}
+            </optgroup>
+          ))}
+          {value && !current && <option value={String(value)}>Cliente sem acesso ou excluído</option>}
+        </select>
+      );
+    }
+    case 'erpEndpoint': {
+      const endpoints = endpointsFor(ctx);
+      const current = ctx.catalog.endpoints.find((e) => e.id === value);
+      return (
+        <>
+          <select disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+            <option value="">{endpoints ? 'Escolha o endpoint' : 'Escolha o cliente primeiro'}</option>
+            {endpoints?.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name} ({e.method} {e.path})
+              </option>
+            ))}
+            {value && !current && <option value={String(value)}>Endpoint excluído</option>}
+          </select>
+          {current?.description && <div className="field-hint">{current.description}</div>}
+        </>
+      );
+    }
+    case 'erpVariables':
+      return <ErpVariablesInput value={value} onChange={onChange} ctx={ctx} />;
     case 'list':
       return <ListInput prop={prop} value={value} onChange={onChange} ctx={ctx} />;
     default:
+      if (prop.multiline) {
+        return (
+          <textarea
+            className="code"
+            rows={Math.min(20, Math.max(5, String(value ?? '').split('\n').length + 1))}
+            spellCheck={false}
+            disabled={disabled}
+            value={value === null ? '' : String(value)}
+            placeholder={prop.placeholder}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        );
+      }
       return <input disabled={disabled} value={value === null ? '' : String(value)} placeholder={prop.placeholder} onChange={(e) => onChange(e.target.value)} />;
   }
+}
+
+/** Endpoints do ERP do cliente escolhido; null enquanto não há cliente (ou ele é uma expressão). */
+function endpointsFor(ctx: FieldContext) {
+  const client = ctx.catalog.clients.find((c) => c.id === ctx.values.erpClient);
+  if (client) return ctx.catalog.endpoints.filter((e) => e.erpId === client.erpId);
+  return isExpression(ctx.values.erpClient ?? null) ? ctx.catalog.endpoints : null;
+}
+
+const VARIABLE_FIELD_TYPE: Record<ApiVariable['type'], PropertyDescription['type']> = {
+  text: 'string',
+  number: 'number',
+  boolean: 'boolean',
+  json: 'json',
+};
+
+/** Um campo Fixo/Expressão para cada variável do endpoint escolhido. */
+function ErpVariablesInput({ value, onChange, ctx }: { value: JsonValue; onChange: (v: JsonValue) => void; ctx: FieldContext }) {
+  const endpoint = ctx.catalog.endpoints.find((e) => e.id === ctx.values.endpoint);
+  const current = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  if (!endpoint) return <div className="field-hint">Escolha o endpoint para ver as variáveis.</div>;
+  if (!endpoint.variables.length) return <div className="field-hint">Este endpoint não tem variáveis.</div>;
+  return (
+    <div className="list-input">
+      {endpoint.variables.map((v) => {
+        const prop: PropertyDescription = {
+          name: v.name,
+          displayName: v.label || v.name,
+          type: VARIABLE_FIELD_TYPE[v.type] ?? 'string',
+          default: v.default,
+          required: v.required,
+          description: v.default ? `Padrão: ${v.default}` : undefined,
+        };
+        const own = current[v.name];
+        return <ParameterField key={v.name} prop={prop} value={own === undefined ? (prop.type === 'string' || prop.type === 'json' ? '' : null) : own} onChange={(next) => onChange({ ...current, [v.name]: next })} ctx={ctx} />;
+      })}
+    </div>
+  );
 }
 
 /** Editor de código simples: fonte monoespaçada e Tab insere espaços. */

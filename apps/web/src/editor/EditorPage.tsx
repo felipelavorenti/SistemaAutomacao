@@ -18,6 +18,7 @@ import {
   get,
   post,
   put,
+  type ApiCatalog,
   type ConnectionItem,
   type ExecutionDetail,
   type Folder,
@@ -62,6 +63,7 @@ function Editor() {
   const [connections, setConnections] = useState<ConnectionItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+  const [catalog, setCatalog] = useState<ApiCatalog>({ clients: [], endpoints: [] });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [running, setRunning] = useState(false);
@@ -73,12 +75,13 @@ function Editor() {
   useEffect(() => {
     (async () => {
       try {
-        const [wf, types, conns, fs, wfs] = await Promise.all([
+        const [wf, types, conns, fs, wfs, cat] = await Promise.all([
           get<Workflow>(`/workflows/${id}`),
           get<NodeTypeDescription[]>('/node-types'),
           get<ConnectionItem[]>('/connections'),
           get<Folder[]>('/folders'),
           get<WorkflowListItem[]>('/workflows'),
+          get<ApiCatalog>('/api-catalog'),
         ]);
         setWorkflow(wf);
         setDefinition(wf.definition);
@@ -88,6 +91,7 @@ function Editor() {
         setConnections(conns);
         setFolders(fs);
         setWorkflows(wfs.filter((w) => w.id !== id));
+        setCatalog(cat);
       } catch (err) {
         setError(errorMessage(err));
       }
@@ -397,6 +401,7 @@ function Editor() {
             previewOutputs={previewOutputs}
             connections={connections}
             workflows={workflows}
+            catalog={catalog}
             runCount={runCounts.get(selectedId!) ?? 0}
             readOnly={readOnly}
             nameTaken={(n) => definition.nodes.some((x) => x.id !== selected.id && x.name === n)}

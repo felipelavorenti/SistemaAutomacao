@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription, WorkflowListItem } from '../api';
+import type { ApiCatalog, ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription, WorkflowListItem } from '../api';
 import { ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
 
@@ -12,6 +12,7 @@ export function NodePanel({
   previewOutputs,
   connections,
   workflows,
+  catalog,
   runCount,
   readOnly,
   nameTaken,
@@ -27,6 +28,7 @@ export function NodePanel({
   previewOutputs: Record<string, Item[]>;
   connections: ConnectionItem[];
   workflows: WorkflowListItem[];
+  catalog: ApiCatalog;
   runCount: number;
   readOnly: boolean;
   nameTaken: (name: string) => boolean;
@@ -41,13 +43,13 @@ export function NodePanel({
   const [nameError, setNameError] = useState<string | null>(null);
 
   const input = useMemo(() => run?.input[0] ?? [], [run]);
-  const ctx: FieldContext = useMemo(
-    () => ({ connections, workflows, previewInput: input, previewOutputs, readOnly }),
-    [connections, workflows, input, previewOutputs, readOnly],
-  );
-
   const values: Record<string, JsonValue> = {};
   for (const p of description?.properties ?? []) values[p.name] = node.parameters[p.name] !== undefined ? node.parameters[p.name] : p.default;
+
+  const ctx: FieldContext = useMemo(
+    () => ({ connections, workflows, catalog, values: node.parameters, previewInput: input, previewOutputs, readOnly }),
+    [connections, workflows, catalog, node.parameters, input, previewOutputs, readOnly],
+  );
 
   const setParam = (key: string, value: JsonValue) => onChange({ ...node, parameters: { ...node.parameters, [key]: value } });
   const setSetting = <K extends keyof NodeSettings>(key: K, value: NodeSettings[K]) => onChange({ ...node, settings: { ...node.settings, [key]: value } });

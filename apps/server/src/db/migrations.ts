@@ -146,4 +146,80 @@ ALTER TABLE executions ADD COLUMN parent_execution_id uuid REFERENCES executions
 CREATE INDEX executions_parent_idx ON executions(parent_execution_id) WHERE parent_execution_id IS NOT NULL;
 `,
   },
+  {
+    id: '003_bancos_e_catalogo',
+    sql: `
+-- Comandos executados nos bancos dos clientes. Os nomes ficam copiados para
+-- o registro continuar legível mesmo depois de excluir fluxo, conexão ou cliente.
+CREATE TABLE db_commands (
+  id bigserial PRIMARY KEY,
+  at timestamptz NOT NULL DEFAULT now(),
+  execution_id uuid REFERENCES executions(id) ON DELETE SET NULL,
+  workflow_id uuid,
+  workflow_name text,
+  node_name text NOT NULL,
+  connection_id uuid,
+  connection_name text,
+  client_id uuid,
+  client_name text,
+  db_type text NOT NULL,
+  operation text NOT NULL,
+  sql text NOT NULL,
+  params jsonb,
+  rows int,
+  rows_affected int,
+  duration_ms int NOT NULL,
+  error text,
+  triggered_by uuid REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX db_commands_at_idx ON db_commands(at DESC);
+CREATE INDEX db_commands_client_idx ON db_commands(client_id, at DESC);
+CREATE INDEX db_commands_execution_idx ON db_commands(execution_id);
+
+-- Catálogo de APIs por ERP.
+CREATE TABLE erps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  base_url text NOT NULL,
+  auth_type text NOT NULL DEFAULT 'none' CHECK (auth_type IN ('none', 'bearer', 'basic', 'header')),
+  auth_header text,
+  client_fields jsonb NOT NULL DEFAULT '[]',
+  notes text NOT NULL DEFAULT '',
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE erp_endpoints (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  erp_id uuid NOT NULL REFERENCES erps(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  method text NOT NULL,
+  path text NOT NULL,
+  headers jsonb NOT NULL DEFAULT '[]',
+  query jsonb NOT NULL DEFAULT '[]',
+  body_type text NOT NULL DEFAULT 'none' CHECK (body_type IN ('none', 'json', 'form', 'text')),
+  body text NOT NULL DEFAULT '',
+  variables jsonb NOT NULL DEFAULT '[]',
+  uses_auth boolean NOT NULL DEFAULT true,
+  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (erp_id, name)
+);
+
+-- Cliente no ERP: host, porta e credenciais cadastrados uma vez (criptografados).
+CREATE TABLE erp_clients (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  erp_id uuid NOT NULL REFERENCES erps(id) ON DELETE RESTRICT,
+  client_id uuid NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+  label text NOT NULL DEFAULT '',
+  values_encrypted bytea NOT NULL,
+  updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (erp_id, client_id, label)
+);
+`,
+  },
 ];

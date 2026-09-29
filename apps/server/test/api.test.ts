@@ -325,4 +325,107 @@ describe.skipIf(!available)('API', () => {
     const wrong = await waitExecution(editor, (await call(editor, 'POST', `/api/workflows/${parent.body.id}/run`, { definition: noTrigger })).body.executionId);
     expect(wrong.error_message).toMatch(/não começa pelo gatilho/);
   });
+
+  it('executa comandos no banco do cliente e registra cada um', async () => {
+    const u = new URL(DATABASE_URL);
+    const data = { host: u.hostname, port: u.port || '5432', database: u.pathname.slice(1), user: decodeURIComponent(u.username), password: decodeURIComponent(u.password) };
+    const bad = await call(editor, 'POST', '/api/connections/test', { type: 'postgres', data: { ...data, database: 'nao_existe' } });
+    expect(bad.body.ok).toBe(false);
+    const good = await call(editor, 'POST', '/api/connections/test', { type: 'postgres', data });
+    expect(good.body, JSON.stringify(good.body)).toMatchObject({ ok: true });
+
+    const conn = await call(editor, 'POST', '/api/connections', { name: 'Banco do Cliente X', type: 'postgres', clientId: clientX, data });
+    expect(conn.status, JSON.stringify(conn.body)).toBe(200);
+    // Testar de novo com a senha em branco usa a salva.
+    expect((await call(editor, 'POST', '/api/connections/test', { id: conn.body.id, type: 'postgres', data: { ...data, password: '' } })).body.ok).toBe(true);
+
+    const wf = await call(editor, 'POST', '/api/workflows', { name: 'Consulta no banco', folderId: folderA });
+    const definition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        {
+          id: 'd',
+          name: 'Dobrar',
+          type: 'database',
+          position: { x: 0, y: 0 },
+          parameters: { connection: conn.body.id, operation: 'query', sql: 'SELECT CAST(:n AS int) * 2 AS dobro', queryParams: [{ name: 'n', value: '={{ $json.n }}' }] },
+        },
+      ],
+      connections: [{ from: 't', fromOutput: 0, to: 'd', toInput: 0 }],
+    };
+    const run = await call(editor, 'POST', `/api/workflows/${wf.body.id}/run`, { definition, input: [{ json: { n: 4 } }, { json: { n: 5 } }] });
+    const execution = await waitExecution(editor, run.body.executionId);
+    expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+    expect(execution.runs[1].output[0].map((i: { json: { dobro: number } }) => i.json.dobro)).toEqual([8, 10]);
+
+    const commands = await call(editor, 'GET', `/api/db-commands?executionId=${run.body.executionId}`);
+    expect(commands.body).toHaveLength(2);
+    expect(commands.body[0]).toMatchObject({
+      workflow_name: 'Consulta no banco',
+      node_name: 'Dobrar',
+      connection_name: 'Banco do Cliente X',
+      client_name: 'Cliente X',
+      db_type: 'postgres',
+      sql: 'SELECT CAST(:n AS int) * 2 AS dobro',
+      params: { n: 5 },
+      rows: 1,
+      triggered_by_name: 'Editor',
+    });
+    // Quem não tem acesso ao cliente não vê os comandos dele.
+    expect((await call(viewer, 'GET', `/api/db-commands?executionId=${run.body.executionId}`)).body).toHaveLength(0);
+  });
+
+  it('chama API cadastrada com os dados do cliente no ERP', async () => {
+    const port = new URL(apiBase).port;
+    const erp = await call(editor, 'POST', '/api/erps', { name: 'Consinco', baseUrl: 'http://127.0.0.1:{{porta}}/{{prefixo}}', authType: 'bearer',
+      clientFields: [{ name: 'porta', label: 'Porta', secret: false }, { name: 'prefixo', label: 'Prefixo', secret: false }, { name: 'senha', label: 'Senha', secret: true }] });
+    expect(erp.status, JSON.stringify(erp.body)).toBe(200);
+    const endpoint = await call(editor, 'POST', `/api/erps/${erp.body.id}/endpoints`, {
+      name: 'Alteração de preço',
+      method: 'PUT',
+      path: '/precos/{{sku}}',
+      bodyType: 'json',
+      body: '{"preco": "{{preco}}"}',
+      variables: [
+        { name: 'sku', type: 'text', required: true },
+        { name: 'preco', type: 'number', required: true },
+      ],
+    });
+    expect(endpoint.status, JSON.stringify(endpoint.body)).toBe(200);
+    const erpClient = await call(editor, 'POST', `/api/erps/${erp.body.id}/clients`, { clientId: clientX, values: { porta: port, prefixo: 'v1', senha: 'senha-erp-123' } });
+    expect(erpClient.status, JSON.stringify(erpClient.body)).toBe(200);
+
+    const detail = await call(editor, 'GET', `/api/erps/${erp.body.id}`);
+    expect(detail.body.clients[0].values).toEqual({ porta: port, prefixo: 'v1', senha: '••••••' });
+    const catalog = await call(editor, 'GET', '/api/api-catalog');
+    expect(catalog.body.endpoints[0].variables.map((v: { name: string }) => v.name)).toEqual(['sku', 'preco', 'token']);
+    expect((await call(viewer, 'GET', '/api/api-catalog')).body.clients).toHaveLength(0);
+
+    const wf = await call(editor, 'POST', '/api/workflows', { name: 'Preço via catálogo', folderId: folderA });
+    const definition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        {
+          id: 'h',
+          name: 'Alterar preço',
+          type: 'httpRequest',
+          position: { x: 0, y: 0 },
+          parameters: { source: 'catalog', erpClient: erpClient.body.id, endpoint: endpoint.body.id, variables: { sku: '={{ $json.sku }}', preco: '9,90', token: 'tok-1' } },
+        },
+      ],
+      connections: [{ from: 't', fromOutput: 0, to: 'h', toInput: 0 }],
+    };
+    const saved = await call(editor, 'PUT', `/api/workflows/${wf.body.id}`, { name: 'Preço via catálogo', folderId: folderA, definition });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    const run = await call(editor, 'POST', `/api/workflows/${wf.body.id}/run`, { input: [{ json: { sku: 'ABC' } }] });
+    const execution = await waitExecution(editor, run.body.executionId);
+    expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+    expect(execution.runs[1].output[0][0].json).toEqual({ auth: 'Bearer tok-1', path: '/v1/precos/ABC' });
+
+    // A senha do ERP não aparece na auditoria, e o cadastro em uso não pode ser excluído.
+    const audit = await call(admin, 'GET', '/api/audit?entityType=erp_client');
+    expect(JSON.stringify(audit.body)).not.toContain('senha-erp-123');
+    expect((await call(editor, 'DELETE', `/api/erp-clients/${erpClient.body.id}`)).status).toBe(409);
+    expect((await call(editor, 'DELETE', `/api/erps/${erp.body.id}`)).status).toBe(409);
+  });
 });
