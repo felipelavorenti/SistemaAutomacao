@@ -697,22 +697,65 @@ fieldset {
   width: 10px;
   height: 10px;
 }
-.node-panel {
-  width: 420px;
+.ndv-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgb(15 20 30 / 45%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.ndv {
+  width: min(1480px, 100%);
+  height: min(900px, 100%);
   background: var(--surface);
-  border-left: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 1.25fr) minmax(0, 1fr);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 25%);
+}
+.ndv-side {
+  background: var(--bg);
+  padding: 14px 16px;
+  overflow: auto;
+  min-width: 0;
+}
+.ndv-side h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.ndv-main {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.ndv-main > .muted {
+  padding: 0 12px;
+}
+@media (max-width: 1000px) {
+  .ndv {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    overflow: auto;
+  }
+  .ndv-side {
+    max-height: 30vh;
+  }
 }
 .node-panel-header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 12px 4px;
-}
-.node-panel > .muted {
-  padding: 0 12px;
 }
 .node-name {
   font-weight: 600;

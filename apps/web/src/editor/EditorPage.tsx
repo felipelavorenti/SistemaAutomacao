@@ -10,7 +10,7 @@ import {
   type EdgeChange,
   type NodeChange,
 } from '@xyflow/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   errorMessage,
@@ -65,6 +65,9 @@ function Editor() {
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [catalog, setCatalog] = useState<ApiCatalog>({ clients: [], endpoints: [] });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Nó aberto na janela de configuração (duplo clique, como no n8n).
+  const [openId, setOpenId] = useState<string | null>(null);
+  const lastClick = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [running, setRunning] = useState(false);
   const [testInput, setTestInput] = useState('');
@@ -187,6 +190,7 @@ function Editor() {
   const removeNode = (nodeId: string) => {
     update((d) => ({ nodes: d.nodes.filter((n) => n.id !== nodeId), connections: d.connections.filter((c) => c.from !== nodeId && c.to !== nodeId) }));
     setSelectedId((s) => (s === nodeId ? null : s));
+    setOpenId((s) => (s === nodeId ? null : s));
   };
 
   const uniqueName = (base: string) => {
@@ -214,6 +218,7 @@ function Editor() {
       connections: selected && desc.inputs > 0 ? [...d.connections, { from: selected.id, fromOutput: 0, to: node.id, toInput: 0 }] : d.connections,
     }));
     setSelectedId(node.id);
+    setOpenId(node.id);
     setTimeout(() => flow.fitView({ padding: 0.3, maxZoom: 1, duration: 200 }), 50);
   };
 
@@ -297,7 +302,7 @@ function Editor() {
     return <div className="center">{error ? <ErrorBox message={error} /> : <span className="muted">Carregando…</span>}</div>;
   }
 
-  const selected = definition.nodes.find((n) => n.id === selectedId);
+  const selected = definition.nodes.find((n) => n.id === openId);
   const hasSchedule = definition.nodes.some((n) => n.type === 'scheduleTrigger');
   const groups = ['trigger', 'action', 'logic', 'data'].map((g) => [g, descriptions.filter((d) => d.group === g && !d.hidden)] as const).filter(([, list]) => list.length);
 
@@ -381,6 +386,13 @@ function Editor() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onPaneClick={() => setSelectedId(null)}
+            onNodeClick={(_, n) => {
+              // Duplo clique abre a janela do nó. Detectado aqui porque o nó é redesenhado ao ser
+              // selecionado no primeiro clique, e aí o navegador não entrega o dblclick para ele.
+              const now = Date.now();
+              if (lastClick.current.id === n.id && now - lastClick.current.at < 400) setOpenId(n.id);
+              lastClick.current = { id: n.id, at: now };
+            }}
             nodesDraggable={!readOnly}
             nodesConnectable={!readOnly}
             deleteKeyCode={readOnly ? null : ['Delete', 'Backspace']}
@@ -402,14 +414,14 @@ function Editor() {
             connections={connections}
             workflows={workflows}
             catalog={catalog}
-            runCount={runCounts.get(selectedId!) ?? 0}
+            runCount={runCounts.get(selected.id) ?? 0}
             readOnly={readOnly}
             nameTaken={(n) => definition.nodes.some((x) => x.id !== selected.id && x.name === n)}
             testInput={testInput}
             onTestInputChange={setTestInput}
             onChange={(node) => update((d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === node.id ? node : n)) }))}
             onDelete={() => removeNode(selected.id)}
-            onClose={() => setSelectedId(null)}
+            onClose={() => setOpenId(null)}
           />
         )}
       </div>
