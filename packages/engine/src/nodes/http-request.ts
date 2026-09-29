@@ -283,8 +283,9 @@ async function readBody(response: Response): Promise<JsonValue> {
   return text;
 }
 
-/** Arrays de objetos viram um item por elemento, como no n8n. */
+/** Arrays de objetos viram um item por elemento, como no n8n. Resposta vazia não gera item: o fluxo para ali, sem erro. */
 function toItems(body: JsonValue): Item[] {
+  if (body === null || (typeof body === 'string' && !body.trim())) return [];
   if (Array.isArray(body)) {
     return body.map((el) => ({ json: el !== null && typeof el === 'object' && !Array.isArray(el) ? el : { data: el } }));
   }

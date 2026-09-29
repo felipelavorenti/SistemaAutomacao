@@ -29,6 +29,11 @@ beforeAll(async () => {
         flakyCalls++;
         res.statusCode = flakyCalls < 3 ? 503 : 200;
         res.end(JSON.stringify({ tentativa: flakyCalls }));
+      } else if (url.pathname === '/vazio') {
+        res.statusCode = 204;
+        res.end();
+      } else if (url.pathname === '/lista-vazia') {
+        res.end('[]');
       } else if (url.pathname === '/lento') {
         setTimeout(() => res.end('{}'), 500);
       } else {
@@ -87,6 +92,14 @@ describe('executeWorkflow', () => {
     );
     const result = await run(wf);
     expect(result.lastOutput.map((i) => i.json.body)).toEqual([{ sku: 'A', novo: 20 }, { sku: 'B', novo: 100 }]);
+  });
+
+  it.each(['/vazio', '/lista-vazia'])('termina o fluxo sem erro quando a API não devolve nada (%s)', async (path) => {
+    const wf = chain(trigger, http('v', 'Busca', { url: `${base}${path}` }), http('e', 'Eco', { url: `${base}/eco` }));
+    const result = await run(wf);
+    expect(result.status, JSON.stringify(result.error)).toBe('success');
+    expect(result.runs.map((r) => r.nodeName)).not.toContain('Eco');
+    expect(result.runs.find((r) => r.nodeName === 'Busca')?.output).toEqual([[]]);
   });
 
   it('separa os itens nas saídas do If', async () => {
