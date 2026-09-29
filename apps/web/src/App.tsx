@@ -6,6 +6,8 @@ import { AuditPage } from './pages/AuditPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { DbCommandsPage } from './pages/DbCommandsPage';
+import { ErpPage, ErpsPage } from './pages/ErpsPage';
 import { ExecutionPage } from './pages/ExecutionPage';
 import { ExecutionsPage } from './pages/ExecutionsPage';
 import { FoldersPage } from './pages/FoldersPage';
@@ -63,6 +65,9 @@ export function App() {
                 <Route path="/execucoes" element={<ExecutionsPage />} />
                 <Route path="/execucoes/:id" element={<ExecutionPage />} />
                 <Route path="/conexoes" element={<ConnectionsPage />} />
+                <Route path="/erps" element={<ErpsPage />} />
+                <Route path="/erps/:id" element={<ErpPage />} />
+                <Route path="/comandos-sql" element={<DbCommandsPage />} />
                 <Route path="/clientes" element={<ClientsPage />} />
                 <Route path="/pastas" element={<FoldersPage />} />
                 <Route path="/usuarios" element={<UsersPage />} />
@@ -93,6 +98,8 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavLink to="/fluxos">Fluxos</NavLink>
           <NavLink to="/execucoes">Execuções</NavLink>
           <NavLink to="/conexoes">Conexões</NavLink>
+          <NavLink to="/erps">APIs dos ERPs</NavLink>
+          <NavLink to="/comandos-sql">Comandos SQL</NavLink>
           <NavLink to="/clientes">Clientes</NavLink>
           {me.permissions.admin && (
             <>

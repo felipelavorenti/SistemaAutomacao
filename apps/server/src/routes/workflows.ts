@@ -66,12 +66,28 @@ export const workflowRoutes =
         const connection = node.parameters.connection;
         if (typeof connection === 'string' && connection && !connection.startsWith('=')) ids.add(connection);
       }
-      if (!ids.size) return;
-      const rows = await many<{ id: string; client_id: string | null }>(db, 'SELECT id, client_id FROM connections WHERE id = ANY($1)', [[...ids]]);
-      for (const id of ids) {
+      if (ids.size) {
+        const rows = await many<{ id: string; client_id: string | null }>(db, 'SELECT id, client_id FROM connections WHERE id = ANY($1)', [[...ids]]);
+        for (const id of ids) {
+          const row = rows.find((r) => r.id === id);
+          if (!row) throw new HttpError(400, 'O fluxo usa uma conexão que não existe mais');
+          if (!canSeeClient(user, row.client_id)) throw forbidden('O fluxo usa uma conexão de um cliente ao qual você não tem acesso');
+        }
+      }
+
+      // Mesma regra para os cadastros de cliente no ERP usados no modo "API cadastrada".
+      const erpClients = new Set<string>();
+      for (const node of definition.nodes) {
+        const value = node.parameters.erpClient;
+        if (typeof value === 'string' && value && !value.startsWith('=')) erpClients.add(value);
+      }
+      if (!erpClients.size) return;
+      if ([...erpClients].some((id) => !z.string().uuid().safeParse(id).success)) throw new HttpError(400, 'O fluxo usa um cliente no ERP que não existe');
+      const rows = await many<{ id: string; client_id: string }>(db, 'SELECT id, client_id FROM erp_clients WHERE id = ANY($1)', [[...erpClients]]);
+      for (const id of erpClients) {
         const row = rows.find((r) => r.id === id);
-        if (!row) throw new HttpError(400, 'O fluxo usa uma conexão que não existe mais');
-        if (!canSeeClient(user, row.client_id)) throw forbidden('O fluxo usa uma conexão de um cliente ao qual você não tem acesso');
+        if (!row) throw new HttpError(400, 'O fluxo usa um cliente no ERP que não existe mais');
+        if (!canSeeClient(user, row.client_id)) throw forbidden('O fluxo usa um cliente no ERP ao qual você não tem acesso');
       }
     };
 

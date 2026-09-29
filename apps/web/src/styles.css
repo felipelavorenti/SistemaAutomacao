@@ -829,3 +829,37 @@ textarea.code-editor {
 .run-list.children tr {
   cursor: pointer;
 }
+
+/* Fase 3 */
+.modal-actions-left {
+  margin-right: auto;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 8px;
+}
+.section-header h2,
+.section-header h3 {
+  margin: 0;
+}
+.inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.inline-row > input,
+.inline-row > select {
+  flex: 1;
+  min-width: 0;
+}
+.sql-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  max-width: 520px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

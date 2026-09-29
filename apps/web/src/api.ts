@@ -40,7 +40,8 @@ export interface WorkflowDefinition {
 export interface PropertyDescription {
   name: string;
   displayName: string;
-  type: 'string' | 'number' | 'boolean' | 'options' | 'json' | 'code' | 'connection' | 'workflow' | 'list';
+  type: 'string' | 'number' | 'boolean' | 'options' | 'json' | 'code' | 'connection' | 'workflow' | 'erpClient' | 'erpEndpoint' | 'erpVariables' | 'list';
+  multiline?: boolean;
   default: JsonValue;
   description?: string;
   placeholder?: string;
@@ -173,11 +174,15 @@ export interface ConnectionField {
   secret: boolean;
   required: boolean;
   placeholder?: string;
+  default?: string;
+  options?: { name: string; value: string }[];
+  hint?: string;
 }
 
 export interface ConnectionType {
   type: string;
   displayName: string;
+  testable?: boolean;
   fields: ConnectionField[];
 }
 
@@ -299,4 +304,86 @@ export function formatDuration(ms: number | null | undefined): string {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   return `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`;
+}
+
+// ---------- Catálogo de APIs por ERP ----------
+
+export interface ClientField {
+  name: string;
+  label: string;
+  secret: boolean;
+}
+
+export interface ApiVariable {
+  name: string;
+  label: string;
+  type: 'text' | 'number' | 'boolean' | 'json';
+  required: boolean;
+  default: string;
+}
+
+export interface Erp {
+  id: string;
+  name: string;
+  baseUrl: string;
+  authType: 'none' | 'bearer' | 'basic' | 'header';
+  authHeader: string | null;
+  clientFields: ClientField[];
+  notes: string;
+  updatedAt: string;
+  endpoints?: number;
+  clients?: number;
+}
+
+export interface ErpEndpoint {
+  id: string;
+  name: string;
+  description: string;
+  method: string;
+  path: string;
+  headers: { name: string; value: string }[];
+  query: { name: string; value: string }[];
+  bodyType: 'none' | 'json' | 'form' | 'text';
+  body: string;
+  variables: ApiVariable[];
+  usesAuth: boolean;
+}
+
+export interface ErpClientItem {
+  id: string;
+  clientId: string;
+  clientName: string;
+  label: string;
+  values: Record<string, string>;
+  updatedAt: string;
+}
+
+export interface ErpDetail extends Erp {
+  endpoints: never;
+  clients: never;
+}
+
+export interface ApiCatalog {
+  clients: { id: string; erpId: string; erpName: string; clientName: string; label: string }[];
+  endpoints: { id: string; erpId: string; name: string; description: string; method: string; path: string; variables: ApiVariable[] }[];
+}
+
+export interface DbCommand {
+  id: number;
+  at: string;
+  execution_id: string | null;
+  workflow_id: string | null;
+  workflow_name: string | null;
+  node_name: string;
+  connection_name: string | null;
+  client_name: string | null;
+  db_type: string;
+  operation: string;
+  sql: string;
+  params: JsonValue;
+  rows: number | null;
+  rows_affected: number | null;
+  duration_ms: number;
+  error: string | null;
+  triggered_by_name: string | null;
 }

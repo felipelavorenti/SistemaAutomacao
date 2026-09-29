@@ -11,6 +11,7 @@ export function ExecutionPage() {
   const { data: ex, error, reload } = useLoad(() => get<ExecutionDetail>(`/executions/${id}`), [id]);
   const [selected, setSelected] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const dbCommands = useLoad(() => get<unknown[]>(`/db-commands?executionId=${id}&limit=1`), [id, ex?.status]);
 
   const inProgress = ex?.status === 'queued' || ex?.status === 'running';
   useEffect(() => {
@@ -99,6 +100,12 @@ export function ExecutionPage() {
           <span className="muted">Versão do fluxo</span>
           {ex.workflow_version ?? 'não salva (editor)'}
         </div>
+        {!!dbCommands.data?.length && (
+          <div>
+            <span className="muted">Bancos de dados</span>
+            <Link to={`/comandos-sql?executionId=${ex.id}`}>ver comandos SQL</Link>
+          </div>
+        )}
       </div>
 
       {ex.error && (

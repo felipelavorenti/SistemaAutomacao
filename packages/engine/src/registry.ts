@@ -3,6 +3,7 @@ import { httpRequest } from './nodes/http-request.js';
 import { ifNode } from './nodes/if.js';
 import { manualTrigger, scheduleTrigger } from './nodes/triggers.js';
 import { aggregate, merge, splitOut } from './nodes/data.js';
+import { database } from './nodes/database.js';
 import { code, executeWorkflow, executeWorkflowTrigger, loop, stopAndError } from './nodes/flow.js';
 
 export class NodeRegistry {
@@ -30,6 +31,7 @@ export const defaultRegistry = new NodeRegistry([
   scheduleTrigger,
   executeWorkflowTrigger,
   httpRequest,
+  database,
   executeWorkflow,
   ifNode,
   loop,

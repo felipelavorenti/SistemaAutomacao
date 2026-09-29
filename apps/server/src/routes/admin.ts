@@ -204,6 +204,8 @@ export const adminRoutes =
       const { id } = idParam.parse(request.params);
       const used = await one(db, 'SELECT 1 FROM connections WHERE client_id = $1 LIMIT 1', [id]);
       if (used) throw new HttpError(409, 'O cliente tem conexões; exclua ou mova as conexões antes');
+      const inErp = await one(db, 'SELECT 1 FROM erp_clients WHERE client_id = $1 LIMIT 1', [id]);
+      if (inErp) throw new HttpError(409, 'O cliente está cadastrado em um ERP; remova o cadastro no ERP antes');
       const row = await one<{ name: string }>(db, 'DELETE FROM clients WHERE id = $1 RETURNING name', [id]);
       if (!row) throw notFound('Cliente');
       await audit(db, { userId: me.id, action: 'delete', entityType: 'client', entityId: id, entityName: row.name, ip: request.ip });

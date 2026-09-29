@@ -1,3 +1,5 @@
+import type { ApiEndpointData } from './catalog.js';
+import type { DbResult, ProcedureParam } from './database/drivers.js';
 import type { Item, JsonObject, JsonValue, NodeInstance } from './types.js';
 
 export type PropertyType =
@@ -9,6 +11,9 @@ export type PropertyType =
   | 'code'
   | 'connection'
   | 'workflow'
+  | 'erpClient'
+  | 'erpEndpoint'
+  | 'erpVariables'
   | 'list';
 
 /** Descreve um campo de configuração do nó; o editor monta o formulário a partir disso. */
@@ -25,6 +30,8 @@ export interface PropertyDescription {
   connectionTypes?: string[];
   /** Campos de cada linha, para campos do tipo "list" (ex.: headers). */
   fields?: PropertyDescription[];
+  /** Campos de texto com várias linhas (ex.: SQL). */
+  multiline?: boolean;
   /** Mostra o campo só quando outros campos têm certos valores. */
   showWhen?: Record<string, JsonValue[]>;
 }
@@ -56,6 +63,10 @@ export interface NodeExecuteContext {
   /** Valor de um parâmetro já com as expressões resolvidas para o item informado. */
   getParam(name: string, itemIndex?: number): Promise<JsonValue>;
   getConnection(id: string): Promise<ConnectionData>;
+  /** Endpoint do catálogo de APIs combinado com o cadastro do cliente no ERP. */
+  getApiEndpoint(erpClientId: string, endpointId: string): Promise<ApiEndpointData>;
+  /** Sessão no banco da conexão; cada comando fica registrado na auditoria. */
+  database(connectionId: string): Promise<DatabaseSession>;
   /** Roda código JavaScript do usuário no isolate da execução. */
   runCode(code: string, itemIndex: number): Promise<{ result: JsonValue; logs: string[] }>;
   /** Executa outro fluxo e devolve a saída dele. */
@@ -65,6 +76,26 @@ export interface NodeExecuteContext {
   /** Informações extras que ficam registradas na execução do nó. */
   meta: JsonObject;
   signal: AbortSignal;
+}
+
+export interface DatabaseSession {
+  dialect: 'postgres' | 'mssql' | 'oracle';
+  query(sql: string, params: Record<string, JsonValue>, operation?: 'query' | 'insert'): Promise<DbResult>;
+  procedure(name: string, params: ProcedureParam[]): Promise<DbResult>;
+}
+
+/** Registro de um comando executado num banco, para a auditoria. */
+export interface DatabaseCommandLog {
+  nodeName: string;
+  connectionId: string;
+  connectionType: string;
+  operation: 'query' | 'insert' | 'procedure';
+  sql: string;
+  params: JsonValue;
+  rows: number | null;
+  rowsAffected: number | null;
+  durationMs: number;
+  error?: string;
 }
 
 export interface SubworkflowResult {

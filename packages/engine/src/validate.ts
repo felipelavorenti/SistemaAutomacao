@@ -24,9 +24,11 @@ export function validateWorkflow(workflow: WorkflowDefinition, registry: NodeReg
       issues.push({ nodeId: node.id, message: `Tipo de nó desconhecido: ${node.type}` });
       continue;
     }
+    const values = Object.fromEntries(type.description.properties.map((p) => [p.name, node.parameters[p.name] ?? p.default]));
     for (const prop of type.description.properties) {
       const value = node.parameters[prop.name];
-      if (prop.required && (value === undefined || value === '' || value === '=')) {
+      const visible = !prop.showWhen || Object.entries(prop.showWhen).every(([key, allowed]) => allowed.includes(values[key] ?? null));
+      if (prop.required && visible && (value === undefined || value === '' || value === '=')) {
         issues.push({ nodeId: node.id, message: `"${node.name}": o campo ${prop.displayName} é obrigatório` });
       }
     }

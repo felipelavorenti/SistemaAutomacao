@@ -123,10 +123,26 @@ function ConnectionModal({
   const [type, setType] = useState(item?.type ?? types[0].type);
   const [clientId, setClientId] = useState(item?.clientId ?? '');
   const typeDesc = types.find((t) => t.type === type)!;
-  const [data, setData] = useState<Record<string, string>>(() =>
-    Object.fromEntries(typeDesc.fields.map((f) => [f.name, f.secret ? '' : (item?.data[f.name] ?? '')])),
-  );
+  const initialData = (desc: ConnectionType) =>
+    Object.fromEntries(desc.fields.map((f) => [f.name, f.secret ? '' : (item?.data[f.name] ?? f.default ?? '')]));
+  const [data, setData] = useState<Record<string, string>>(() => initialData(typeDesc));
   const [error, setError] = useState<string | null>(null);
+  const [test, setTest] = useState<{ ok: boolean; message?: string; durationMs?: number } | 'running' | null>(null);
+
+  const changeType = (next: string) => {
+    setType(next);
+    setData(initialData(types.find((t) => t.type === next)!));
+    setTest(null);
+  };
+
+  const runTest = async () => {
+    setTest('running');
+    try {
+      setTest(await post('/connections/test', { id: item?.id, type, data }));
+    } catch (err) {
+      setTest({ ok: false, message: errorMessage(err) });
+    }
+  };
 
   const save = async () => {
     try {
@@ -145,7 +161,7 @@ function ConnectionModal({
         <input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="Ex.: Consinco - Cliente X" />
       </Field>
       <Field label="Tipo">
-        <select value={type} disabled={!!item} onChange={(e) => setType(e.target.value)}>
+        <select value={type} disabled={!!item} onChange={(e) => changeType(e.target.value)}>
           {types.map((t) => (
             <option key={t.type} value={t.type}>
               {t.displayName}
@@ -164,18 +180,38 @@ function ConnectionModal({
         </select>
       </Field>
       {typeDesc.fields.map((f) => (
-        <Field key={f.name} label={f.displayName} hint={f.secret && item ? 'Deixe em branco para manter o valor atual' : undefined}>
-          <input
-            type={f.secret ? 'password' : 'text'}
-            autoComplete="new-password"
-            value={data[f.name] ?? ''}
-            placeholder={f.secret && item ? item.data[f.name] : f.placeholder}
-            onChange={(e) => setData({ ...data, [f.name]: e.target.value })}
-          />
+        <Field key={f.name} label={f.displayName} hint={f.secret && item ? 'Deixe em branco para manter o valor atual' : f.hint}>
+          {f.options ? (
+            <select value={data[f.name] ?? ''} onChange={(e) => setData({ ...data, [f.name]: e.target.value })}>
+              {f.options.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={f.secret ? 'password' : 'text'}
+              autoComplete="new-password"
+              value={data[f.name] ?? ''}
+              placeholder={f.secret && item ? item.data[f.name] : f.placeholder}
+              onChange={(e) => setData({ ...data, [f.name]: e.target.value })}
+            />
+          )}
         </Field>
       ))}
       <ErrorBox message={error} />
+      {test && test !== 'running' && (
+        <div className={test.ok ? 'ok-box' : 'error-box'}>
+          {test.ok ? `Conectou (${test.durationMs} ms).` : `Não conectou: ${test.message}`}
+        </div>
+      )}
       <div className="modal-actions">
+        {typeDesc.testable && (
+          <button onClick={runTest} disabled={test === 'running'} className="modal-actions-left">
+            {test === 'running' ? 'Testando…' : 'Testar conexão'}
+          </button>
+        )}
         <button onClick={onClose}>Cancelar</button>
         <button className="primary" onClick={save}>
           Salvar

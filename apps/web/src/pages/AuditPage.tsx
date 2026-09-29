@@ -11,6 +11,9 @@ const ENTITY_LABEL: Record<string, string> = {
   execution: 'Execução',
   session: 'Login',
   api_token: 'Token de API',
+  erp: 'ERP',
+  erp_endpoint: 'Endpoint de ERP',
+  erp_client: 'Cliente no ERP',
 };
 
 const ACTION_LABEL: Record<string, string> = {
