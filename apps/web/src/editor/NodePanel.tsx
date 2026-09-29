@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ApiCatalog, ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription, WorkflowListItem } from '../api';
 import { ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
+import { Icon, NODE_COLOR } from '../components/icons';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
 
 type Tab = 'params' | 'settings';
@@ -106,6 +107,9 @@ export function NodePanel({
 
         <section className="ndv-main">
           <div className="node-panel-header">
+            <span className="ndv-icon" style={{ color: NODE_COLOR[node.type] ?? 'var(--primary)' }}>
+              <Icon name={description ? node.type : 'unknown'} size={22} />
+            </span>
             <input className="node-name" value={name} disabled={readOnly} onChange={(e) => setName(e.target.value)} onBlur={commitName} onKeyDown={(e) => e.key === 'Enter' && commitName()} />
             <button className="icon" onClick={onClose} aria-label="Fechar painel">
               ×

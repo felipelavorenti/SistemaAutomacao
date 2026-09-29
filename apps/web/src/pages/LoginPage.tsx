@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { errorMessage, post } from '../api';
 import { ErrorBox, Field } from '../components/ui';
+import { Logo } from '../components/icons';
 
 export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
   const [email, setEmail] = useState('');
@@ -24,7 +25,10 @@ export function LoginPage({ onLogin }: { onLogin: () => Promise<void> }) {
   return (
     <div className="center">
       <form className="card auth-card" onSubmit={submit}>
-        <h1>Automações</h1>
+        <div className="auth-brand">
+          <Logo size={36} />
+          <h1>Info8n</h1>
+        </div>
         <Field label="E-mail">
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
         </Field>
