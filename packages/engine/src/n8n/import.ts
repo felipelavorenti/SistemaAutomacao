@@ -66,6 +66,12 @@ export interface ConvertOptions {
   defaultTimezone?: string;
 }
 
+/**
+ * No n8n o nó é um quadrado de 100 px e os nós ficam a uns 200 px um do outro; aqui o nó tem
+ * pelo menos 190 px de largura. Espaçar na horizontal evita que o fluxo importado nasça sobreposto.
+ */
+const N8N_X_SPACING = 1.6;
+
 export const UNSUPPORTED_NODE_TYPE = 'n8nUnsupported';
 
 /** Aceita um fluxo, uma lista de fluxos ou o formato { data: [...] } da API do n8n. */
@@ -142,7 +148,7 @@ export function convertN8nWorkflow(workflow: N8nWorkflow, options: ConvertOption
       id,
       name,
       type: converted.type,
-      position: { x: Math.round(node.position?.[0] ?? 0), y: Math.round(node.position?.[1] ?? 0) },
+      position: { x: Math.round((node.position?.[0] ?? 0) * N8N_X_SPACING), y: Math.round(node.position?.[1] ?? 0) },
       parameters: converted.parameters,
     };
     if (Object.keys(settings).length) instance.settings = settings;
@@ -508,86 +514,40 @@ function legacyFunction(type: string, { params, warn }: Ctx): Converted {
   return { type: 'code', parameters: { language: 'javaScript', mode: 'each', jsCode: `const item = $json;\n${code}` } };
 }
 
-/** O nó Set (Edit Fields) vira um Code que monta os campos do mesmo jeito. */
-function setNode({ params, warn, node }: Ctx): Converted {
+/** O nó Set (Edit Fields) vira o nó Edit Fields daqui, com os mesmos campos. */
+function setNode({ params, node }: Ctx): Converted {
   const version = node.typeVersion ?? 1;
-  const lines: string[] = ['// Convertido do nó Edit Fields (Set) do n8n.'];
-  let keepOthers: boolean;
-  const dotNotation = !(isObject(params.options) && params.options.dotNotation === false);
-  const assignments: { name: string; js: string }[] = [];
+  const opts = isObject(params.options) ? params.options : {};
+  const common: JsonObject = { dotNotation: opts.dotNotation !== false, ignoreConversionErrors: opts.ignoreConversionErrors === true };
+  const text = (v: unknown): string => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
 
   if (version >= 3) {
-    if (params.mode === 'raw') {
-      const raw = params.jsonOutput;
-      keepOthers = params.includeOtherFields === true;
-      const js = typeof raw === 'string' && raw.startsWith('=') ? valueToJs(raw) : `${JSON.stringify(safeJson(raw))}`;
-      lines.push(`const saida = ${keepOthers ? '{ ...$json, ...' : '{ ...'}(${js}) };`);
-      lines.push('return saida;');
-      lines.push(TEXT_HELPER);
-      if (params.include && params.include !== 'all' && keepOthers) warn('a escolha de quais outros campos manter não foi importada; todos foram mantidos');
-      return { type: 'code', parameters: { language: 'javaScript', mode: 'each', jsCode: lines.join('\n') } };
-    }
-    keepOthers = params.includeOtherFields === true;
-    if (keepOthers && params.include && params.include !== 'all') warn('a escolha de quais outros campos manter não foi importada; todos foram mantidos');
+    const include = ['selected', 'except'].includes(String(params.include)) ? String(params.include) : 'all';
+    const others: JsonObject = {
+      includeOtherFields: params.includeOtherFields === true || (version < 3.3 && params.include !== undefined && params.include !== 'none'),
+      include,
+      includeFields: text(params.includeFields),
+      excludeFields: text(params.excludeFields),
+    };
+    if (params.mode === 'raw') return { type: 'editFields', parameters: { mode: 'raw', jsonOutput: text(params.jsonOutput ?? '{}'), ...others, ...common } };
+    const assignments: JsonObject[] = [];
     const list = isObject(params.assignments) && Array.isArray(params.assignments.assignments) ? params.assignments.assignments.filter(isObject) : [];
-    for (const a of list) assignments.push({ name: String(a.name ?? ''), js: typedJs(a.value, String(a.type ?? 'string')) });
+    for (const a of list) assignments.push({ name: text(a.name), type: String(a.type ?? 'string'), value: text(a.value) });
     // Versões 3.0 a 3.2 usavam "fields".
     const fields = isObject(params.fields) && Array.isArray(params.fields.values) ? params.fields.values.filter(isObject) : [];
     for (const f of fields) {
       const kind = String(f.type ?? 'stringValue').replace(/Value$/, '');
-      assignments.push({ name: String(f.name ?? ''), js: typedJs(f[`${kind}Value`], kind) });
+      assignments.push({ name: text(f.name), type: kind, value: text(f[`${kind}Value`]) });
     }
-  } else {
-    keepOthers = params.keepOnlySet !== true;
-    const values = isObject(params.values) ? params.values : {};
-    for (const kind of ['string', 'number', 'boolean']) {
-      for (const v of Array.isArray(values[kind]) ? values[kind].filter(isObject) : []) assignments.push({ name: String(v.name ?? ''), js: typedJs(v.value, kind) });
-    }
+    return { type: 'editFields', parameters: { mode: 'manual', assignments, ...others, ...common } };
   }
 
-  lines.push(`const saida = ${keepOthers ? 'JSON.parse(JSON.stringify($json))' : '{}'};`);
-  for (const a of assignments.filter((a) => a.name)) {
-    lines.push(dotNotation ? `__definir(saida, ${JSON.stringify(a.name)}, ${a.js});` : `saida[${JSON.stringify(a.name)}] = ${a.js};`);
+  const values = isObject(params.values) ? params.values : {};
+  const assignments: JsonObject[] = [];
+  for (const kind of ['string', 'number', 'boolean']) {
+    for (const v of Array.isArray(values[kind]) ? values[kind].filter(isObject) : []) assignments.push({ name: text(v.name), type: kind, value: text(v.value) });
   }
-  lines.push('return saida;', '', DOT_HELPER, TEXT_HELPER);
-  return { type: 'code', parameters: { language: 'javaScript', mode: 'each', jsCode: lines.join('\n') } };
-}
-
-function typedJs(value: unknown, type: string): string {
-  const expression = typeof value === 'string' && value.startsWith('=');
-  switch (type) {
-    case 'number':
-      return expression ? `Number(${valueToJs(value)})` : JSON.stringify(Number(value ?? 0));
-    case 'boolean':
-      return expression ? `__booleano(${valueToJs(value)})` : JSON.stringify(value === true || value === 'true');
-    case 'array':
-    case 'object':
-      return expression ? valueToJs(value) : JSON.stringify(safeJson(value));
-    default:
-      return expression ? `__texto(${valueToJs(value)})` : JSON.stringify(value ?? '');
-  }
-}
-
-const DOT_HELPER = `function __definir(alvo, caminho, valor) {
-  const partes = caminho.split('.');
-  let atual = alvo;
-  for (const parte of partes.slice(0, -1)) {
-    if (typeof atual[parte] !== 'object' || atual[parte] === null) atual[parte] = {};
-    atual = atual[parte];
-  }
-  atual[partes[partes.length - 1]] = valor;
-}`;
-
-const TEXT_HELPER = `function __texto(v) { return v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v); }
-function __booleano(v) { return v === true || v === 'true' || v === 1 || v === '1'; }`;
-
-function safeJson(value: unknown): JsonValue {
-  if (typeof value !== 'string') return (value ?? null) as JsonValue;
-  try {
-    return JSON.parse(value) as JsonValue;
-  } catch {
-    return value;
-  }
+  return { type: 'editFields', parameters: { mode: 'manual', assignments, includeOtherFields: params.keepOnlySet !== true, include: 'all', ...common } };
 }
 
 // ---------- Fluxo ----------
