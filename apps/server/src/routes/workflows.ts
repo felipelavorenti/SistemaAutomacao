@@ -1,7 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { defaultRegistry, validateWorkflow, type Item, type WorkflowDefinition } from '@sa/engine';
+import { defaultRegistry, ExpressionSandbox, validateWorkflow, type Item, type WorkflowDefinition } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
@@ -87,6 +87,32 @@ export const workflowRoutes =
     };
 
     app.get('/node-types', async () => defaultRegistry.descriptions());
+
+    /** Prévia de uma expressão no editor, usando os dados da última execução. */
+    app.post('/expressions/preview', async (request) => {
+      requireCap(currentUser(request), 'workflow:edit');
+      const b = z
+        .object({
+          value: z.string(),
+          input: z.array(z.object({ json: z.record(jsonValue) })).default([]),
+          nodeOutputs: z.record(z.array(z.object({ json: z.record(jsonValue) }))).default({}),
+          itemIndex: z.number().int().min(0).default(0),
+        })
+        .parse(request.body);
+      const sandbox = new ExpressionSandbox({ timeoutMs: 500, memoryLimitMb: 32 });
+      try {
+        const scope = await sandbox.createScope({
+          nodeOutputs: b.nodeOutputs as Record<string, Item[]>,
+          execution: { id: 'previa', mode: 'manual' },
+          vars: {},
+        });
+        return { result: await scope.resolve(b.value, b.input as Item[], b.itemIndex) };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        sandbox.dispose();
+      }
+    });
 
     app.get('/workflows', async (request) => {
       const user = currentUser(request);
