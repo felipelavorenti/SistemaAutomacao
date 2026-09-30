@@ -93,6 +93,22 @@ export const executionRoutes =
       );
     });
 
+    /** Fluxos agendados que já deviam ter começado e esperam uma vaga no worker. */
+    app.get('/executions/waiting', async (request) => {
+      const user = currentUser(request);
+      requireCap(user, 'execution:view');
+      const waiting = await queue.waitingScheduled();
+      if (!waiting.length) return [];
+      const names = await many<{ id: string; name: string; folder_id: string }>(db, 'SELECT id, name, folder_id FROM workflows WHERE id = ANY($1::uuid[])', [
+        [...new Set(waiting.map((w) => w.workflowId))],
+      ]);
+      const byId = new Map(names.filter((w) => canSeeFolder(user, w.folder_id)).map((w) => [w.id, w]));
+      return waiting
+        .filter((w) => byId.has(w.workflowId))
+        .sort((a, b) => a.dueAt - b.dueAt)
+        .map((w) => ({ workflowId: w.workflowId, workflowName: byId.get(w.workflowId)!.name, dueAt: new Date(w.dueAt).toISOString() }));
+    });
+
     app.get('/executions/:id', async (request) => {
       const user = currentUser(request);
       requireCap(user, 'execution:view');

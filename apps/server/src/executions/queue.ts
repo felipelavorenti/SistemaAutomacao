@@ -22,6 +22,17 @@ export class ExecutionQueue {
     await this.queue.add('run', { kind: 'run', executionId }, { jobId: executionId, removeOnComplete: 1000, removeOnFail: 1000 });
   }
 
+  /**
+   * Execuções agendadas esperando vaga no worker. Elas só viram uma linha em executions
+   * quando o worker as pega, então sem isto não apareceriam em lugar nenhum.
+   */
+  async waitingScheduled(): Promise<{ workflowId: string; dueAt: number }[]> {
+    const jobs = await this.queue.getJobs(['wait', 'prioritized', 'paused'], 0, 999, true);
+    return jobs.flatMap((job) =>
+      job?.data?.kind === 'scheduled' ? [{ workflowId: job.data.workflowId, dueAt: job.timestamp + (job.delay ?? 0) }] : [],
+    );
+  }
+
   async requestCancel(executionId: string): Promise<void> {
     await this.redis.publish(CANCEL_CHANNEL, executionId);
   }

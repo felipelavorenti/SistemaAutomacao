@@ -146,7 +146,8 @@ const MSSQL_TYPES: Record<Exclude<ParamType, 'cursor'>, () => mssql.ISqlType> = 
 
 class SqlServerClient implements DbClient {
   readonly dialect = 'mssql' as const;
-  private pool: Promise<mssql.ConnectionPool>;
+  private config: mssql.config;
+  private pool: Promise<mssql.ConnectionPool> | null = null;
 
   constructor(data: JsonObject) {
     const instance = String(data.instance ?? '').trim();
@@ -166,15 +167,29 @@ class SqlServerClient implements DbClient {
       },
     };
     if (!instance) config.port = port(data, 1433);
-    const pool = new mssql.ConnectionPool(config);
-    pool.on('error', () => undefined);
-    this.pool = pool.connect();
-    this.pool.catch(() => undefined);
+    this.config = config;
+  }
+
+  /**
+   * Conecta na primeira consulta. Se a conexão falhar, a próxima consulta tenta de novo,
+   * em vez de todas as execuções que usam esta conexão receberem o mesmo erro antigo.
+   */
+  private connect(): Promise<mssql.ConnectionPool> {
+    if (!this.pool) {
+      const pool = new mssql.ConnectionPool(this.config);
+      pool.on('error', () => undefined);
+      const connecting = pool.connect();
+      this.pool = connecting;
+      connecting.catch(() => {
+        if (this.pool === connecting) this.pool = null;
+      });
+    }
+    return this.pool;
   }
 
   async query(sql: string, params: Record<string, JsonValue>): Promise<DbResult> {
     const compiled = compileNamedParams(sql, 'mssql');
-    const request = (await this.pool).request();
+    const request = (await this.connect()).request();
     for (const name of compiled.names) request.input(name, toDbValue(params[name]));
     const result = await request.query(compiled.sql);
     const sets = (result.recordsets as unknown as unknown[][]) ?? [];
@@ -188,7 +203,7 @@ class SqlServerClient implements DbClient {
 
   async procedure(name: string, params: ProcedureParam[]): Promise<DbResult> {
     const proc = checkIdentifier(name, 'Nome da procedure');
-    const request = (await this.pool).request();
+    const request = (await this.connect()).request();
     for (const p of params) {
       if (p.type === 'cursor') throw new Error('SQL Server não usa parâmetros do tipo cursor; os resultados da procedure já voltam como linhas');
       const type = MSSQL_TYPES[p.type]();
@@ -206,7 +221,7 @@ class SqlServerClient implements DbClient {
   }
 
   async close(): Promise<void> {
-    await (await this.pool.catch(() => null))?.close();
+    await (await this.pool?.catch(() => null))?.close();
   }
 }
 

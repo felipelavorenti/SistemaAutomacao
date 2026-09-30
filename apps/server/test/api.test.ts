@@ -482,4 +482,19 @@ describe.skipIf(!available)('API', () => {
     expect((await call(viewer, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: sub })).status).toBe(403);
     expect((await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: { nome: 'x' } })).body.error).toMatch(/não parece um fluxo/);
   });
+
+  it('mostra os agendados que esperam vaga no worker', async () => {
+    const wf = (await call(editor, 'POST', '/api/workflows', { name: 'Agendado na fila', folderId: folderA })).body;
+    // Com a fila pausada, o job fica esperando como ficaria com todas as vagas ocupadas.
+    await queue.queue.pause();
+    try {
+      await queue.queue.add('scheduled', { kind: 'scheduled', workflowId: wf.id });
+      const waiting = (await call(viewer, 'GET', '/api/executions/waiting')).body;
+      expect(waiting).toEqual([{ workflowId: wf.id, workflowName: 'Agendado na fila', dueAt: expect.any(String) }]);
+      expect((await call(admin, 'GET', '/api/executions/waiting')).body).toHaveLength(1);
+    } finally {
+      await queue.queue.obliterate({ force: true });
+      await queue.queue.resume();
+    }
+  });
 });

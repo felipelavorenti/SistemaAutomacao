@@ -5,12 +5,19 @@ import { ErrorBox, PageHeader, StatusBadge, useLoad } from '../components/ui';
 
 const PAGE = 50;
 
+interface WaitingRun {
+  workflowId: string;
+  workflowName: string;
+  dueAt: string;
+}
+
 export function ExecutionsPage() {
   const [params, setParams] = useSearchParams();
   const workflows = useLoad(() => get<WorkflowListItem[]>('/workflows'));
   const [items, setItems] = useState<ExecutionListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [waiting, setWaiting] = useState<WaitingRun[]>([]);
 
   const filters = {
     workflowId: params.get('workflowId') ?? '',
@@ -20,6 +27,9 @@ export function ExecutionsPage() {
     from: params.get('from') ?? '',
     to: params.get('to') ?? '',
   };
+
+  // Agendados esperando vaga só aparecem quando os filtros não os excluiriam.
+  const showsWaiting = ['', 'queued'].includes(filters.status) && ['', 'schedule'].includes(filters.mode) && !filters.search && !filters.from && !filters.to;
 
   const query = (before?: string) => {
     const q = new URLSearchParams();
@@ -39,6 +49,7 @@ export function ExecutionsPage() {
       const before = append ? items[items.length - 1]?.created_at : undefined;
       const page = await get<ExecutionListItem[]>(query(before));
       setItems(append ? [...items, ...page] : page);
+      if (!append) setWaiting(showsWaiting ? (await get<WaitingRun[]>('/executions/waiting')).filter((w) => !filters.workflowId || w.workflowId === filters.workflowId) : []);
       setHasMore(page.length === PAGE);
       setError(null);
     } catch (err) {
@@ -106,6 +117,20 @@ export function ExecutionsPage() {
           </tr>
         </thead>
         <tbody>
+          {waiting.map((w, i) => (
+            <tr key={`waiting-${w.workflowId}-${i}`} title="Agendado; começa quando uma das execuções em andamento terminar">
+              <td>
+                <StatusBadge status="queued" />
+              </td>
+              <td>
+                <Link to={`/fluxos/${w.workflowId}`}>{w.workflowName}</Link>
+              </td>
+              <td>{MODE_LABEL.schedule}</td>
+              <td className="muted">aguardando desde {formatDate(w.dueAt)}</td>
+              <td />
+              <td />
+            </tr>
+          ))}
           {items.map((e) => (
             <tr key={e.id}>
               <td>
@@ -127,7 +152,7 @@ export function ExecutionsPage() {
           ))}
         </tbody>
       </table>
-      {!items.length && <p className="muted">Nenhuma execução encontrada.</p>}
+      {!items.length && !waiting.length && <p className="muted">Nenhuma execução encontrada.</p>}
       {hasMore && (
         <button className="load-more" onClick={() => load(true)}>
           Carregar mais

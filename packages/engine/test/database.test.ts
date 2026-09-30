@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createDbClient, type DbClient } from '../src/database/drivers.js';
 import { compileNamedParams } from '../src/database/params.js';
 import { executeWorkflow } from '../src/executor.js';
@@ -179,3 +179,20 @@ for (const target of targets) {
     });
   });
 }
+
+describe('SQL Server fora do ar', () => {
+  it('tenta conectar de novo na próxima consulta depois de uma falha', async () => {
+    const mssql = (await import('mssql')).default;
+    const connect = vi.spyOn(mssql.ConnectionPool.prototype, 'connect');
+    // Porta fechada: a conexão falha na hora.
+    const client = createDbClient({ id: 'mssql-off', type: 'mssql', data: { host: '127.0.0.1', port: '1', user: 'sa', password: 'x', database: 'db' } });
+    try {
+      await expect(client.query('SELECT 1', {})).rejects.toThrow();
+      await expect(client.query('SELECT 1', {})).rejects.toThrow();
+      expect(connect).toHaveBeenCalledTimes(2);
+    } finally {
+      connect.mockRestore();
+      await client.close();
+    }
+  });
+});
