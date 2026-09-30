@@ -24,6 +24,13 @@ Info8n é a plataforma de automação de processos baseada em fluxos de nós, fo
 - **Auditoria** de quem criou, alterou, ativou, excluiu ou executou cada coisa, com o antes e o depois (sem segredos).
 - **Versões** de cada fluxo a cada salvamento, com restauração, exportação e importação em JSON.
 
+## Documentação
+
+- [Manual de uso](docs/manual-de-uso.md): como usar cada tela e cada nó.
+- [Documentação técnica](docs/documentacao-tecnica.md): arquitetura, instalação, configuração, segurança e a API para outros sistemas.
+
+Toda funcionalidade nova ou alterada atualiza os dois documentos, que também são publicados no Claude ([manual](https://claude.ai/code/artifact/278d0b6e-2f6e-48f1-ba10-9b7b3ffd0b46) e [técnica](https://claude.ai/code/artifact/df07d67b-3f8d-442b-90ea-252c386ddced)). As cópias daqui e de lá são mantidas iguais.
+
 ## Estrutura
 
 ```
