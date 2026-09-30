@@ -1335,3 +1335,58 @@ textarea.code-editor {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Referência da API */
+.api-docs {
+  max-width: 1100px;
+}
+.api-docs table {
+  margin-bottom: 12px;
+}
+.api-route {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+}
+.api-route summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.api-route summary code {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.api-route-body {
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.api-route-body .code {
+  word-break: break-word;
+}
+.api-method {
+  min-width: 58px;
+  text-align: center;
+}
+.api-get {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+.api-post {
+  background: var(--success-soft);
+  color: #13845f;
+}
+.api-put {
+  background: var(--warning-soft);
+  color: #b86a0c;
+}
+.api-delete {
+  background: var(--danger-soft);
+  color: #c73a41;
+}
+.api-docs .filters input {
+  min-width: 320px;
+}

@@ -2,6 +2,7 @@ import cookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { ZodError } from 'zod';
+import { API_REFERENCE } from './api-reference.js';
 import type { Config } from './config.js';
 import type { Db } from './db/db.js';
 import type { ExecutionQueue } from './executions/queue.js';
@@ -25,6 +26,10 @@ declare module 'fastify' {
   interface FastifyRequest {
     user: CurrentUser | null;
   }
+  interface FastifyInstance {
+    /** Rotas registradas, para o teste conferir se todas estão na referência da API. */
+    registeredRoutes: { method: string; url: string }[];
+  }
 }
 
 const PUBLIC_ROUTES = new Set(['/api/auth/login', '/api/health']);
@@ -40,6 +45,12 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     logger: process.env.NODE_ENV === 'test' ? false : { level: process.env.LOG_LEVEL ?? 'info' },
     bodyLimit: 10 * 1024 * 1024,
     trustProxy: true,
+  });
+
+  const routes: { method: string; url: string }[] = [];
+  app.decorate('registeredRoutes', routes);
+  app.addHook('onRoute', (route) => {
+    for (const method of [route.method].flat()) routes.push({ method, url: route.url });
   });
 
   await app.register(cookie);
@@ -71,6 +82,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   app.get('/api/health', async () => ({ ok: true }));
+  app.get('/api/docs', async () => API_REFERENCE);
 
   await app.register(authRoutes(deps), { prefix: '/api' });
   await app.register(adminRoutes(deps), { prefix: '/api' });
