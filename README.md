@@ -18,7 +18,7 @@ Info8n é a plataforma de automação de processos baseada em fluxos de nós, fo
 - **Catálogo de APIs por ERP:** cada ERP tem a URL base (com `{{host}}` e `{{porta}}`), o tipo de autenticação e os endpoints (método, caminho, headers, query, corpo e variáveis). Cada cliente é cadastrado uma vez no ERP com host, porta e credenciais, que ficam criptografados. No nó HTTP Request, "API cadastrada" pede só o cliente, o endpoint e as variáveis, cada uma Fixo ou Expressão. O login continua sendo um nó do fluxo: o token vem da saída dele em cada execução. Um erro traz o ERP, o endpoint e o cliente junto com o retorno da API.
 - **Dados como lista de itens**, como no n8n: cada nó recebe e devolve N itens. Arrays retornados por uma API viram um item por elemento.
 - **Tratamento de erro:** quando uma API responde com erro, a execução para e guarda o status e o corpo da resposta. Por nó: tentar de novo com espera crescente, tempo limite e continuar em caso de erro.
-- **Usuários e perfis** (Administrador, Editor, Operador, Leitor), acesso por pasta de fluxos e por cliente, bloqueio após 5 senhas erradas, troca de senha no primeiro acesso e tokens de API pessoais. Todas as chamadas da API estão descritas na tela Referência da API (`/referencia-api`) e em JSON em `GET /api/docs`.
+- **Usuários e perfis** (Administrador, Editor, Operador, Leitor), acesso por pasta de fluxos e por cliente, bloqueio após 5 senhas erradas, troca de senha no primeiro acesso e tokens de API pessoais. Todas as chamadas da API estão descritas na [documentação da API](docs/api.md), na tela Referência da API (`/referencia-api`) e em JSON em `GET /api/docs`.
 - **Conexões** cadastradas uma vez (API key no header, Bearer, Basic), criptografadas com AES-256-GCM, vinculadas a um cliente, com lista de fluxos que usam cada uma.
 - **Execuções** em fila (BullMQ + Redis), com cancelamento, reexecução e histórico filtrável. Para ocupar pouco espaço, execuções agendadas com sucesso guardam só um resumo; as com erro e as manuais guardam entrada e saída de cada nó, comprimidas.
 - **Auditoria** de quem criou, alterou, ativou, excluiu ou executou cada coisa, com o antes e o depois (sem segredos).
@@ -27,9 +27,10 @@ Info8n é a plataforma de automação de processos baseada em fluxos de nós, fo
 ## Documentação
 
 - [Manual de uso](docs/manual-de-uso.md): como usar cada tela e cada nó.
-- [Documentação técnica](docs/documentacao-tecnica.md): arquitetura, instalação, configuração, segurança e a API para outros sistemas.
+- [Documentação técnica](docs/documentacao-tecnica.md): arquitetura, instalação, configuração e segurança.
+- [Documentação da API](docs/api.md): autenticação, erros e cada chamada da API, com os parâmetros, um exemplo de chamada e um exemplo de resposta.
 
-Toda funcionalidade nova ou alterada atualiza os dois documentos, que também são publicados no Claude ([manual](https://claude.ai/code/artifact/278d0b6e-2f6e-48f1-ba10-9b7b3ffd0b46) e [técnica](https://claude.ai/code/artifact/df07d67b-3f8d-442b-90ea-252c386ddced)). As cópias daqui e de lá são mantidas iguais.
+Toda funcionalidade nova ou alterada atualiza os três documentos, que também são publicados no Claude ([manual](https://claude.ai/code/artifact/278d0b6e-2f6e-48f1-ba10-9b7b3ffd0b46), [técnica](https://claude.ai/code/artifact/df07d67b-3f8d-442b-90ea-252c386ddced) e [API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9)). As cópias daqui e de lá são mantidas iguais.
 
 ## Estrutura
 
@@ -71,4 +72,4 @@ npm run build && npm test
 
 Os testes da API usam um banco próprio (`TEST_DATABASE_URL`, padrão `postgres://postgres@127.0.0.1:5432/automacao_test`) e apagam tudo nele a cada execução. Sem Postgres acessível, esses testes são pulados. Os testes do nó Banco de dados com SQL Server e Oracle rodam quando `TEST_MSSQL_HOST` e `TEST_ORACLE_CONNECT` estão definidos, e os do Metabase quando `TEST_METABASE_URL` está definido, como no CI (veja `.github/workflows/ci.yml`).
 
-Toda rota nova ou alterada precisa entrar em `apps/server/src/api-reference.ts`. O teste `apps/server/test/api-reference.test.ts` falha quando uma rota existe sem estar lá, ou quando algo documentado não existe mais.
+Toda rota nova ou alterada precisa entrar em `apps/server/src/api-reference.ts`, com um exemplo de chamada e de resposta em `apps/server/src/api-examples.ts`. Depois, rode `npm run docs:api -w @sa/server` para atualizar `docs/api.md`. O teste `apps/server/test/api-reference.test.ts` falha quando uma rota existe sem estar lá, quando algo documentado não existe mais, quando falta exemplo ou quando `docs/api.md` ficou para trás.

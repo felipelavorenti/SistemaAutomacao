@@ -66,7 +66,7 @@ export const executionRoutes =
         db,
         `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.mode, e.status, e.created_at, e.started_at, e.finished_at,
                 e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size, e.parent_execution_id,
-                extract(epoch FROM (e.finished_at - e.started_at)) * 1000 AS duration_ms
+                round(extract(epoch FROM (e.finished_at - e.started_at)) * 1000)::float8 AS duration_ms
          FROM executions e JOIN workflows w ON w.id = e.workflow_id LEFT JOIN users u ON u.id = e.triggered_by
          WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
            AND ($2::uuid IS NULL OR e.workflow_id = $2)

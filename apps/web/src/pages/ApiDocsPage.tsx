@@ -20,9 +20,19 @@ interface ApiRoute {
   params?: ApiField[];
   query?: ApiField[];
   body?: ApiField[];
-  response: string;
+  /** Explicação da resposta, quando o exemplo sozinho não basta. */
+  response?: string;
   errors?: string[];
   audited?: boolean;
+  example?: ApiExample;
+}
+
+/** Chamada de verdade e o que o servidor respondeu. */
+interface ApiExample {
+  response: unknown;
+  note?: string;
+  /** Comando curl, com $INFO8N no lugar do endereço do servidor. */
+  curl?: string;
 }
 
 interface ApiGroup {
@@ -131,6 +141,9 @@ curl ${base}/executions/ID_DA_EXECUCAO \\
       <div className="section-header">
         <h2>Todas as chamadas{data ? ` (${total})` : ''}</h2>
       </div>
+      <p className="muted">
+        Cada chamada traz um exemplo tirado de uma chamada de verdade. Nos comandos, troque <code>$TOKEN</code> pelo seu token.
+      </p>
       <div className="filters">
         <input placeholder="Procurar por caminho ou descrição" value={search} onChange={(e) => setSearch(e.target.value)} />
       </div>
@@ -164,9 +177,16 @@ function RouteItem({ route }: { route: ApiRoute }) {
         <Fields title="Parâmetros do caminho" fields={route.params} />
         <Fields title="Filtros na URL" fields={route.query} />
         <Fields title="Corpo (JSON)" fields={route.body} />
-        <p>
-          <strong>Resposta:</strong> <span className="code">{route.response}</span>
-        </p>
+        {route.example?.curl && (
+          <>
+            <strong>Exemplo de chamada</strong>
+            <pre className="json-view">{route.example.curl.replaceAll('$INFO8N', window.location.origin)}</pre>
+          </>
+        )}
+        {(route.example || route.response) && <strong>Exemplo de resposta</strong>}
+        {route.response && <p>{route.response}</p>}
+        {route.example && <pre className="json-view">{JSON.stringify(route.example.response, null, 2)}</pre>}
+        {route.example?.note && <p className="muted">{route.example.note}</p>}
         {!!route.errors?.length && (
           <>
             <strong>Erros próprios</strong>

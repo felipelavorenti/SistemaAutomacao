@@ -166,6 +166,13 @@ export function publicData(type: ConnectionTypeDescription, data: JsonObject): J
   return out;
 }
 
+/** Valor de um campo como texto; número e sim/não vindos pela API viram texto, o resto fica vazio. */
+export function fieldText(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  return '';
+}
+
 /**
  * Junta os dados enviados pela tela com os já salvos. Um campo secreto vazio
  * mantém o valor anterior, para o usuário não precisar redigitar senhas.
@@ -174,7 +181,7 @@ export function mergeData(type: ConnectionTypeDescription, incoming: Record<stri
   const out: JsonObject = {};
   for (const field of type.fields) {
     const raw = incoming[field.name];
-    const value = typeof raw === 'string' ? raw : '';
+    const value = fieldText(raw);
     out[field.name] = field.secret && value === '' ? (existing[field.name] ?? '') : value;
   }
   return out;
