@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { del, errorMessage, formatDate, get, post } from '../api';
 import { useMe } from '../App';
 import { ErrorBox, PageHeader, useLoad } from '../components/ui';
@@ -37,7 +38,10 @@ export function AccountPage() {
       </p>
       <ChangePasswordPage onDone={async () => {}} />
       <h2>Tokens de API</h2>
-      <p className="muted">Para sistemas internos chamarem a API da plataforma com o header Authorization: Bearer seguido do token.</p>
+      <p className="muted">
+        Para sistemas internos chamarem a API da plataforma com o header Authorization: Bearer seguido do token. As chamadas disponíveis estão na{' '}
+        <Link to="/referencia-api">Referência da API</Link>.
+      </p>
       <div className="inline-form">
         <input placeholder="Nome do token (ex.: ERP interno)" value={name} onChange={(e) => setName(e.target.value)} />
         <button className="primary" disabled={!name.trim()} onClick={create}>

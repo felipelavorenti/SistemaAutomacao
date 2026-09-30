@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { get, onAuthProblem, post, ROLE_LABEL, type Me } from './api';
 import { AccountPage } from './pages/AccountPage';
+import { ApiDocsPage } from './pages/ApiDocsPage';
 import { AuditPage } from './pages/AuditPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { ClientsPage } from './pages/ClientsPage';
@@ -74,6 +75,7 @@ export function App() {
                 <Route path="/usuarios" element={<UsersPage />} />
                 <Route path="/auditoria" element={<AuditPage />} />
                 <Route path="/conta" element={<AccountPage />} />
+                <Route path="/referencia-api" element={<ApiDocsPage />} />
                 <Route path="/trocar-senha" element={<ChangePasswordPage onDone={reload} />} />
                 <Route path="*" element={<p>Página não encontrada.</p>} />
               </Routes>
@@ -105,6 +107,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavItem to="/erps" icon="erp" label="APIs dos ERPs" />
           <NavItem to="/comandos-sql" icon="sql" label="Comandos SQL" />
           <NavItem to="/clientes" icon="clients" label="Clientes" />
+          <NavItem to="/referencia-api" icon="code" label="Referência da API" />
           {me.permissions.admin && (
             <>
               <div className="nav-section">Administração</div>
