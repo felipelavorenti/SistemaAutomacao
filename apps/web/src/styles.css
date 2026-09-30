@@ -1364,9 +1364,6 @@ textarea.code-editor {
   padding: 4px 12px 12px;
   border-top: 1px solid var(--border);
 }
-.api-route-body .code {
-  word-break: break-word;
-}
 .api-method {
   min-width: 58px;
   text-align: center;

@@ -245,6 +245,7 @@ describe.skipIf(!available)('API', () => {
 
     const list = await call(editor, 'GET', `/api/executions?workflowId=${workflowId}&status=error`);
     expect(list.body).toHaveLength(1);
+    expect(typeof list.body[0].duration_ms).toBe('number');
   });
 
   it('respeita os perfis', async () => {

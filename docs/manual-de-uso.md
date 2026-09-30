@@ -44,7 +44,7 @@ Se você abrir um fluxo que usa uma conexão de um cliente que você não enxerg
 
 **Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo.
 
-Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...` em cada chamada. Para disparar um fluxo, ele chama `POST /api/workflows/{id}/run` e depois consulta o resultado em `GET /api/executions/{id}`. O menu Referência da API mostra todas as chamadas dentro do Info8n. A mesma lista, com o que cada uma recebe e devolve, o perfil exigido e exemplos, está na seção API para outros sistemas da [documentação técnica](https://claude.ai/code/artifact/df07d67b-3f8d-442b-90ea-252c386ddced). Para uma integração, crie um usuário só para ela, com o menor perfil que resolve, e gere o token com esse usuário.
+Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...` em cada chamada. Para disparar um fluxo, ele chama `POST /api/workflows/{id}/run` e depois consulta o resultado em `GET /api/executions/{id}`. O menu Referência da API mostra todas as chamadas dentro do Info8n. A mesma lista, com os parâmetros, um exemplo de chamada e um exemplo de resposta de cada uma, está na [documentação da API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9). Para uma integração, crie um usuário só para ela, com o menor perfil que resolve, e gere o token com esse usuário.
 
 ## Fluxos
 

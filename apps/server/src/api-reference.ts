@@ -1,8 +1,12 @@
+import { API_EXAMPLES } from './api-examples.js';
+import { formatJson } from './lib/format-json.js';
+
 /**
  * Referência de todas as chamadas da API, mostrada na tela "Referência da API"
- * (GET /api/docs). O teste test/api-reference.test.ts falha quando uma rota
- * existe sem estar aqui, ou quando algo daqui não existe mais: ao criar ou
- * mudar uma rota, atualize esta lista junto.
+ * (GET /api/docs) e em docs/api.md. O teste test/api-reference.test.ts falha
+ * quando uma rota existe sem estar aqui ou sem exemplo em api-examples.ts,
+ * quando algo daqui não existe mais, ou quando docs/api.md ficou para trás
+ * (atualize com npm run docs:api -w @sa/server).
  */
 
 /** Menor perfil que pode usar a chamada; os perfis acima também podem. */
@@ -24,11 +28,29 @@ export interface ApiRoute {
   params?: ApiField[];
   query?: ApiField[];
   body?: ApiField[];
-  response: string;
+  /** Explicação da resposta, quando o exemplo sozinho não basta. */
+  response?: string;
   /** Erros próprios da chamada, além dos comuns (401, 403 de perfil, 400 de dados inválidos). */
   errors?: string[];
   /** Grava na auditoria quem fez, quando, o IP e, nas alterações, o antes e o depois. */
   audited?: boolean;
+  /** Exemplo de chamada e de resposta, vindo de api-examples.ts. */
+  example?: ApiExample;
+}
+
+/** Uma chamada de verdade e o que o servidor respondeu (status 200). */
+export interface ApiExample {
+  /** Caminho usado, depois de /api, com IDs e filtros. Sem ele, vale o path da rota. */
+  path?: string;
+  /** Corpo JSON enviado. */
+  body?: unknown;
+  response: unknown;
+  /** Observação sobre o exemplo, como uma lista encurtada. */
+  note?: string;
+  /** Usa o cookie da tela em vez do token: save guarda o cookie do login, send manda o cookie guardado. */
+  session?: 'save' | 'send';
+  /** Comando curl do exemplo; API_REFERENCE monta a partir dos outros campos. */
+  curl?: string;
 }
 
 export interface ApiGroup {
@@ -40,7 +62,6 @@ const id = (what: string): ApiField => ({ name: 'id', type: 'uuid', required: tr
 const limit: ApiField = { name: 'limit', type: 'número', description: 'Quantas linhas devolver, de 1 a 200 (padrão 50)' };
 const from: ApiField = { name: 'from', type: 'data e hora', description: 'A partir de quando, com fuso (ex.: 2026-09-30T00:00:00-03:00)' };
 const to: ApiField = { name: 'to', type: 'data e hora', description: 'Até quando, com fuso' };
-const ok = '{"ok": true}';
 
 const workflowBody = (definitionRequired: boolean): ApiField[] => [
   { name: 'name', type: 'texto', required: true, description: 'Nome do fluxo' },
@@ -55,9 +76,14 @@ const workflowBody = (definitionRequired: boolean): ApiField[] => [
 
 const connectionBody: ApiField[] = [
   { name: 'name', type: 'texto', required: true, description: 'Nome da conexão' },
-  { name: 'type', type: 'texto', required: true, description: 'Tipo, como devolvido por GET /connection-types (ex.: postgres, sqlserver)' },
+  { name: 'type', type: 'texto', required: true, description: 'Tipo, como devolvido por GET /connection-types (ex.: postgres, mssql)' },
   { name: 'clientId', type: 'uuid ou null', description: 'Cliente dono da conexão; null para uma conexão sem cliente' },
-  { name: 'data', type: 'objeto', required: true, description: 'Campos do tipo. Segredo em branco ao alterar mantém o valor salvo' },
+  {
+    name: 'data',
+    type: 'objeto',
+    required: true,
+    description: 'Campos do tipo, com os valores em texto (ex.: "port": "5432"). Segredo em branco ao alterar mantém o valor salvo',
+  },
 ];
 
 const erpBody: ApiField[] = [
@@ -85,7 +111,12 @@ const endpointBody: ApiField[] = [
 const erpClientBody: ApiField[] = [
   { name: 'clientId', type: 'uuid', required: true, description: 'Cliente; o usuário precisa ter acesso a ele' },
   { name: 'label', type: 'texto', description: 'Nome do cadastro, para ter mais de um por cliente (ex.: Homologação)' },
-  { name: 'values', type: 'objeto', required: true, description: 'Valores dos campos do ERP. Segredo em branco ao alterar mantém o valor salvo' },
+  {
+    name: 'values',
+    type: 'objeto',
+    required: true,
+    description: 'Valores dos campos do ERP, em texto (ex.: "porta": "8080"). Segredo em branco ao alterar mantém o valor salvo',
+  },
 ];
 
 const userBody = (creating: boolean): ApiField[] => [
@@ -103,17 +134,17 @@ const userBody = (creating: boolean): ApiField[] => [
   { name: 'clientIds', type: 'lista de uuid', description: 'Clientes que o usuário enxerga (administrador enxerga todos)' },
 ];
 
-export const API_REFERENCE: ApiGroup[] = [
+const GROUPS: ApiGroup[] = [
   {
     title: 'Conta e tokens',
     routes: [
-      { method: 'GET', path: '/health', profile: 'public', summary: 'Diz se o servidor está no ar.', response: ok },
+      { method: 'GET', path: '/health', profile: 'public', summary: 'Diz se o servidor está no ar.' },
       {
         method: 'GET',
         path: '/docs',
         profile: 'any',
         summary: 'Esta referência, em JSON.',
-        response: 'Lista de grupos: [{"title","routes": [{"method","path","profile","summary","params","query","body","response","errors","audited"}]}]',
+        response: 'A mesma lista de rotas desta referência, com os parâmetros, os exemplos e os erros de cada uma.',
       },
       {
         method: 'POST',
@@ -124,17 +155,19 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'email', type: 'texto', required: true, description: 'E-mail' },
           { name: 'password', type: 'texto', required: true, description: 'Senha' },
         ],
-        response: `${ok}, com o cookie sa_session, que vale SESSION_TTL_HOURS (12 horas por padrão)`,
+        response:
+          'O cookie sa_session vem no header Set-Cookie e vale SESSION_TTL_HOURS (12 horas por padrão). Mande-o nas chamadas seguintes no lugar do token.',
         errors: ['401: e-mail ou senha errados, usuário inativo ou bloqueado. 5 senhas erradas seguidas bloqueiam por 15 minutos'],
         audited: true,
       },
-      { method: 'POST', path: '/auth/logout', profile: 'any', summary: 'Encerra a sessão do cookie.', response: ok },
+      { method: 'POST', path: '/auth/logout', profile: 'any', summary: 'Encerra a sessão do cookie.' },
       {
         method: 'GET',
         path: '/auth/me',
         profile: 'any',
         summary: 'Usuário dono da sessão ou do token.',
-        response: '{"id","email","name","role","mustChangePassword","permissions": {"editWorkflows","executeWorkflows","editConnections","admin"}}',
+        response:
+          'permissions resume o que o perfil permite: editar fluxos, disparar fluxos, editar conexões e administrar. mustChangePassword true quer dizer que a senha inicial ainda não foi trocada.',
       },
       {
         method: 'POST',
@@ -145,7 +178,6 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'currentPassword', type: 'texto', required: true, description: 'Senha atual' },
           { name: 'newPassword', type: 'texto', required: true, description: 'Senha nova' },
         ],
-        response: ok,
         errors: ['400: senha atual incorreta ou senha nova fraca'],
         audited: true,
       },
@@ -154,7 +186,7 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/auth/tokens',
         profile: 'any',
         summary: 'Tokens de API do próprio usuário.',
-        response: '[{"id","name","created_at","last_used_at"}]',
+        response: 'last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). O token em si nunca volta.',
       },
       {
         method: 'POST',
@@ -162,7 +194,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Cria um token de API. Ele age como o usuário que o criou e não expira.',
         body: [{ name: 'name', type: 'texto', required: true, description: 'Nome do token, até 100 caracteres (ex.: ERP interno)' }],
-        response: '{"id","name","token"}. O token começa com sa_ e só aparece nesta resposta',
+        response: 'O token só aparece nesta resposta; guarde-o. O Info8n guarda apenas o hash dele.',
         audited: true,
       },
       {
@@ -171,7 +203,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Revoga um token do próprio usuário. Ele para de funcionar na hora.',
         params: [id('do token')],
-        response: ok,
         errors: ['404: o token não existe ou é de outro usuário'],
         audited: true,
       },
@@ -186,7 +217,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxos das pastas que o usuário enxerga.',
         response:
-          '[{"id","name","folder_id","folder_name","active","version","updated_at","updated_by_name","last_execution": {"id","status","createdAt"},"scheduled","callable"}]. scheduled indica gatilho de agendamento; callable, que pode ser chamado como subfluxo',
+          'scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou.',
       },
       {
         method: 'GET',
@@ -194,7 +225,8 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxo completo.',
         params: [id('do fluxo')],
-        response: '{"id","name","folder_id","active","version","updated_at","definition","issues"}. issues lista os problemas encontrados na validação',
+        response:
+          'definition traz os nós e as ligações do fluxo. issues lista os problemas encontrados na validação; com algum problema, o fluxo não pode ser ativado.',
         errors: ['404: não existe ou está numa pasta sem acesso'],
       },
       {
@@ -203,7 +235,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Cria um fluxo. Sem definition, ele nasce só com o Gatilho manual.',
         body: workflowBody(false),
-        response: 'O fluxo criado, como em GET /workflows/{id}',
         errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso'],
         audited: true,
       },
@@ -217,7 +248,7 @@ export const API_REFERENCE: ApiGroup[] = [
           ...workflowBody(true),
           { name: 'baseVersion', type: 'número', description: 'Versão que foi editada. Se outra pessoa salvou depois dela, a gravação é recusada' },
         ],
-        response: 'O fluxo salvo, com issues',
+        response: 'O fluxo salvo, com a version nova e os issues da validação.',
         errors: [
           '400: fluxo ativo com problemas, cron inválido, conexão ou subfluxo que não existe, ou o fluxo chama ele mesmo',
           '409: outra pessoa salvou depois da baseVersion',
@@ -230,7 +261,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui o fluxo e desliga o agendamento dele.',
         params: [id('do fluxo')],
-        response: ok,
         errors: ['400: outros fluxos chamam este como subfluxo (a mensagem diz quais)'],
         audited: true,
       },
@@ -240,7 +270,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Liga o agendamento do fluxo.',
         params: [id('do fluxo')],
-        response: '{"ok": true, "active": true}',
         errors: ['400: o fluxo não tem gatilho de agendamento, tem problemas ou o cron é inválido'],
         audited: true,
       },
@@ -250,7 +279,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Desliga o agendamento do fluxo.',
         params: [id('do fluxo')],
-        response: '{"ok": true, "active": false}',
         audited: true,
       },
       {
@@ -259,7 +287,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Cria uma cópia "(cópia)" na mesma pasta, desativada.',
         params: [id('do fluxo')],
-        response: 'A cópia, como em GET /workflows/{id}',
         audited: true,
       },
       {
@@ -277,7 +304,7 @@ export const API_REFERENCE: ApiGroup[] = [
           },
           { name: 'definition', type: 'objeto', description: 'Usado pelo editor da tela para rodar um fluxo ainda não salvo. Exige o perfil Editor' },
         ],
-        response: '{"executionId"}',
+        response: 'Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o resultado.',
         errors: ['404: o fluxo não existe ou está numa pasta sem acesso'],
       },
       {
@@ -286,7 +313,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxos que chamam este como subfluxo.',
         params: [id('do fluxo')],
-        response: '[{"id","name"}]',
       },
       {
         method: 'GET',
@@ -294,7 +320,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Últimas 200 versões salvas do fluxo.',
         params: [id('do fluxo')],
-        response: '[{"version","name","created_at","created_by_name"}]',
+        response: 'Da versão mais nova para a mais antiga.',
       },
       {
         method: 'GET',
@@ -302,7 +328,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Uma versão salva do fluxo.',
         params: [id('do fluxo'), { name: 'version', type: 'número', required: true, description: 'Número da versão' }],
-        response: '{"version","name","definition","created_at"}',
         errors: ['404: versão não existe'],
       },
       {
@@ -311,7 +336,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Arquivo de exportação do fluxo, o mesmo que a tela baixa.',
         params: [id('do fluxo')],
-        response: '{"name","definition","exportedAt"}',
+        response: 'O mesmo JSON, com o folderId da pasta de destino, serve de corpo para POST /workflows/import.',
       },
       {
         method: 'POST',
@@ -319,7 +344,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Importa um fluxo exportado. Ele entra desativado.',
         body: workflowBody(true),
-        response: 'O fluxo criado, como em GET /workflows/{id}',
         errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso'],
         audited: true,
       },
@@ -333,7 +357,8 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'folderId', type: 'uuid', required: true, description: 'Pasta onde os fluxos entram' },
           { name: 'data', type: 'objeto ou lista', required: true, description: 'O JSON exportado do n8n, com um fluxo ou uma lista (até 50 MB)' },
         ],
-        response: '[{"n8nId","name","status" (imported ou skipped),"id","wasActive","warnings": [{"node","message"}]}]',
+        response:
+          'Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.',
         errors: ['400: o arquivo não é uma exportação do n8n'],
         audited: true,
       },
@@ -342,7 +367,8 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/node-types',
         profile: 'any',
         summary: 'Tipos de nó disponíveis no editor, com os parâmetros de cada um.',
-        response: '[{"type","displayName","description","group","inputs","outputs","inputNames","outputNames","hidden","defaultTimeoutMs","properties"}]',
+        response:
+          'Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer.',
       },
       {
         method: 'POST',
@@ -350,12 +376,17 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Calcula uma expressão como a prévia do editor.',
         body: [
-          { name: 'value', type: 'texto', required: true, description: 'Texto com {{ expressões }}' },
+          {
+            name: 'value',
+            type: 'texto',
+            required: true,
+            description: 'Texto começando com =, como no modo Expressão (ex.: =Total: {{ $json.preco }}). Sem o =, volta o texto como está',
+          },
           { name: 'input', type: 'lista', description: 'Itens de entrada: [{"json": {...}}]' },
           { name: 'nodeOutputs', type: 'objeto', description: 'Saída de cada nó pelo nome, para $node["Nome"]' },
           { name: 'itemIndex', type: 'número', description: 'Item usado como $json (padrão 0)' },
         ],
-        response: '{"result"} ou {"error"}',
+        response: 'Volta {"result"} com o valor calculado ou, se a expressão falhar, {"error"} com o motivo, também com status 200.',
       },
     ],
   },
@@ -379,24 +410,23 @@ export const API_REFERENCE: ApiGroup[] = [
           limit,
         ],
         response:
-          '[{"id","workflow_id","workflow_name","mode","status","created_at","started_at","finished_at","duration_ms","error_message","error_node","triggered_by_name","data_size","parent_execution_id"}]',
+          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados).',
       },
       {
         method: 'GET',
         path: '/executions/waiting',
         profile: 'any',
         summary: 'Fluxos agendados que já deviam ter começado e esperam vaga no worker.',
-        response: '[{"workflowId","workflowName","dueAt"}]',
+        response: 'dueAt é quando o fluxo devia ter começado. A lista vem vazia quando nenhum fluxo está esperando.',
       },
       {
         method: 'GET',
         path: '/executions/{id}',
         profile: 'any',
-        summary:
-          'Execução completa. Consulte até status sair de queued ou running. O resultado do fluxo é o output do último item de runs.',
+        summary: 'Execução completa, com os dados de cada nó. Consulte até status sair de queued ou running.',
         params: [id('da execução')],
         response:
-          '{"id","workflow_id","workflow_name","folder_id","workflow_version","mode","status","triggered_by","triggered_by_name","retry_of","parent_execution_id","created_at","started_at","finished_at","input","definition","summary","runs","error_message","error_node","error","data_size","children"}. runs traz, por nó executado, {"nodeName","status","input","output"}, com output sendo uma lista por saída do nó e cada saída uma lista de itens {"json"}. runs vem vazio quando os dados não foram guardados (agendado com sucesso, se KEEP_SUCCESS_DATA estiver desligado). children lista os subfluxos chamados',
+          'runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.',
         errors: ['404: não existe ou é de um fluxo numa pasta sem acesso'],
       },
       {
@@ -405,7 +435,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'operator',
         summary: 'Cancela uma execução na fila ou em andamento.',
         params: [id('da execução')],
-        response: ok,
         errors: ['400: a execução já terminou'],
         audited: true,
       },
@@ -415,7 +444,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'operator',
         summary: 'Roda de novo com a mesma definição e a mesma entrada.',
         params: [id('da execução')],
-        response: '{"executionId"} da nova execução',
+        response: 'executionId é a nova execução, com mode retry e retry_of apontando para a original.',
         errors: ['400: a execução ainda está em andamento'],
         audited: true,
       },
@@ -436,7 +465,7 @@ export const API_REFERENCE: ApiGroup[] = [
           limit,
         ],
         response:
-          '[{"id","at","execution_id","workflow_id","workflow_name","node_name","connection_id","connection_name","client_id","client_name","db_type","operation","sql","params","rows","rows_affected","duration_ms","error","triggered_by_name"}]',
+          'id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).',
       },
     ],
   },
@@ -448,14 +477,15 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/connection-types',
         profile: 'any',
         summary: 'Tipos de conexão e os campos de cada um.',
-        response: '[{"type","displayName","testable","fields": [{"name","displayName","secret","required","default","options"}]}]',
+        response:
+          'Campos com secret true são guardados criptografados e o valor deles nunca volta. options, quando existe, lista os valores aceitos.',
       },
       {
         method: 'GET',
         path: '/connections',
         profile: 'any',
         summary: 'Conexões sem cliente e as dos clientes que o usuário enxerga. Segredos nunca voltam.',
-        response: '[{"id","name","type","typeName","clientId","clientName","data","updatedAt","updatedByName"}]',
+        response: 'Em data, os campos secretos vêm como •••••• quando estão preenchidos e vazios quando não estão.',
       },
       {
         method: 'GET',
@@ -463,7 +493,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Uma conexão, sem os segredos.',
         params: [id('da conexão')],
-        response: 'Como um item de GET /connections',
         errors: ['404: não existe ou é de um cliente sem acesso'],
       },
       {
@@ -472,7 +501,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxos que usam a conexão.',
         params: [id('da conexão')],
-        response: '[{"id","name","active"}]',
       },
       {
         method: 'POST',
@@ -480,7 +508,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Cria uma conexão. Os segredos são guardados criptografados.',
         body: connectionBody,
-        response: 'A conexão criada, como em GET /connections/{id}',
         errors: ['400: tipo desconhecido ou campo obrigatório vazio', '403: cliente sem acesso'],
         audited: true,
       },
@@ -491,7 +518,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Altera uma conexão. Não troca o tipo. A auditoria diz quais segredos mudaram, sem os valores.',
         params: [id('da conexão')],
         body: connectionBody,
-        response: 'A conexão salva',
         errors: ['400: troca de tipo ou campo obrigatório vazio', '403: cliente sem acesso'],
         audited: true,
       },
@@ -501,7 +527,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui uma conexão.',
         params: [id('da conexão')],
-        response: ok,
         errors: ['409: fluxos usam a conexão (a mensagem diz quais)'],
         audited: true,
       },
@@ -515,7 +540,8 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'data', type: 'objeto', required: true, description: 'Campos do tipo' },
           { name: 'id', type: 'uuid', description: 'Conexão já salva; os segredos em branco usam os valores dela' },
         ],
-        response: '{"ok": true, "durationMs"} ou {"ok": false, "message"}',
+        response:
+          'Uma falha no teste também volta com status 200, com ok false e o motivo em message (ex.: database "nao_existe" does not exist).',
         errors: ['400: o tipo é testado no próprio nó, ou falta campo obrigatório'],
       },
     ],
@@ -528,7 +554,7 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/erps',
         profile: 'any',
         summary: 'ERPs cadastrados.',
-        response: '[{"id","name","baseUrl","authType","authHeader","clientFields","notes","updatedAt","endpoints","clients"}]. endpoints e clients são contagens',
+        response: 'endpoints e clients são quantos endpoints e quantos clientes o ERP tem.',
       },
       {
         method: 'GET',
@@ -536,8 +562,7 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'any',
         summary: 'Um ERP com os endpoints e os clientes cadastrados nele (só os clientes que o usuário enxerga, sem os segredos).',
         params: [id('do ERP')],
-        response:
-          '{"id","name","baseUrl","authType","authHeader","clientFields","notes","updatedAt","endpoints": [{"id","name","description","method","path","headers","query","bodyType","body","variables","usesAuth","updatedAt"}],"clients": [{"id","clientId","clientName","label","values","updatedAt"}]}',
+        response: 'Nos clientes, os valores dos campos secretos vêm como ••••••.',
       },
       {
         method: 'POST',
@@ -545,7 +570,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Cadastra um ERP.',
         body: erpBody,
-        response: 'O ERP criado, sem as listas',
         errors: ['409: já existe um ERP com esse nome'],
         audited: true,
       },
@@ -556,7 +580,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Altera um ERP.',
         params: [id('do ERP')],
         body: erpBody,
-        response: 'O ERP salvo, sem as listas',
         audited: true,
       },
       {
@@ -565,7 +588,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui um ERP e os endpoints dele.',
         params: [id('do ERP')],
-        response: ok,
         errors: ['409: o ERP tem clientes cadastrados'],
         audited: true,
       },
@@ -576,7 +598,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Cadastra um endpoint no ERP.',
         params: [id('do ERP')],
         body: endpointBody,
-        response: '{"id"}',
         errors: ['409: o ERP já tem um endpoint com esse nome'],
         audited: true,
       },
@@ -587,7 +608,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Altera um endpoint.',
         params: [id('do endpoint')],
         body: endpointBody,
-        response: ok,
         audited: true,
       },
       {
@@ -596,7 +616,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui um endpoint.',
         params: [id('do endpoint')],
-        response: ok,
         errors: ['409: fluxos usam o endpoint (a mensagem diz quais)'],
         audited: true,
       },
@@ -607,7 +626,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Cadastra um cliente no ERP. Os segredos são guardados criptografados.',
         params: [id('do ERP')],
         body: erpClientBody,
-        response: '{"id"}',
         errors: ['403: cliente sem acesso', '409: o cliente já está no ERP com esse label'],
         audited: true,
       },
@@ -618,7 +636,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Altera o cadastro de um cliente no ERP.',
         params: [id('do cadastro')],
         body: erpClientBody,
-        response: ok,
         errors: ['403: cliente sem acesso'],
         audited: true,
       },
@@ -628,7 +645,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui o cadastro de um cliente no ERP.',
         params: [id('do cadastro')],
-        response: ok,
         errors: ['409: fluxos usam o cadastro (a mensagem diz quais)'],
         audited: true,
       },
@@ -637,7 +653,8 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/api-catalog',
         profile: 'any',
         summary: 'O que o nó HTTP Request oferece no modo API cadastrada.',
-        response: '{"clients": [{"id","erpId","erpName","clientName","label"}], "endpoints": [{"id","erpId","name","description","method","path","variables"}]}',
+        response:
+          'clients são os cadastros de clientes nos ERPs e endpoints, os endpoints de todos os ERPs, ligados pelo erpId. Endpoints que usam a autenticação do ERP (bearer ou header) ganham a variável token, que recebe o token do nó de login.',
       },
     ],
   },
@@ -649,7 +666,8 @@ export const API_REFERENCE: ApiGroup[] = [
         path: '/users',
         profile: 'admin',
         summary: 'Usuários.',
-        response: '[{"id","email","name","role","active","locked_until","created_at","folder_ids","client_ids"}]',
+        response:
+          'locked_until é até quando o usuário fica bloqueado por errar a senha (null se não está bloqueado). Para administradores, folder_ids e client_ids vêm vazios, porque eles enxergam tudo.',
       },
       {
         method: 'POST',
@@ -657,7 +675,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'admin',
         summary: 'Cria um usuário.',
         body: userBody(true),
-        response: 'O usuário criado, como em GET /users',
         errors: ['400: senha fraca ou ausente', '409: já existe um usuário com esse e-mail'],
         audited: true,
       },
@@ -668,7 +685,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Altera um usuário. Desativar ou redefinir a senha derruba as sessões dele.',
         params: [id('do usuário')],
         body: userBody(false),
-        response: 'O usuário salvo',
         errors: ['400: senha fraca, ou o administrador tirando o próprio acesso'],
         audited: true,
       },
@@ -678,17 +694,15 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'admin',
         summary: 'Desbloqueia um usuário que errou a senha demais.',
         params: [id('do usuário')],
-        response: ok,
         audited: true,
       },
-      { method: 'GET', path: '/folders', profile: 'any', summary: 'Pastas que o usuário enxerga.', response: '[{"id","name"}]' },
+      { method: 'GET', path: '/folders', profile: 'any', summary: 'Pastas que o usuário enxerga.' },
       {
         method: 'POST',
         path: '/folders',
         profile: 'admin',
         summary: 'Cria uma pasta.',
         body: [{ name: 'name', type: 'texto', required: true, description: 'Nome (único)' }],
-        response: '{"id","name"}',
         errors: ['409: já existe uma pasta com esse nome'],
         audited: true,
       },
@@ -699,7 +713,6 @@ export const API_REFERENCE: ApiGroup[] = [
         summary: 'Renomeia uma pasta.',
         params: [id('da pasta')],
         body: [{ name: 'name', type: 'texto', required: true, description: 'Nome novo' }],
-        response: '{"id","name"}',
         audited: true,
       },
       {
@@ -708,11 +721,10 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'admin',
         summary: 'Exclui uma pasta vazia.',
         params: [id('da pasta')],
-        response: ok,
         errors: ['409: a pasta tem fluxos'],
         audited: true,
       },
-      { method: 'GET', path: '/clients', profile: 'any', summary: 'Clientes que o usuário enxerga.', response: '[{"id","name","notes"}]' },
+      { method: 'GET', path: '/clients', profile: 'any', summary: 'Clientes que o usuário enxerga.' },
       {
         method: 'POST',
         path: '/clients',
@@ -722,7 +734,6 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'name', type: 'texto', required: true, description: 'Nome (único)' },
           { name: 'notes', type: 'texto', description: 'Observações' },
         ],
-        response: '{"id","name","notes"}',
         errors: ['409: já existe um cliente com esse nome'],
         audited: true,
       },
@@ -736,7 +747,6 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'name', type: 'texto', required: true, description: 'Nome' },
           { name: 'notes', type: 'texto', description: 'Observações' },
         ],
-        response: '{"id","name","notes"}',
         audited: true,
       },
       {
@@ -745,7 +755,6 @@ export const API_REFERENCE: ApiGroup[] = [
         profile: 'admin',
         summary: 'Exclui um cliente sem conexões e sem cadastro em ERP.',
         params: [id('do cliente')],
-        response: ok,
         errors: ['409: o cliente tem conexões ou está cadastrado em um ERP'],
         audited: true,
       },
@@ -763,8 +772,31 @@ export const API_REFERENCE: ApiGroup[] = [
           { name: 'before', type: 'número', description: 'Para paginar: id da última linha recebida' },
           limit,
         ],
-        response: '[{"id","at","action","entity_type","entity_id","entity_name","before","after","ip","user_name","user_email"}]',
+        response:
+          'before e after são o registro antes e depois da mudança, sem os segredos. id vem como texto; para a próxima página, mande o id da última linha em before.',
       },
     ],
   },
 ];
+
+/** A referência completa: cada rota com o exemplo de api-examples.ts e o comando curl dele. */
+export const API_REFERENCE: ApiGroup[] = GROUPS.map((group) => ({
+  ...group,
+  routes: group.routes.map((route) => {
+    const example = API_EXAMPLES[`${route.method} ${route.path}`];
+    return example ? { ...route, example: { ...example, curl: curlCommand(route, example) } } : route;
+  }),
+}));
+
+/** Comando curl do exemplo, com $INFO8N no lugar do endereço do servidor e $TOKEN no lugar do token. */
+export function curlCommand(route: ApiRoute, example: ApiExample): string {
+  const url = `"$INFO8N/api${example.path ?? route.path}"`;
+  const parts = [route.method === 'GET' ? `curl ${url}` : `curl -X ${route.method} ${url}`];
+  if (example.session === 'send') parts.push('-b cookies.txt');
+  else if (route.profile !== 'public') parts.push('-H "Authorization: Bearer $TOKEN"');
+  if (example.body !== undefined) {
+    parts.push('-H "Content-Type: application/json"', `-d '${formatJson(example.body, 90).replaceAll("'", "'\\''")}'`);
+  }
+  if (example.session === 'save') parts.push('-c cookies.txt');
+  return parts.join(' \\\n  ');
+}

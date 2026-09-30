@@ -1,5 +1,6 @@
 import type { ApiEndpointData, ApiVariable, JsonObject } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
+import { fieldText } from './connection-types.js';
 import { decryptJson } from './crypto.js';
 
 export interface ClientField {
@@ -28,7 +29,7 @@ export function mergeValues(fields: ClientField[], incoming: Record<string, unkn
   const out: JsonObject = {};
   for (const f of fields) {
     const raw = incoming[f.name];
-    const value = typeof raw === 'string' ? raw : '';
+    const value = fieldText(raw);
     out[f.name] = f.secret && value === '' ? (existing[f.name] ?? '') : value;
   }
   return out;
