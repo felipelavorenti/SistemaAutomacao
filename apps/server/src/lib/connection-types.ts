@@ -19,8 +19,14 @@ export interface ConnectionTypeDescription {
   displayName: string;
   /** Tipos que têm o botão "Testar conexão". */
   testable?: boolean;
+  /** Tipos que entram na conta com o botão "Conectar com Google". */
+  oauth?: 'google';
   fields: ConnectionField[];
 }
+
+/** Dados que o login com Google grava na conexão; não aparecem no formulário. */
+export const OAUTH_REFRESH_TOKEN = 'oauthRefreshToken';
+export const OAUTH_ACCOUNT = 'oauthAccount';
 
 const yesNo = [
   { name: 'Sim', value: 'true' },
@@ -150,6 +156,23 @@ export const connectionTypes: ConnectionTypeDescription[] = [
       },
     ],
   },
+  {
+    type: 'gmailOAuth2',
+    displayName: 'Gmail (login com Google)',
+    testable: true,
+    oauth: 'google',
+    fields: [
+      {
+        name: 'clientId',
+        displayName: 'Client ID',
+        secret: false,
+        required: true,
+        placeholder: '1234-abc.apps.googleusercontent.com',
+        hint: 'Do app OAuth criado no Google Cloud (APIs e serviços > Credenciais).',
+      },
+      { name: 'clientSecret', displayName: 'Client secret', secret: true, required: true },
+    ],
+  },
 ];
 
 export function getConnectionType(type: string): ConnectionTypeDescription | undefined {
@@ -163,6 +186,7 @@ export function publicData(type: ConnectionTypeDescription, data: JsonObject): J
     const value = data[field.name];
     out[field.name] = field.secret ? (value ? '••••••' : '') : (value ?? '');
   }
+  if (type.oauth) out[OAUTH_ACCOUNT] = data[OAUTH_REFRESH_TOKEN] ? (data[OAUTH_ACCOUNT] ?? '') : '';
   return out;
 }
 
@@ -183,6 +207,11 @@ export function mergeData(type: ConnectionTypeDescription, incoming: Record<stri
     const raw = incoming[field.name];
     const value = fieldText(raw);
     out[field.name] = field.secret && value === '' ? (existing[field.name] ?? '') : value;
+  }
+  // O acesso dado pelo Google vale para o app (client ID) que pediu; trocar o app exige conectar de novo.
+  if (type.oauth && existing[OAUTH_REFRESH_TOKEN] && out.clientId === existing.clientId) {
+    out[OAUTH_REFRESH_TOKEN] = existing[OAUTH_REFRESH_TOKEN];
+    out[OAUTH_ACCOUNT] = existing[OAUTH_ACCOUNT] ?? '';
   }
   return out;
 }

@@ -4,6 +4,7 @@ import { ifNode } from './nodes/if.js';
 import { manualTrigger, scheduleTrigger } from './nodes/triggers.js';
 import { aggregate, merge, splitOut } from './nodes/data.js';
 import { clickup } from './nodes/clickup.js';
+import { gmail } from './nodes/gmail.js';
 import { database } from './nodes/database.js';
 import { editFields } from './nodes/edit-fields.js';
 import { metabase } from './nodes/metabase.js';
@@ -38,6 +39,7 @@ export const defaultRegistry = new NodeRegistry([
   database,
   metabase,
   clickup,
+  gmail,
   executeWorkflow,
   ifNode,
   loop,

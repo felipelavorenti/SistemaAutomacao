@@ -45,7 +45,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 **packages/engine/src**
 
 - `executor.ts`: executa um fluxo nó a nó, com itens, tentativas, tempo limite e limite de execuções de nós.
-- `nodes/`: um arquivo por grupo de nós, registrados em `registry.ts`. Exemplos: `http-request.ts`, `database.ts`, `flow.ts` (Loop, Stop and Error, Code, Chamado por outro fluxo, Execute Workflow), `data.ts` (Split Out, Aggregate, Merge), `edit-fields.ts`, `metabase.ts`, `clickup.ts`, `triggers.ts`.
+- `nodes/`: um arquivo por grupo de nós, registrados em `registry.ts`. Exemplos: `http-request.ts`, `database.ts`, `flow.ts` (Loop, Stop and Error, Code, Chamado por outro fluxo, Execute Workflow), `data.ts` (Split Out, Aggregate, Merge), `edit-fields.ts`, `metabase.ts`, `clickup.ts`, `gmail.ts` (com o login do Google em `google.ts`), `triggers.ts`.
 - `expressions/`: `template.ts` separa texto e `{{ }}`; `sandbox.ts` avalia no isolate V8.
 - `python/runner.ts`: pool de processos com Pyodide para o nó Code em Python.
 - `database/`: drivers de SQL Server, Oracle e Postgres, e parâmetros nomeados.
@@ -58,7 +58,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 - `index.ts`: sobe a API e, por padrão, o worker no mesmo processo. `worker-main.ts` roda só o worker.
 - `config.ts`: lê as variáveis de ambiente.
 - `api-reference.ts` e `api-examples.ts`: a referência da API e um exemplo de chamada e de resposta de cada rota. `api-markdown.ts` monta com eles a parte das rotas de `docs/api.md` (`npm run docs:api -w @sa/server`).
-- `routes/`: `auth`, `workflows`, `executions`, `connections`, `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
+- `routes/`: `auth`, `workflows`, `executions`, `connections`, `oauth` (login com Google das conexões do Gmail), `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
 - `executions/`: `queue.ts` (fila e agendamentos no BullMQ), `worker.ts` (roda as execuções), `store.ts` (grava resultado e dados comprimidos).
 - `lib/`: `auth.ts` (senha, sessão, bloqueio), `permissions.ts` (perfis), `crypto.ts` (AES-256-GCM), `audit.ts`, `connection-types.ts`.
 - `db/migrations.ts`: cria e atualiza as tabelas ao subir.
@@ -165,6 +165,17 @@ O acesso é por login e senha, e cada perfil libera um conjunto de ações. Past
 - A API nunca devolve esses segredos para as telas.
 - Sem a mesma `ENCRYPTION_KEY`, as conexões salvas não podem ser lidas. Guarde-a junto com o backup do banco.
 
+**Login com Google (Gmail)**
+
+As conexões do tipo `gmailOAuth2` usam OAuth 2.0 com o app que a empresa cria no Google Cloud (passo a passo no manual de uso, em Conectar o Gmail).
+
+1. A tela chama `POST /api/connections/{id}/oauth/google/start`, que devolve o endereço do Google com `access_type=offline`, `prompt=consent` e o escopo `https://www.googleapis.com/auth/gmail.modify` (ler, enviar, rascunhos, etiquetas e lixeira; não apaga de vez).
+2. O `state` leva a conexão, o usuário, o endereço de retorno e a validade (15 minutos), assinados com HMAC-SHA256 pela `ENCRYPTION_KEY`. Por isso o retorno `GET /api/oauth/google/callback` é público: ele confere a assinatura, carrega o usuário do state e exige que ele ainda possa editar conexões e enxergar o cliente da conexão.
+3. O servidor troca o código pelo refresh token em `oauth2.googleapis.com/token`, lê o e-mail da conta em `/gmail/v1/users/me/profile` e grava os dois na conexão (`oauthRefreshToken` e `oauthAccount`), criptografados como os outros campos. A auditoria registra a ação `connect`, com a conta antes e depois, sem o token.
+4. O endereço de retorno é `PUBLIC_URL` + `/api/oauth/google/callback` quando `PUBLIC_URL` existe. Sem ela, é o endereço pelo qual a tela foi aberta, com IP trocado por `localhost`, porque o Google não aceita IP. Nesse caso a tela mostra um campo para colar o endereço da página de retorno, enviado para `POST /api/connections/{id}/oauth/google/complete`.
+5. Na execução, o nó Gmail troca o refresh token por um access token (1 hora) e o guarda em memória no worker até 5 minutos antes de vencer. `invalid_grant` vira a mensagem pedindo para conectar de novo.
+6. A API devolve só `oauthAccount`; o refresh token nunca sai do servidor. Salvar a conexão mantém a autorização enquanto o Client ID não muda.
+
 **Auditoria**
 
 - A tabela `audit_log` registra quem criou, alterou, ativou, desativou, excluiu ou executou cada coisa, com IP, antes e depois, sem os segredos.
@@ -231,6 +242,7 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 | `WORKER_CONCURRENCY` | Não | 5 | Execuções em paralelo por worker |
 | `RUN_WORKER_IN_PROCESS` | Não | true | false = worker em processo separado |
 | `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS |
+| `PUBLIC_URL` | Não | endereço aberto na tela | Endereço pelo qual o Info8n é acessado (ex.: `http://info8n.empresa.local:3000`). Define o endereço de retorno do login com Google; precisa ser localhost ou um domínio, não IP |
 
 `DATABASE_URL` e `REDIS_URL` são montadas pelo `docker-compose.yml`. Só precisam ser definidas quando a plataforma roda fora do Docker.
 

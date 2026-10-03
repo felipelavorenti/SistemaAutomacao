@@ -14,6 +14,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { dbCommandRoutes } from './routes/db-commands.js';
 import { connectionRoutes } from './routes/connections.js';
 import { executionRoutes } from './routes/executions.js';
+import { OAUTH_CALLBACK_PATH, oauthRoutes } from './routes/oauth.js';
 import { workflowRoutes } from './routes/workflows.js';
 
 export interface AppDeps {
@@ -32,7 +33,7 @@ declare module 'fastify' {
   }
 }
 
-const PUBLIC_ROUTES = new Set(['/api/auth/login', '/api/health']);
+const PUBLIC_ROUTES = new Set(['/api/auth/login', '/api/health', OAUTH_CALLBACK_PATH]);
 const ALLOWED_WITH_PASSWORD_CHANGE = new Set(['/api/auth/me', '/api/auth/change-password', '/api/auth/logout']);
 
 export function currentUser(request: FastifyRequest): CurrentUser {
@@ -91,6 +92,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(executionRoutes(deps), { prefix: '/api' });
   await app.register(catalogRoutes(deps), { prefix: '/api' });
   await app.register(dbCommandRoutes(deps), { prefix: '/api' });
+  await app.register(oauthRoutes(deps), { prefix: '/api' });
 
   if (deps.config.webDistDir) {
     await app.register(fastifyStatic, { root: deps.config.webDistDir });

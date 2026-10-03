@@ -193,6 +193,8 @@ export interface ConnectionType {
   type: string;
   displayName: string;
   testable?: boolean;
+  /** Conectado pelo login com Google (Gmail). */
+  oauth?: 'google';
   fields: ConnectionField[];
 }
 

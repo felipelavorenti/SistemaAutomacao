@@ -478,14 +478,15 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Tipos de conexão e os campos de cada um.',
         response:
-          'Campos com secret true são guardados criptografados e o valor deles nunca volta. options, quando existe, lista os valores aceitos.',
+          'Campos com secret true são guardados criptografados e o valor deles nunca volta. options, quando existe, lista os valores aceitos. oauth: "google" marca os tipos conectados pelo login com Google (Gmail), que além dos campos precisam de POST /connections/{id}/oauth/google/start.',
       },
       {
         method: 'GET',
         path: '/connections',
         profile: 'any',
         summary: 'Conexões sem cliente e as dos clientes que o usuário enxerga. Segredos nunca voltam.',
-        response: 'Em data, os campos secretos vêm como •••••• quando estão preenchidos e vazios quando não estão.',
+        response:
+          'Em data, os campos secretos vêm como •••••• quando estão preenchidos e vazios quando não estão. Nas conexões do Gmail, data.oauthAccount é o e-mail da conta do Google conectada, ou vazio enquanto ninguém clicou em Conectar com Google.',
       },
       {
         method: 'GET',
@@ -543,6 +544,64 @@ const GROUPS: ApiGroup[] = [
         response:
           'Uma falha no teste também volta com status 200, com ok false e o motivo em message (ex.: database "nao_existe" does not exist).',
         errors: ['400: o tipo é testado no próprio nó, ou falta campo obrigatório'],
+      },
+      {
+        method: 'GET',
+        path: '/oauth/google/redirect-uri',
+        profile: 'any',
+        summary: 'Endereço de retorno que precisa estar cadastrado no app OAuth do Google Cloud para o login com Google das conexões do Gmail.',
+        response:
+          'Vem de PUBLIC_URL quando a variável existe. Sem ela, usa o endereço pelo qual o Info8n foi aberto, trocando IP por localhost, porque o Google só aceita retorno para localhost ou para um domínio.',
+      },
+      {
+        method: 'POST',
+        path: '/connections/{id}/oauth/google/start',
+        profile: 'editor',
+        summary: 'Começa o login com Google de uma conexão do Gmail já salva: devolve o endereço do Google onde a pessoa autoriza o acesso.',
+        params: [id('da conexão')],
+        response:
+          'Abra url no navegador. O pedido vale 15 minutos e só pode ser concluído pelo mesmo usuário. Depois de autorizar, o Google manda o navegador para redirectUri.',
+        errors: [
+          '400: a conexão não usa login com Google, ou falta salvar o client ID e o client secret',
+          '404: não existe ou é de um cliente sem acesso',
+        ],
+      },
+      {
+        method: 'POST',
+        path: '/connections/{id}/oauth/google/complete',
+        profile: 'editor',
+        summary:
+          'Conclui o login com Google colando o endereço da página para onde o Google mandou. Serve quando o Info8n é aberto por IP e o retorno foi para localhost, onde ele não roda.',
+        params: [id('da conexão')],
+        body: [
+          {
+            name: 'url',
+            type: 'texto',
+            required: true,
+            description: 'Endereço completo da página de retorno, com code e state (ex.: http://localhost:3000/api/oauth/google/callback?state=...&code=...)',
+          },
+        ],
+        response: 'account é o e-mail da conta do Google conectada. O acesso fica guardado criptografado na conexão e nunca volta pela API.',
+        errors: [
+          '400: endereço sem code e state, pedido vencido ou de outra conexão, autorização cancelada, ou o Google não aceitou o código (a mensagem traz o motivo)',
+          '403: o pedido foi começado por outro usuário',
+        ],
+        audited: true,
+      },
+      {
+        method: 'GET',
+        path: '/oauth/google/callback',
+        profile: 'public',
+        summary:
+          'Retorno do Google depois da autorização. Quem chama é o navegador, sem sessão: a conexão e o usuário vêm do state assinado. Grava o acesso na conexão e volta para a tela de conexões.',
+        query: [
+          { name: 'code', type: 'texto', description: 'Código da autorização, enviado pelo Google' },
+          { name: 'state', type: 'texto', description: 'Pedido assinado criado por POST /connections/{id}/oauth/google/start' },
+          { name: 'error', type: 'texto', description: 'Enviado pelo Google quando a autorização falha ou é cancelada (ex.: access_denied)' },
+        ],
+        response:
+          'Responde com redirecionamento (302) para /conexoes?google=ok&conexao={id}&conta={e-mail}, ou para /conexoes?google=erro&mensagem={motivo} quando algo falha.',
+        audited: true,
       },
     ],
   },

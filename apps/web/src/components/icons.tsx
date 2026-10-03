@@ -158,6 +158,12 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M12 7.5l-5.5 4.7-2.5-2.9L12 3l8 6.3-2.5 2.9z" />
     </>
   ),
+  gmail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3.5 6.5L12 13l8.5-6.5" />
+    </>
+  ),
   unknown: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -184,6 +190,7 @@ export const NODE_COLOR: Record<string, string> = {
   database: '#336791',
   metabase: '#509ee3',
   clickup: '#7b68ee',
+  gmail: '#ea4335',
 };
 
 export function Icon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {

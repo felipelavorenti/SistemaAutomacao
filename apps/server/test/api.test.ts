@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { parseKey, type Config } from '../src/config.js';
 import { createDb, migrate, type Db } from '../src/db/db.js';
@@ -482,6 +482,90 @@ describe.skipIf(!available)('API', () => {
 
     expect((await call(viewer, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: sub })).status).toBe(403);
     expect((await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: { nome: 'x' } })).body.error).toMatch(/não parece um fluxo/);
+  });
+
+  it('conecta a conta do Google pelo retorno e pelo endereço colado', async () => {
+    const created = await call(editor, 'POST', '/api/connections', {
+      name: 'Gmail financeiro',
+      type: 'gmailOAuth2',
+      clientId: null,
+      data: { clientId: '1234-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-segredo' },
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(200);
+    expect(created.body.data).toEqual({ clientId: '1234-abc.apps.googleusercontent.com', clientSecret: '••••••', oauthAccount: '' });
+    const gmailId = created.body.id;
+
+    const redirect = await call(editor, 'GET', '/api/oauth/google/redirect-uri');
+    expect(redirect.body.redirectUri).toBe('http://localhost/api/oauth/google/callback');
+
+    expect((await call(viewer, 'POST', `/api/connections/${gmailId}/oauth/google/start`)).status).toBe(403);
+    const start = await call(editor, 'POST', `/api/connections/${gmailId}/oauth/google/start`);
+    expect(start.status, JSON.stringify(start.body)).toBe(200);
+    const authUrl = new URL(start.body.url);
+    expect(authUrl.origin + authUrl.pathname).toBe('https://accounts.google.com/o/oauth2/v2/auth');
+    expect(authUrl.searchParams.get('client_id')).toBe('1234-abc.apps.googleusercontent.com');
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('http://localhost/api/oauth/google/callback');
+    const state = authUrl.searchParams.get('state')!;
+
+    // O Google falso: troca o código e devolve o e-mail da conta.
+    const tokenBodies: string[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === 'https://oauth2.googleapis.com/token') {
+        tokenBodies.push(String(init?.body));
+        const code = new URLSearchParams(String(init?.body)).get('code');
+        if (code === 'vencido') return Response.json({ error: 'invalid_grant', error_description: 'Bad Request' }, { status: 400 });
+        return Response.json({ access_token: 'ya29.acesso', refresh_token: '1//refresh-secreto', expires_in: 3599 });
+      }
+      if (url.endsWith('/gmail/v1/users/me/profile')) return Response.json({ emailAddress: 'financeiro@empresa.com' });
+      throw new Error(`fetch inesperado: ${url}`);
+    });
+    try {
+      // Endereço colado (Info8n aberto por IP).
+      const tampered = await call(editor, 'POST', `/api/connections/${gmailId}/oauth/google/complete`, {
+        url: `http://localhost/api/oauth/google/callback?code=abc&state=${state}x`,
+      });
+      expect(tampered.status).toBe(400);
+      const bad = await call(editor, 'POST', `/api/connections/${gmailId}/oauth/google/complete`, {
+        url: `http://localhost/api/oauth/google/callback?code=vencido&state=${state}`,
+      });
+      expect(bad.status).toBe(400);
+      expect(bad.body.error).toBe('O Google não aceitou o código: Bad Request');
+      const done = await call(editor, 'POST', `/api/connections/${gmailId}/oauth/google/complete`, {
+        url: `http://localhost/api/oauth/google/callback?state=${state}&code=4%2F0Ab-codigo&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify`,
+      });
+      expect(done.status, JSON.stringify(done.body)).toBe(200);
+      expect(done.body).toEqual({ id: gmailId, name: 'Gmail financeiro', account: 'financeiro@empresa.com' });
+      expect(new URLSearchParams(tokenBodies.at(-1)).get('code')).toBe('4/0Ab-codigo');
+      expect(new URLSearchParams(tokenBodies.at(-1)).get('redirect_uri')).toBe('http://localhost/api/oauth/google/callback');
+
+      const saved = await call(viewer, 'GET', `/api/connections/${gmailId}`);
+      expect(saved.body.data.oauthAccount).toBe('financeiro@empresa.com');
+      expect(JSON.stringify(saved.body)).not.toContain('refresh-secreto');
+
+      // Salvar de novo sem trocar o client ID mantém a conta conectada.
+      await call(editor, 'PUT', `/api/connections/${gmailId}`, {
+        name: 'Gmail financeiro',
+        type: 'gmailOAuth2',
+        clientId: null,
+        data: { clientId: '1234-abc.apps.googleusercontent.com', clientSecret: '' },
+      });
+      expect((await call(viewer, 'GET', `/api/connections/${gmailId}`)).body.data.oauthAccount).toBe('financeiro@empresa.com');
+
+      // Retorno direto do Google, sem a sessão: quem pediu vem do state assinado.
+      const next = new URL((await call(editor, 'POST', `/api/connections/${gmailId}/oauth/google/start`)).body.url).searchParams.get('state')!;
+      const callback = await app.inject({ method: 'GET', url: `/api/oauth/google/callback?code=outro&state=${encodeURIComponent(next)}` });
+      expect(callback.statusCode).toBe(302);
+      expect(callback.headers.location).toBe(`/conexoes?google=ok&conexao=${gmailId}&conta=financeiro%40empresa.com`);
+      const denied = await app.inject({ method: 'GET', url: `/api/oauth/google/callback?error=access_denied&state=${encodeURIComponent(next)}` });
+      expect(denied.headers.location).toBe(`/conexoes?google=erro&mensagem=A+autoriza%C3%A7%C3%A3o+foi+cancelada+no+Google`);
+    } finally {
+      fetchMock.mockRestore();
+    }
+
+    const audit = await call(admin, 'GET', `/api/audit?entityType=connection&entityId=${gmailId}`);
+    expect(JSON.stringify(audit.body)).not.toContain('refresh-secreto');
+    expect(audit.body.map((a: { action: string }) => a.action)).toEqual(['connect', 'update', 'connect', 'create']);
   });
 
   it('mostra os agendados que esperam vaga no worker', async () => {
