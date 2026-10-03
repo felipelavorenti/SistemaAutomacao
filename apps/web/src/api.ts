@@ -55,7 +55,8 @@ export interface PropertyDescription {
     | 'list'
     | 'multiOptions'
     | 'time'
-    | 'dateTime';
+    | 'dateTime'
+    | 'file';
   multiline?: boolean;
   default: JsonValue;
   description?: string;
@@ -267,11 +268,13 @@ export function onAuthProblem(listener: Listener): void {
 }
 
 export async function api<T = unknown>(method: string, url: string, body?: unknown): Promise<T> {
+  // Arquivos vão como estão no corpo; o resto, em JSON.
+  const raw = body instanceof Blob;
   const res = await fetch(`/api${url}`, {
     method,
     credentials: 'include',
-    headers: body === undefined ? {} : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined ? {} : { 'content-type': raw ? 'application/octet-stream' : 'application/json' },
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
@@ -287,6 +290,27 @@ export const get = <T,>(url: string) => api<T>('GET', url);
 export const post = <T,>(url: string, body: unknown = {}) => api<T>('POST', url, body);
 export const put = <T,>(url: string, body: unknown) => api<T>('PUT', url, body);
 export const del = <T,>(url: string) => api<T>('DELETE', url);
+
+export interface StoredFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+  createdByName: string | null;
+}
+
+/** Limite do servidor para cada arquivo (o mesmo dos anexos do Gmail). */
+export const MAX_FILE_BYTES = 25 * 1024 * 1024;
+
+export const uploadFile = (file: File) =>
+  api<StoredFile>('POST', `/files?${new URLSearchParams({ name: file.name, type: file.type })}`, file);
+
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1).replace('.', ',')} MB`;
+}
 
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {

@@ -9,6 +9,7 @@ import {
   type JsonValue,
   type ConnectionData,
   type ExecuteOptions,
+  type FileData,
   type Item,
   type JsonObject,
   type WorkflowDefinition,
@@ -108,6 +109,11 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       onDatabaseCommand,
       databases: pools,
       getApiEndpoint: (erpClientId: string, endpointId: string) => loadApiEndpoint(db, config.encryptionKey, erpClientId, endpointId),
+      getFile: async (id: string): Promise<FileData> => {
+        const row = await one<{ id: string; name: string; mime_type: string; content: Buffer }>(db, 'SELECT id, name, mime_type, content FROM files WHERE id = $1', [id]);
+        if (!row) throw new Error(`O arquivo ${id} não existe mais; escolha o arquivo de novo no nó`);
+        return { id: row.id, name: row.name, mimeType: row.mime_type, content: row.content };
+      },
     };
   };
 

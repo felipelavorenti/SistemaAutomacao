@@ -605,6 +605,29 @@ describe.skipIf(!available)('API', () => {
     expect(audit.body[0]).toMatchObject({ action: 'deactivate', user_email: null });
   });
 
+  it('guarda arquivos enviados pela tela e devolve o conteúdo', async () => {
+    const pdf = Buffer.from('%PDF-1.4 relatório');
+    const upload = (cookie: string, url: string) =>
+      app.inject({ method: 'POST', url, payload: pdf, headers: { cookie, 'content-type': 'application/octet-stream' } });
+    expect((await upload(viewer, '/api/files?name=x.pdf')).statusCode).toBe(403);
+    expect((await upload(editor, '/api/files')).statusCode).toBe(400);
+
+    const created = await upload(editor, `/api/files?name=${encodeURIComponent('relatório.pdf')}&type=application/pdf`);
+    expect(created.statusCode, created.body).toBe(201);
+    const file = created.json();
+    expect(file).toMatchObject({ name: 'relatório.pdf', mimeType: 'application/pdf', size: pdf.length, createdByName: expect.any(String) });
+
+    expect((await call(viewer, 'GET', `/api/files/${file.id}`)).body).toEqual(file);
+    const content = await app.inject({ method: 'GET', url: `/api/files/${file.id}/content`, headers: { cookie: viewer } });
+    expect(content.headers['content-type']).toBe('application/pdf');
+    expect(content.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''${encodeURIComponent('relatório.pdf')}`);
+    expect(content.rawPayload.equals(pdf)).toBe(true);
+    expect((await call(viewer, 'GET', '/api/files/00000000-0000-0000-0000-000000000000')).status).toBe(404);
+
+    const audit = await call(admin, 'GET', `/api/audit?entityType=file&entityId=${file.id}`);
+    expect(audit.body[0]).toMatchObject({ action: 'create', entity_name: 'relatório.pdf' });
+  });
+
   it('mostra os agendados que esperam vaga no worker', async () => {
     const wf = (await call(editor, 'POST', '/api/workflows', { name: 'Agendado na fila', folderId: folderA })).body;
     // Com a fila pausada, o job fica esperando como ficaria com todas as vagas ocupadas.

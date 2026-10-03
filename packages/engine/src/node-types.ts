@@ -20,7 +20,9 @@ export type PropertyType =
   /** Horário hh:mm:ss. */
   | 'time'
   /** Data e hora aaaa-mm-ddThh:mm:ss. */
-  | 'dateTime';
+  | 'dateTime'
+  /** Arquivo enviado pela tela e guardado no servidor (valor: o ID do arquivo). */
+  | 'file';
 
 /** Descreve um campo de configuração do nó; o editor monta o formulário a partir disso. */
 export interface PropertyDescription {
@@ -58,6 +60,14 @@ export interface NodeTypeDescription {
   properties: PropertyDescription[];
 }
 
+/** Arquivo guardado no servidor (ex.: um anexo escolhido no editor). */
+export interface FileData {
+  id: string;
+  name: string;
+  mimeType: string;
+  content: Buffer;
+}
+
 export interface ConnectionData {
   id: string;
   type: string;
@@ -71,6 +81,8 @@ export interface NodeExecuteContext {
   /** Valor de um parâmetro já com as expressões resolvidas para o item informado. */
   getParam(name: string, itemIndex?: number): Promise<JsonValue>;
   getConnection(id: string): Promise<ConnectionData>;
+  /** Arquivo guardado no servidor, pelo ID. */
+  getFile(id: string): Promise<FileData>;
   /** Endpoint do catálogo de APIs combinado com o cadastro do cliente no ERP. */
   getApiEndpoint(erpClientId: string, endpointId: string): Promise<ApiEndpointData>;
   /** Sessão no banco da conexão; cada comando fica registrado na auditoria. */

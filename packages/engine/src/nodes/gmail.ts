@@ -132,12 +132,13 @@ const properties: PropertyDescription[] = [
     displayName: 'Anexos',
     type: 'list',
     default: [],
-    description: 'O conteúdo vai em base64, por exemplo vindo de um nó Code ou da busca com anexos.',
+    description: 'Escolha um arquivo do computador ou passe o conteúdo em base64, por exemplo vindo da busca com anexos.',
     showWhen: when(...COMPOSE),
     fields: [
-      { name: 'fileName', displayName: 'Nome do arquivo', type: 'string', default: '', placeholder: 'boleto.pdf' },
-      { name: 'content', displayName: 'Conteúdo (base64)', type: 'string', default: '' },
-      { name: 'mimeType', displayName: 'Tipo', type: 'string', default: '', placeholder: 'application/pdf' },
+      { name: 'file', displayName: 'Arquivo', type: 'file', default: '', description: 'Escolha o arquivo no computador. Ele fica guardado no Info8n junto com o fluxo.' },
+      { name: 'fileName', displayName: 'Nome do arquivo', type: 'string', default: '', placeholder: 'boleto.pdf', description: 'Em branco, usa o nome do arquivo escolhido.' },
+      { name: 'content', displayName: 'Conteúdo (base64)', type: 'string', default: '', description: 'Só quando não escolher um arquivo.' },
+      { name: 'mimeType', displayName: 'Tipo', type: 'string', default: '', placeholder: 'application/pdf', description: 'Em branco, usa o tipo do arquivo escolhido.' },
     ],
   },
   {
@@ -483,19 +484,32 @@ async function composeFromParams(ctx: NodeExecuteContext, i: number, reply: Repl
     html: (await param('bodyType')) === 'html',
     inReplyTo: reply?.messageId || undefined,
     references: reply?.references || undefined,
-    attachments: attachmentsFrom(await ctx.getParam('attachments', i)),
+    attachments: await attachmentsFrom(ctx, await ctx.getParam('attachments', i)),
   };
 }
 
-function attachmentsFrom(value: JsonValue): Attachment[] {
+async function attachmentsFrom(ctx: NodeExecuteContext, value: JsonValue): Promise<Attachment[]> {
   if (!Array.isArray(value)) return [];
-  return value.filter(isPlainObject).flatMap((row, index) => {
+  const attachments: Attachment[] = [];
+  for (const [index, row] of value.filter(isPlainObject).entries()) {
+    const fileId = text(row.file ?? null);
+    if (fileId) {
+      // Arquivo escolhido na tela: nome e tipo vêm dele, a menos que o nó informe outros.
+      const file = await ctx.getFile(fileId);
+      attachments.push({
+        fileName: text(row.fileName ?? null) || file.name,
+        content: file.content.toString('base64'),
+        mimeType: text(row.mimeType ?? null) || file.mimeType || 'application/octet-stream',
+      });
+      continue;
+    }
     const content = text(row.content ?? null).replace(/\s+/g, '');
     const fileName = text(row.fileName ?? null) || `anexo-${index + 1}`;
-    if (!content) return [];
+    if (!content) continue;
     if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(content)) throw new NodeOperationError(`O conteúdo do anexo ${fileName} não está em base64`);
-    return [{ fileName, content: content.replace(/-/g, '+').replace(/_/g, '/'), mimeType: text(row.mimeType ?? null) || 'application/octet-stream' }];
-  });
+    attachments.push({ fileName, content: content.replace(/-/g, '+').replace(/_/g, '/'), mimeType: text(row.mimeType ?? null) || 'application/octet-stream' });
+  }
+  return attachments;
 }
 
 /** Monta o e-mail no formato MIME e devolve em base64url, como a API do Gmail pede em "raw". */
