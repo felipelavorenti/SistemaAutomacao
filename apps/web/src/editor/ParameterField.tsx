@@ -22,6 +22,11 @@ export function isExpression(value: JsonValue): value is string {
   return typeof value === 'string' && value.startsWith('=');
 }
 
+/** O navegador omite os segundos quando são zero; guardamos sempre hh:mm:ss. */
+function withSeconds(raw: string): string {
+  return /(^|T)\d{2}:\d{2}$/.test(raw) ? `${raw}:00` : raw;
+}
+
 export function isVisible(prop: PropertyDescription, values: Record<string, JsonValue>): boolean {
   if (!prop.showWhen) return true;
   return Object.entries(prop.showWhen).every(([key, allowed]) => {
@@ -103,6 +108,26 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
             </option>
           ))}
         </select>
+      );
+    case 'multiOptions': {
+      const selected = Array.isArray(value) ? value.map(String) : [];
+      const flip = (v: string) =>
+        onChange(prop.options!.map((o) => o.value).filter((o) => (o === v ? !selected.includes(v) : selected.includes(o))));
+      return (
+        <div className="check-row">
+          {prop.options?.map((o) => (
+            <label key={o.value} className="check">
+              <input type="checkbox" disabled={disabled} checked={selected.includes(o.value)} onChange={() => flip(o.value)} /> {o.name}
+            </label>
+          ))}
+        </div>
+      );
+    }
+    case 'time':
+      return <input type="time" step={1} disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(withSeconds(e.target.value))} />;
+    case 'dateTime':
+      return (
+        <input type="datetime-local" step={1} disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(withSeconds(e.target.value))} />
       );
     case 'code':
       return <CodeInput value={typeof value === 'string' ? value : ''} disabled={disabled} onChange={onChange} />;

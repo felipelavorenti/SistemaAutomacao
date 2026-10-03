@@ -2,7 +2,7 @@ import { CronExpressionParser } from 'cron-parser';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
+import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, scheduleRepeat, ScheduleError, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
@@ -112,13 +112,20 @@ export const workflowRoutes =
       }
     };
 
-    const checkSchedule = (definition: WorkflowDefinition) => {
+    /** Agendamento válido; com o fluxo ativo, a execução única também precisa estar no futuro. */
+    const checkSchedule = (definition: WorkflowDefinition, active: boolean) => {
       for (const node of definition.nodes) {
-        if (node.type !== 'scheduleTrigger' || node.parameters.mode !== 'cron') continue;
+        if (node.type !== 'scheduleTrigger' || node.disabled) continue;
+        let repeat;
         try {
-          CronExpressionParser.parse(String(node.parameters.cron ?? ''), { tz: String(node.parameters.timezone || 'America/Sao_Paulo') });
-        } catch {
+          repeat = scheduleRepeat(node.parameters);
+          if (repeat.kind === 'cron') CronExpressionParser.parse(repeat.pattern, { tz: repeat.tz });
+        } catch (err) {
+          if (err instanceof ScheduleError) throw new HttpError(400, `${err.message} no nó "${node.name}"`);
           throw new HttpError(400, `Expressão cron inválida no nó "${node.name}"`);
+        }
+        if (active && repeat.kind === 'once' && repeat.at <= Date.now()) {
+          throw new HttpError(400, `A data e hora da execução única no nó "${node.name}" já passou`);
         }
       }
     };
@@ -220,7 +227,7 @@ export const workflowRoutes =
       }
       await checkConnections(user, b.definition);
       await checkSubworkflows(user, b.definition, id);
-      checkSchedule(b.definition);
+      checkSchedule(b.definition, before.active);
       const issues = validateWorkflow(b.definition);
       if (before.active && issues.length) {
         throw new HttpError(400, 'O fluxo está ativo e tem problemas; corrija antes de salvar', issues);
@@ -266,7 +273,7 @@ export const workflowRoutes =
         }
         const issues = validateWorkflow(wf.definition);
         if (issues.length) throw new HttpError(400, 'Corrija os problemas do fluxo antes de ativar', issues);
-        checkSchedule(wf.definition);
+        checkSchedule(wf.definition, true);
       }
       await db.query('UPDATE workflows SET active = $2, updated_at = now(), updated_by = $3 WHERE id = $1', [id, active, user.id]);
       await queue.syncSchedule({ ...wf, active });

@@ -40,7 +40,22 @@ export interface WorkflowDefinition {
 export interface PropertyDescription {
   name: string;
   displayName: string;
-  type: 'string' | 'number' | 'boolean' | 'options' | 'json' | 'code' | 'connection' | 'workflow' | 'erpClient' | 'erpEndpoint' | 'erpVariables' | 'list';
+  type:
+    | 'string'
+    | 'number'
+    | 'boolean'
+    | 'options'
+    | 'json'
+    | 'code'
+    | 'connection'
+    | 'workflow'
+    | 'erpClient'
+    | 'erpEndpoint'
+    | 'erpVariables'
+    | 'list'
+    | 'multiOptions'
+    | 'time'
+    | 'dateTime';
   multiline?: boolean;
   default: JsonValue;
   description?: string;

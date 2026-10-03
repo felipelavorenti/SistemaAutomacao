@@ -8,6 +8,7 @@ export { isExpression, parseTemplate, TemplateSyntaxError } from './expressions/
 export { HTTP_CONNECTION_TYPES } from './nodes/http-request.js';
 export { evaluateCondition } from './nodes/if.js';
 export { validateWorkflow, type ValidationIssue } from './validate.js';
+export { DEFAULT_TIMEZONE, ScheduleError, scheduleRepeat, type ScheduleRepeat } from './schedule.js';
 export { getPath } from './nodes/paths.js';
 export {
   DatabasePools,

@@ -137,10 +137,17 @@ Todo fluxo começa por exatamente um gatilho.
 | Nó | Quando dispara | Configuração |
 | --- | --- | --- |
 | Gatilho manual | Pelo botão Executar | JSON de entrada para testes, opcional |
-| Agendamento | Sozinho, quando o fluxo está Ativo | A cada intervalo (em minutos) ou expressão cron com fuso horário (padrão America/Sao\_Paulo) |
+| Agendamento | Sozinho, quando o fluxo está Ativo | Todo dia, toda semana, todo mês, a cada intervalo, uma vez numa data e hora, ou expressão cron (veja abaixo) |
 | Chamado por outro fluxo | Quando outro fluxo o chama pelo Execute Workflow | Recebe os itens que o outro fluxo mandou |
 
-Exemplos de cron: 0 8 \* \* \* roda todo dia às 8h; \*/15 \* \* \* \* roda a cada 15 minutos; 0 7 \* \* 1-5 roda de segunda a sexta às 7h.
+**Tipos de agendamento.** Os horários seguem o Fuso horário do nó (padrão America/Sao\_Paulo).
+
+- **Todo dia:** escolha o horário, com hora, minuto e segundo (ex.: 08:30:00).
+- **Toda semana:** marque os dias da semana e escolha o horário. Ex.: Seg, Qua e Sex às 07:00:00.
+- **Todo mês:** escolha o dia do mês (1 a 31) e o horário. Nos meses que não têm o dia escolhido (ex.: 31 em abril), não roda.
+- **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico.
+- **Uma vez, numa data e hora:** roda uma única vez no momento escolhido e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
+- **Expressão cron:** para casos que as opções acima não cobrem. São 5 campos (minuto, hora, dia do mês, mês, dia da semana), ou 6 com os segundos no começo. `*` é qualquer valor, `*/15` é a cada 15, `1-5` é um intervalo e `8,12,18` é uma lista; no dia da semana, 0 é domingo. Exemplos: `0 8 * * *` todo dia às 8h; `*/15 * * * *` a cada 15 minutos; `0 8-18 * * 1-5` de hora em hora das 8h às 18h, de segunda a sexta; `*/30 * * * * *` a cada 30 segundos.
 
 ### Ações
 
@@ -405,7 +412,6 @@ Uma forma simples de organizar é uma pasta por área ou por cliente, e marcar e
 | No Operation | Vira um Code que repassa os itens |
 | Always Output Data | Não existe. Um nó sem itens encerra aquele caminho |
 | Saída de erro separada | Com Continuar em caso de erro, o item de erro segue pela saída normal |
-| Agendamento em segundos | O menor intervalo é 1 minuto |
 | Code em Python com \_items ou .to\_py() | Use \_input.all() e \_json; os itens já são dicionários. Só a biblioteca padrão do Python |
 | Code em JavaScript com require() | Não existe |
 | Execute Workflow sem esperar | Sempre espera o subfluxo terminar |
@@ -426,6 +432,8 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | A API respondeu com status 401 ou 403 | Token vencido, errado ou não enviado | Confira o nó de login e a variável token, ou a conexão de autenticação |
 | O nó passou do tempo limite | A API, o banco ou o código demorou mais que o permitido | Aumente o Tempo limite do nó em Configurações |
 | Não consigo ativar o fluxo | O fluxo tem pendências, não foi salvo ou não começa por Agendamento | Salve, corrija a faixa amarela e tente de novo |
+| A data e hora da execução única já passou | O tipo Uma vez está com uma data no passado | Escolha uma data futura, salve e ative |
+| O fluxo de execução única ficou desativado | É o esperado: depois de rodar, ele se desativa | Para rodar de novo, escolha outra data e ative |
 | Conexão sem acesso ou excluída | A conexão é de um cliente fora do seu cadastro, ou foi apagada | Peça acesso ao cliente para o administrador, ou escolha outra conexão |
 | Outra pessoa salvou este fluxo enquanto você editava | Duas pessoas no mesmo fluxo | Recarregue a página e refaça a alteração sobre a versão atual |
 | A execução agendada não mostra entrada e saída | Sucesso agendado guarda só o resumo | Use Executar de novo, que guarda todos os dados. Lembre que ela roda tudo outra vez, inclusive gravações em bancos e APIs |

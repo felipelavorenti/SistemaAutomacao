@@ -1,11 +1,11 @@
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
-import type { WorkflowDefinition } from '@sa/engine';
+import { scheduleRepeat, type WorkflowDefinition } from '@sa/engine';
 
 export const QUEUE_NAME = 'executions';
 export const CANCEL_CHANNEL = 'sa:cancel';
 
-export type JobData = { kind: 'run'; executionId: string } | { kind: 'scheduled'; workflowId: string } | { kind: 'cleanup' };
+export type JobData = { kind: 'run'; executionId: string } | { kind: 'scheduled'; workflowId: string; once?: number } | { kind: 'cleanup' };
 
 export function createRedis(url: string): Redis {
   return new Redis(url, { maxRetriesPerRequest: null });
@@ -40,21 +40,41 @@ export class ExecutionQueue {
   /** Cria, atualiza ou remove o agendamento de um fluxo. */
   async syncSchedule(workflow: { id: string; active: boolean; definition: WorkflowDefinition }): Promise<void> {
     const schedulerId = `wf:${workflow.id}`;
+    const onceId = `once-${workflow.id}`;
     const trigger = workflow.definition.nodes.find((n) => n.type === 'scheduleTrigger' && !n.disabled);
-    if (!workflow.active || !trigger) {
+    const repeat = workflow.active && trigger ? scheduleRepeat(trigger.parameters) : null;
+
+    if (repeat?.kind === 'once') {
+      await this.queue.removeJobScheduler(schedulerId);
+      // Mantém o job que já está esperando para o mesmo horário (ao reiniciar o servidor, por exemplo).
+      const existing = await this.queue.getJob(onceId);
+      if (existing?.data.kind === 'scheduled' && existing.data.once === repeat.at && ['delayed', 'waiting'].includes(await existing.getState())) return;
+      await this.removeOnce(onceId);
+      // Data que já passou não roda: o fluxo foi ativado ou o servidor voltou depois da hora.
+      if (repeat.at <= Date.now()) return;
+      await this.queue.add(
+        'scheduled',
+        { kind: 'scheduled', workflowId: workflow.id, once: repeat.at },
+        { jobId: onceId, delay: repeat.at - Date.now(), removeOnComplete: true, removeOnFail: true },
+      );
+      return;
+    }
+
+    await this.removeOnce(onceId);
+    if (!repeat) {
       await this.queue.removeJobScheduler(schedulerId);
       return;
     }
-    const p = trigger.parameters;
-    const repeat =
-      p.mode === 'cron'
-        ? { pattern: String(p.cron ?? ''), tz: String(p.timezone || 'America/Sao_Paulo') }
-        : { every: Math.max(1, Number(p.intervalMinutes ?? 60)) * 60_000 };
-    await this.queue.upsertJobScheduler(schedulerId, repeat, {
+    await this.queue.upsertJobScheduler(schedulerId, repeat.kind === 'cron' ? { pattern: repeat.pattern, tz: repeat.tz } : { every: repeat.every }, {
       name: 'scheduled',
       data: { kind: 'scheduled', workflowId: workflow.id },
       opts: { removeOnComplete: 1000, removeOnFail: 1000 },
     });
+  }
+
+  private async removeOnce(jobId: string): Promise<void> {
+    const job = await this.queue.getJob(jobId);
+    if (job && (await job.getState()) !== 'active') await job.remove();
   }
 
   /** Deixa os agendamentos do Redis iguais aos fluxos ativos do banco. */
@@ -63,7 +83,11 @@ export class ExecutionQueue {
     for (const s of await this.queue.getJobSchedulers()) {
       if (s.key.startsWith('wf:') && !wanted.has(s.key)) await this.queue.removeJobScheduler(s.key);
     }
-    for (const w of workflows) if (w.active) await this.syncSchedule(w);
+    for (const w of workflows) {
+      if (!w.active) continue;
+      // Um agendamento inválido não pode impedir os outros de subir.
+      await this.syncSchedule(w).catch((err) => console.error(`Agendamento do fluxo ${w.id} não foi criado:`, err));
+    }
   }
 
   async scheduleCleanup(enabled: boolean): Promise<void> {

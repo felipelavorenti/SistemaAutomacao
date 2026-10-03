@@ -1399,3 +1399,11 @@ textarea.code-editor {
 .google-login > button {
   margin-bottom: 12px;
 }
+.check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.check-row .check {
+  margin-bottom: 0;
+}

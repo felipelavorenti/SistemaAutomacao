@@ -568,6 +568,43 @@ describe.skipIf(!available)('API', () => {
     expect(audit.body.map((a: { action: string }) => a.action)).toEqual(['connect', 'update', 'connect', 'create']);
   });
 
+  it('agenda por dia da semana e roda a execução única uma vez só', async () => {
+    const definition = (parameters: Record<string, unknown>) => ({
+      nodes: [
+        { id: 's', name: 'Agendamento', type: 'scheduleTrigger', position: { x: 0, y: 0 }, parameters },
+        { id: 'h', name: 'Chamar API', type: 'httpRequest', position: { x: 200, y: 0 }, parameters: { url: apiBase } },
+      ],
+      connections: [{ from: 's', fromOutput: 0, to: 'h', toInput: 0 }],
+    });
+    const wf = (await call(editor, 'POST', '/api/workflows', { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'weekly', weekdays: ['1', '5'], time: '07:30:15' }) })).body;
+    expect((await call(editor, 'POST', `/api/workflows/${wf.id}/activate`)).status).toBe(200);
+    const weekly = (await queue.queue.getJobSchedulers()).find((s) => s.key === `wf:${wf.id}`);
+    expect(weekly).toMatchObject({ pattern: '15 30 7 * * 1,5', tz: 'America/Sao_Paulo' });
+
+    // Fluxo ativo não aceita data que já passou nem horário inválido.
+    const past = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'once', dateTime: '2020-01-01T08:00:00' }) });
+    expect(past.status).toBe(400);
+    expect(past.body.error).toBe('A data e hora da execução única no nó "Agendamento" já passou');
+    const badTime = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'daily', time: '25:00' }) });
+    expect(badTime.body.error).toBe('Horário inválido; use hh:mm:ss, como 08:30:00 no nó "Agendamento"');
+
+    const at = new Date(Date.now() + 1500).toISOString().slice(0, 19);
+    const saved = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'once', dateTime: at, timezone: 'UTC' }) });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect((await queue.queue.getJobSchedulers()).map((s) => s.key)).not.toContain(`wf:${wf.id}`);
+    expect(await (await queue.queue.getJob(`once-${wf.id}`))?.getState()).toBe('delayed');
+
+    let executions: { mode: string }[] = [];
+    for (let i = 0; i < 100 && !executions.length; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      executions = (await call(viewer, 'GET', `/api/executions?workflowId=${wf.id}`)).body;
+    }
+    expect(executions.map((e) => e.mode)).toEqual(['schedule']);
+    expect((await call(viewer, 'GET', `/api/workflows/${wf.id}`)).body.active).toBe(false);
+    const audit = await call(admin, 'GET', `/api/audit?entityType=workflow&entityId=${wf.id}`);
+    expect(audit.body[0]).toMatchObject({ action: 'deactivate', user_email: null });
+  });
+
   it('mostra os agendados que esperam vaga no worker', async () => {
     const wf = (await call(editor, 'POST', '/api/workflows', { name: 'Agendado na fila', folderId: folderA })).body;
     // Com a fila pausada, o job fica esperando como ficaria com todas as vagas ocupadas.

@@ -17,6 +17,7 @@ import type { Config } from '../config.js';
 import { one, type Db } from '../db/db.js';
 import { loadApiEndpoint } from '../lib/catalog.js';
 import { decryptJson } from '../lib/crypto.js';
+import { audit } from '../lib/audit.js';
 import { CANCEL_CHANNEL, QUEUE_NAME, type JobData } from './queue.js';
 import { createExecution, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 
@@ -207,12 +208,17 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       if (data.kind === 'run') {
         await run(data.executionId);
       } else if (data.kind === 'scheduled') {
-        const wf = await one<{ id: string; version: number; definition: WorkflowDefinition }>(
+        const wf = await one<{ id: string; name: string; version: number; definition: WorkflowDefinition }>(
           db,
-          'SELECT id, version, definition FROM workflows WHERE id = $1 AND active',
+          'SELECT id, name, version, definition FROM workflows WHERE id = $1 AND active',
           [data.workflowId],
         );
         if (!wf) return;
+        if (data.once) {
+          // Execução única: depois de disparar, o fluxo fica desativado.
+          await db.query('UPDATE workflows SET active = false, updated_at = now() WHERE id = $1', [wf.id]);
+          await audit(db, { userId: null, action: 'deactivate', entityType: 'workflow', entityId: wf.id, entityName: wf.name, after: { reason: 'execução única agendada' } });
+        }
         const id = await createExecution(db, {
           workflowId: wf.id,
           workflowVersion: wf.version,
