@@ -47,6 +47,10 @@ export interface ApiExample {
   response: unknown;
   /** Observação sobre o exemplo, como uma lista encurtada. */
   note?: string;
+  /** Arquivo local enviado como está no corpo (application/octet-stream), em vez de JSON. */
+  upload?: string;
+  /** Grava a resposta neste arquivo local, para downloads. */
+  saveAs?: string;
   /** Usa o cookie da tela em vez do token: save guarda o cookie do login, send manda o cookie guardado. */
   session?: 'save' | 'send';
   /** Comando curl do exemplo; API_REFERENCE monta a partir dos outros campos. */
@@ -606,6 +610,42 @@ const GROUPS: ApiGroup[] = [
     ],
   },
   {
+    title: 'Arquivos',
+    routes: [
+      {
+        method: 'POST',
+        path: '/files',
+        profile: 'editor',
+        summary:
+          'Guarda um arquivo para os fluxos usarem, como o anexo escolhido no nó Gmail. O arquivo vai como está no corpo, sem base64, com Content-Type: application/octet-stream; o fluxo guarda só o ID devolvido.',
+        query: [
+          { name: 'name', type: 'texto', required: true, description: 'Nome do arquivo, com a extensão (ex.: boleto.pdf)' },
+          { name: 'type', type: 'texto', description: 'Tipo do arquivo (ex.: application/pdf); em branco, application/octet-stream' },
+        ],
+        response: 'Responde com status 201. id é o que vai no campo Arquivo do anexo, no parâmetro file da lista attachments do nó Gmail.',
+        errors: ['400: falta o nome, o arquivo está vazio ou o corpo não veio como application/octet-stream', '413: o arquivo passa de 25 MB'],
+        audited: true,
+      },
+      {
+        method: 'GET',
+        path: '/files/{id}',
+        profile: 'any',
+        summary: 'Nome, tipo, tamanho em bytes e quem enviou o arquivo.',
+        params: [id('do arquivo')],
+        errors: ['404: o arquivo não existe'],
+      },
+      {
+        method: 'GET',
+        path: '/files/{id}/content',
+        profile: 'any',
+        summary: 'Baixa o arquivo, com o tipo e o nome guardados.',
+        params: [id('do arquivo')],
+        response: 'O corpo é o próprio arquivo, com Content-Type do tipo guardado e Content-Disposition: attachment com o nome.',
+        errors: ['404: o arquivo não existe'],
+      },
+    ],
+  },
+  {
     title: 'APIs dos ERPs',
     routes: [
       {
@@ -856,6 +896,8 @@ export function curlCommand(route: ApiRoute, example: ApiExample): string {
   if (example.body !== undefined) {
     parts.push('-H "Content-Type: application/json"', `-d '${formatJson(example.body, 90).replaceAll("'", "'\\''")}'`);
   }
+  if (example.upload) parts.push('-H "Content-Type: application/octet-stream"', `--data-binary "@${example.upload}"`);
+  if (example.saveAs) parts.push(`-o "${example.saveAs}"`);
   if (example.session === 'save') parts.push('-c cookies.txt');
   return parts.join(' \\\n  ');
 }

@@ -14,6 +14,7 @@ const ENTITY_LABEL: Record<string, string> = {
   erp: 'ERP',
   erp_endpoint: 'Endpoint de ERP',
   erp_client: 'Cliente no ERP',
+  file: 'Arquivo',
 };
 
 const ACTION_LABEL: Record<string, string> = {

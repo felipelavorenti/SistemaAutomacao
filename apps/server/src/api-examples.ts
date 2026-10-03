@@ -874,6 +874,35 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
     response: { status: 302, location: '/conexoes?google=ok&conexao=5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21&conta=financeiro%40empresa.com' },
     note: 'A resposta é um redirecionamento; o exemplo mostra o status e o cabeçalho Location. Quem chama esta rota é o navegador, vindo do Google.',
   },
+  'POST /files': {
+    path: '/files?name=boleto-setembro.pdf&type=application%2Fpdf',
+    upload: 'boleto-setembro.pdf',
+    response: {
+      id: '9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43',
+      name: 'boleto-setembro.pdf',
+      mimeType: 'application/pdf',
+      size: 48213,
+      createdAt: '2026-10-03T22:41:07.512Z',
+      createdByName: 'Ana Lima',
+    },
+  },
+  'GET /files/{id}': {
+    path: '/files/9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43',
+    response: {
+      id: '9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43',
+      name: 'boleto-setembro.pdf',
+      mimeType: 'application/pdf',
+      size: 48213,
+      createdAt: '2026-10-03T22:41:07.512Z',
+      createdByName: 'Ana Lima',
+    },
+  },
+  'GET /files/{id}/content': {
+    path: '/files/9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43/content',
+    saveAs: 'boleto-setembro.pdf',
+    response: { status: 200, 'content-type': 'application/pdf', 'content-disposition': "attachment; filename*=UTF-8''boleto-setembro.pdf" },
+    note: 'O corpo é o arquivo; o exemplo mostra o status e os cabeçalhos. O curl grava o arquivo com -o.',
+  },
   'GET /erps': {
     response: [
       {

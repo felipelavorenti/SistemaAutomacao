@@ -58,7 +58,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 - `index.ts`: sobe a API e, por padrão, o worker no mesmo processo. `worker-main.ts` roda só o worker.
 - `config.ts`: lê as variáveis de ambiente.
 - `api-reference.ts` e `api-examples.ts`: a referência da API e um exemplo de chamada e de resposta de cada rota. `api-markdown.ts` monta com eles a parte das rotas de `docs/api.md` (`npm run docs:api -w @sa/server`).
-- `routes/`: `auth`, `workflows`, `executions`, `connections`, `oauth` (login com Google das conexões do Gmail), `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
+- `routes/`: `auth`, `workflows`, `executions`, `connections`, `oauth` (login com Google das conexões do Gmail), `files` (arquivos escolhidos na tela, como anexos), `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
 - `executions/`: `queue.ts` (fila e agendamentos no BullMQ), `worker.ts` (roda as execuções), `store.ts` (grava resultado e dados comprimidos).
 - `lib/`: `auth.ts` (senha, sessão, bloqueio), `permissions.ts` (perfis), `crypto.ts` (AES-256-GCM), `audit.ts`, `connection-types.ts`.
 - `db/migrations.ts`: cria e atualiza as tabelas ao subir.
@@ -126,6 +126,7 @@ A plataforma usa um Postgres próprio, com 16 tabelas criadas e atualizadas auto
 | `db_commands` | Cada comando SQL executado nos bancos dos clientes |
 | `audit_log` | Quem fez o quê, com antes e depois |
 | `erps`, `erp_endpoints`, `erp_clients` | Catálogo de APIs por ERP e cadastro do cliente em cada ERP |
+| `files` | Arquivos escolhidos na tela (ex.: anexos do Gmail): nome, tipo, tamanho, conteúdo e quem enviou |
 
 **Tamanho e retenção dos logs**
 
@@ -176,6 +177,8 @@ As conexões do tipo `gmailOAuth2` usam OAuth 2.0 com o app que a empresa cria n
 4. O endereço de retorno é `PUBLIC_URL` + `/api/oauth/google/callback` quando `PUBLIC_URL` existe. Sem ela, é o endereço pelo qual a tela foi aberta, com IP trocado por `localhost`, porque o Google não aceita IP. Nesse caso a tela mostra um campo para colar o endereço da página de retorno, enviado para `POST /api/connections/{id}/oauth/google/complete`.
 5. Na execução, o nó Gmail troca o refresh token por um access token (1 hora) e o guarda em memória no worker até 5 minutos antes de vencer. `invalid_grant` vira a mensagem pedindo para conectar de novo.
 6. A API devolve só `oauthAccount`; o refresh token nunca sai do servidor. Salvar a conexão mantém a autorização enquanto o Client ID não muda.
+
+**Anexos escolhidos na tela.** O campo do tipo `file` (Arquivo, nos anexos do Gmail) envia o arquivo para `POST /api/files` como está no corpo (`application/octet-stream`, até 25 MB), sem base64. O servidor guarda o conteúdo em `files` (bytea) e o campo guarda só o ID, para não repetir o arquivo em cada versão do fluxo nem na auditoria. Na execução, o worker passa `getFile(id)` ao motor e o nó Gmail lê o arquivo dali; nome e tipo vêm do arquivo quando o nó não informa outros. Se o arquivo não existir mais, o nó falha pedindo para escolher de novo. Os arquivos não são apagados quando saem do fluxo, e um fluxo levado para outro Info8n precisa ter os arquivos escolhidos de novo.
 
 Buscar rascunhos lista `GET /drafts` (com `q` e `maxResults`, seguindo `nextPageToken` até o máximo) e lê cada e-mail em `GET /messages/{id}?format=full`, como a busca de e-mails. No item, `id` é o ID do rascunho (o que `POST /drafts/send` e `DELETE /drafts/{id}` pedem) e `emailId` é o ID da mensagem.
 

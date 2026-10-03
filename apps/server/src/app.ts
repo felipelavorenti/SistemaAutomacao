@@ -14,6 +14,7 @@ import { catalogRoutes } from './routes/catalog.js';
 import { dbCommandRoutes } from './routes/db-commands.js';
 import { connectionRoutes } from './routes/connections.js';
 import { executionRoutes } from './routes/executions.js';
+import { fileRoutes } from './routes/files.js';
 import { OAUTH_CALLBACK_PATH, oauthRoutes } from './routes/oauth.js';
 import { workflowRoutes } from './routes/workflows.js';
 
@@ -93,6 +94,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(catalogRoutes(deps), { prefix: '/api' });
   await app.register(dbCommandRoutes(deps), { prefix: '/api' });
   await app.register(oauthRoutes(deps), { prefix: '/api' });
+  await app.register(fileRoutes(deps), { prefix: '/api' });
 
   if (deps.config.webDistDir) {
     await app.register(fastifyStatic, { root: deps.config.webDistDir });

@@ -104,7 +104,8 @@ textarea.code,
   font-size: 12.5px;
 }
 
-button {
+button,
+label.button {
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: var(--radius);
@@ -122,7 +123,8 @@ button {
     border-color 0.15s,
     color 0.15s;
 }
-button:hover:not(:disabled) {
+button:hover:not(:disabled),
+label.button:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
@@ -267,6 +269,17 @@ tr.selected:hover {
   font-weight: 600;
   color: var(--text);
 }
+.file-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.file-input .file-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .field-hint {
   font-size: 12px;
   color: var(--muted);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { post, type ApiCatalog, type ApiVariable, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
+import { errorMessage, formatSize, get, MAX_FILE_BYTES, post, uploadFile, type ApiCatalog, type StoredFile, type ApiVariable, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
 
 export interface FieldContext {
   connections: ConnectionItem[];
@@ -230,6 +230,8 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
     }
     case 'erpVariables':
       return <ErpVariablesInput value={value} onChange={onChange} ctx={ctx} />;
+    case 'file':
+      return <FileInput value={value} onChange={onChange} disabled={disabled} />;
     case 'list':
       return <ListInput prop={prop} value={value} onChange={onChange} ctx={ctx} />;
     default:
@@ -284,6 +286,65 @@ function ErpVariablesInput({ value, onChange, ctx }: { value: JsonValue; onChang
         const own = current[v.name];
         return <ParameterField key={v.name} prop={prop} value={own === undefined ? (prop.type === 'string' || prop.type === 'json' ? '' : null) : own} onChange={(next) => onChange({ ...current, [v.name]: next })} ctx={ctx} />;
       })}
+    </div>
+  );
+}
+
+/** Escolhe um arquivo do computador, envia ao servidor e guarda o ID dele no campo. */
+function FileInput({ value, onChange, disabled }: { value: JsonValue; onChange: (v: JsonValue) => void; disabled: boolean }) {
+  const id = typeof value === 'string' ? value : '';
+  const [info, setInfo] = useState<StoredFile | null>(null);
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    if (!id) return setInfo(null);
+    if (info?.id === id) return;
+    let alive = true;
+    get<StoredFile>(`/files/${id}`)
+      .then((f) => alive && setInfo(f))
+      .catch(() => alive && setStatus('Arquivo não encontrado; escolha de novo'));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
+
+  const choose = async (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > MAX_FILE_BYTES) return setStatus(`O arquivo passa de ${formatSize(MAX_FILE_BYTES)}`);
+    setStatus('Enviando…');
+    try {
+      const stored = await uploadFile(file);
+      setInfo(stored);
+      setStatus('');
+      onChange(stored.id);
+    } catch (err) {
+      setStatus(errorMessage(err));
+    }
+  };
+
+  return (
+    <div className="file-input">
+      {id && info ? (
+        <span className="file-name">
+          <a href={`/api/files/${id}/content`} target="_blank" rel="noreferrer">{info.name}</a> · {formatSize(info.size)}
+        </span>
+      ) : (
+        !status && <span className="field-hint">Nenhum arquivo escolhido</span>
+      )}
+      {!disabled && (
+        <>
+          <label className="button">
+            {id ? 'Trocar arquivo' : 'Escolher arquivo'}
+            <input type="file" hidden onChange={(e) => void choose(e.target.files?.[0]).finally(() => (e.target.value = ''))} />
+          </label>
+          {id && (
+            <button type="button" onClick={() => { onChange(''); setInfo(null); setStatus(''); }}>
+              Remover
+            </button>
+          )}
+        </>
+      )}
+      {status && <span className="field-hint">{status}</span>}
     </div>
   );
 }

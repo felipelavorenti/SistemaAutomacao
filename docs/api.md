@@ -2330,6 +2330,124 @@ Responde com redirecionamento (302) para /conexoes?google=ok&conexao={id}&conta=
 
 _A resposta é um redirecionamento; o exemplo mostra o status e o cabeçalho Location. Quem chama esta rota é o navegador, vindo do Google._
 
+## Arquivos
+
+### POST /api/files
+
+Guarda um arquivo para os fluxos usarem, como o anexo escolhido no nó Gmail. O arquivo vai como está no corpo, sem base64, com Content-Type: application/octet-stream; o fluxo guarda só o ID devolvido.
+
+**Perfil:** Editor ou acima · registra na auditoria
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `name` | URL | texto | sim | Nome do arquivo, com a extensão (ex.: boleto.pdf) |
+| `type` | URL | texto | não | Tipo do arquivo (ex.: application/pdf); em branco, application/octet-stream |
+
+**Exemplo de chamada**
+
+```bash
+curl -X POST "$INFO8N/api/files?name=boleto-setembro.pdf&type=application%2Fpdf" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary "@boleto-setembro.pdf"
+```
+
+**Exemplo de resposta**
+
+Responde com status 201. id é o que vai no campo Arquivo do anexo, no parâmetro file da lista attachments do nó Gmail.
+
+```json
+{
+  "id": "9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43",
+  "name": "boleto-setembro.pdf",
+  "mimeType": "application/pdf",
+  "size": 48213,
+  "createdAt": "2026-10-03T22:41:07.512Z",
+  "createdByName": "Ana Lima"
+}
+```
+
+**Erros próprios**
+
+- 400: falta o nome, o arquivo está vazio ou o corpo não veio como application/octet-stream
+- 413: o arquivo passa de 25 MB
+
+### GET /api/files/{id}
+
+Nome, tipo, tamanho em bytes e quem enviou o arquivo.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID do arquivo |
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/files/9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Exemplo de resposta**
+
+```json
+{
+  "id": "9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43",
+  "name": "boleto-setembro.pdf",
+  "mimeType": "application/pdf",
+  "size": 48213,
+  "createdAt": "2026-10-03T22:41:07.512Z",
+  "createdByName": "Ana Lima"
+}
+```
+
+**Erros próprios**
+
+- 404: o arquivo não existe
+
+### GET /api/files/{id}/content
+
+Baixa o arquivo, com o tipo e o nome guardados.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID do arquivo |
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/files/9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43/content" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o "boleto-setembro.pdf"
+```
+
+**Exemplo de resposta**
+
+O corpo é o próprio arquivo, com Content-Type do tipo guardado e Content-Disposition: attachment com o nome.
+
+```json
+{
+  "status": 200,
+  "content-type": "application/pdf",
+  "content-disposition": "attachment; filename*=UTF-8''boleto-setembro.pdf"
+}
+```
+
+_O corpo é o arquivo; o exemplo mostra o status e os cabeçalhos. O curl grava o arquivo com -o._
+
+**Erros próprios**
+
+- 404: o arquivo não existe
+
 ## APIs dos ERPs
 
 ### GET /api/erps

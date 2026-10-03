@@ -1,7 +1,7 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
 import type { ApiEndpointData } from './catalog.js';
 import { DatabasePools } from './database/drivers.js';
-import type { ConnectionData, DatabaseCommandLog, DatabaseSession, NodeType, SubworkflowResult } from './node-types.js';
+import type { ConnectionData, DatabaseCommandLog, DatabaseSession, FileData, NodeType, SubworkflowResult } from './node-types.js';
 import { NodeOperationError } from './node-types.js';
 import { PythonRunner, referencedNodes } from './python/runner.js';
 import { defaultRegistry, NodeRegistry } from './registry.js';
@@ -27,6 +27,8 @@ export interface ExecuteOptions {
   triggerItems?: Item[];
   vars?: JsonObject;
   getConnection?: (id: string) => Promise<ConnectionData>;
+  /** Arquivos enviados pela tela (ex.: anexos do Gmail). */
+  getFile?: (id: string) => Promise<FileData>;
   signal?: AbortSignal;
   onNodeFinished?: (run: NodeRun) => void | Promise<void>;
   registry?: NodeRegistry;
@@ -270,6 +272,10 @@ async function runNode(
           getConnection: async (id) => {
             if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
             return options.getConnection(id);
+          },
+          getFile: async (id) => {
+            if (!options.getFile) throw new NodeOperationError('Arquivos não estão disponíveis nesta execução');
+            return options.getFile(id);
           },
           database: (connectionId) => openDatabase(connectionId, node, options, pools),
           getApiEndpoint: async (erpClientId, endpointId) => {

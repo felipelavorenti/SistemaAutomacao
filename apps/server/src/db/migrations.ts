@@ -229,4 +229,19 @@ CREATE TABLE erp_clients (
 ALTER TABLE workflows ADD COLUMN n8n_id text UNIQUE;
 `,
   },
+  {
+    id: '005_arquivos',
+    sql: `
+-- Arquivos escolhidos na tela (ex.: anexos do Gmail); os fluxos guardam só o ID.
+CREATE TABLE files (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  mime_type text NOT NULL,
+  size int NOT NULL,
+  content bytea NOT NULL,
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

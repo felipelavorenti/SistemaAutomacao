@@ -74,6 +74,10 @@ const run = (parameters: JsonObject, input: JsonObject[] = [{}]) =>
     mode: 'manual',
     triggerItems: input.map((json) => ({ json })),
     getConnection: async () => connection,
+    getFile: async (id) => {
+      if (id !== 'arq-1') throw new Error(`O arquivo ${id} não existe mais`);
+      return { id, name: 'relatório.pdf', mimeType: 'application/pdf', content: Buffer.from('%PDF-1.4') };
+    },
   });
 
 /** Decodifica o "raw" enviado ao Gmail. */
@@ -125,6 +129,30 @@ describe('Gmail', () => {
     await run({ operation: 'send', to: 'a@b.com', subject: 'x', body: 'y' });
     await run({ operation: 'send', to: 'a@b.com', subject: 'x', body: 'y' });
     expect(received.filter((r) => r.url === '/token')).toHaveLength(1);
+  });
+
+  it('anexa o arquivo escolhido na tela com o nome e o tipo dele', async () => {
+    handler = (r) => (r.url === '/token' ? tokenOk : r.url === '/gmail/messages/send' ? { body: { id: 'm1' } } : { status: 404, body: {} });
+    const result = await run({
+      operation: 'send',
+      to: 'a@b.com',
+      subject: 'Relatório',
+      body: 'Segue',
+      attachments: [
+        { file: 'arq-1', fileName: '', content: '', mimeType: '' },
+        { file: 'arq-1', fileName: 'outro-nome.pdf', content: '', mimeType: '' },
+      ],
+    });
+    expect(result.status).toBe('success');
+    const mime = rawOf(received.find((r) => r.url === '/gmail/messages/send')!.body);
+    expect(mime).toContain('Content-Type: application/pdf');
+    expect(mime).toContain(Buffer.from('%PDF-1.4').toString('base64'));
+    expect(mime).toContain(`filename="=?UTF-8?B?${Buffer.from('relatório.pdf').toString('base64')}?="`);
+    expect(mime).toContain('outro-nome.pdf');
+
+    const missing = await run({ operation: 'send', to: 'a@b.com', attachments: [{ file: 'sumiu' }] });
+    expect(missing.status).toBe('error');
+    expect(missing.error?.message).toContain('não existe mais');
   });
 
   it('responde na mesma conversa, com Re:, In-Reply-To e todos menos a própria conta', async () => {

@@ -3,7 +3,7 @@ import type { Queryable } from '../db/db.js';
 export interface AuditEntry {
   userId: string | null;
   action: string;
-  entityType: 'user' | 'folder' | 'client' | 'connection' | 'workflow' | 'execution' | 'session' | 'api_token' | 'erp' | 'erp_endpoint' | 'erp_client';
+  entityType: 'user' | 'folder' | 'client' | 'connection' | 'workflow' | 'execution' | 'session' | 'api_token' | 'erp' | 'erp_endpoint' | 'erp_client' | 'file';
   entityId?: string | null;
   entityName?: string | null;
   before?: unknown;
