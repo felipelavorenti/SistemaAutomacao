@@ -1,6 +1,7 @@
 import { isExpression, parseTemplate, TemplateSyntaxError } from './expressions/template.js';
 import { UNSUPPORTED_NODE_TYPE } from './n8n/import.js';
 import { defaultRegistry, type NodeRegistry } from './registry.js';
+import { ScheduleError, scheduleRepeat } from './schedule.js';
 import type { JsonValue, WorkflowDefinition } from './types.js';
 
 export interface ValidationIssue {
@@ -34,6 +35,15 @@ export function validateWorkflow(workflow: WorkflowDefinition, registry: NodeReg
       const visible = !prop.showWhen || Object.entries(prop.showWhen).every(([key, allowed]) => allowed.includes(values[key] ?? null));
       if (prop.required && visible && (value === undefined || value === '' || value === '=')) {
         issues.push({ nodeId: node.id, message: `"${node.name}": o campo ${prop.displayName} é obrigatório` });
+      }
+    }
+    // Data vazia já aparece como campo obrigatório.
+    if (node.type === 'scheduleTrigger' && !(values.mode === 'once' && !values.dateTime)) {
+      try {
+        scheduleRepeat(values);
+      } catch (err) {
+        if (err instanceof ScheduleError) issues.push({ nodeId: node.id, message: `"${node.name}": ${err.message}` });
+        else throw err;
       }
     }
     for (const message of checkExpressions(node.parameters)) {

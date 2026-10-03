@@ -14,7 +14,13 @@ export type PropertyType =
   | 'erpClient'
   | 'erpEndpoint'
   | 'erpVariables'
-  | 'list';
+  | 'list'
+  /** Vários valores de options, marcados em caixas (valor: lista). */
+  | 'multiOptions'
+  /** Horário hh:mm:ss. */
+  | 'time'
+  /** Data e hora aaaa-mm-ddThh:mm:ss. */
+  | 'dateTime';
 
 /** Descreve um campo de configuração do nó; o editor monta o formulário a partir disso. */
 export interface PropertyDescription {

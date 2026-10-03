@@ -250,7 +250,7 @@ const GROUPS: ApiGroup[] = [
         ],
         response: 'O fluxo salvo, com a version nova e os issues da validação.',
         errors: [
-          '400: fluxo ativo com problemas, cron inválido, conexão ou subfluxo que não existe, ou o fluxo chama ele mesmo',
+          '400: fluxo ativo com problemas, agendamento inválido (horário, dias, cron) ou execução única com data que já passou, conexão ou subfluxo que não existe, ou o fluxo chama ele mesmo',
           '409: outra pessoa salvou depois da baseVersion',
         ],
         audited: true,
@@ -270,7 +270,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Liga o agendamento do fluxo.',
         params: [id('do fluxo')],
-        errors: ['400: o fluxo não tem gatilho de agendamento, tem problemas ou o cron é inválido'],
+        errors: ['400: o fluxo não tem gatilho de agendamento, tem problemas, o agendamento é inválido ou a data da execução única já passou'],
         audited: true,
       },
       {

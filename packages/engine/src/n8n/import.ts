@@ -278,39 +278,34 @@ function scheduleTrigger({ params, warn, timezone }: Ctx): Converted {
   const every = (value: number, unit: string) => (value > 1 ? `*/${value}` : unit);
   const cron = (expr: string): Converted => ({ type: 'scheduleTrigger', parameters: { mode: 'cron', cron: expr, timezone } });
 
+  const hhmmss = (h: number, m: number, sec = 0) => [h, m, sec].map((v) => String(v).padStart(2, '0')).join(':');
+  const time = () => hhmmss(at('triggerAtHour', 0), at('triggerAtMinute', 0));
+  const schedule = (parameters: Converted['parameters']): Converted => ({ type: 'scheduleTrigger', parameters: { ...parameters, timezone } });
+
   switch (field) {
-    case 'seconds': {
-      warn('o agendamento em segundos virou a cada 1 minuto (o menor intervalo aqui)');
-      return { type: 'scheduleTrigger', parameters: { mode: 'interval', intervalMinutes: 1 } };
-    }
+    case 'seconds':
+      return schedule({ mode: 'interval', intervalMinutes: n('secondsInterval', 30), intervalUnit: 'seconds' });
     case 'minutes':
-      return { type: 'scheduleTrigger', parameters: { mode: 'interval', intervalMinutes: n('minutesInterval', 5) } };
+      return schedule({ mode: 'interval', intervalMinutes: n('minutesInterval', 5), intervalUnit: 'minutes' });
     case 'hours':
       return cron(`${at('triggerAtMinute', 0)} ${every(n('hoursInterval', 1), '*')} * * *`);
     case 'days':
+      if (n('daysInterval', 1) === 1) return schedule({ mode: 'daily', time: time() });
       return cron(`${at('triggerAtMinute', 0)} ${at('triggerAtHour', 0)} ${every(n('daysInterval', 1), '*')} * *`);
     case 'weeks': {
       if (n('weeksInterval', 1) > 1) warn('o agendamento "a cada N semanas" virou toda semana; ajuste se precisar');
       const days = Array.isArray(r.triggerAtDay) && r.triggerAtDay.length ? r.triggerAtDay.map(String).filter((d) => WEEKDAYS.includes(d)) : ['0'];
-      return cron(`${at('triggerAtMinute', 0)} ${at('triggerAtHour', 0)} * * ${days.join(',')}`);
+      return schedule({ mode: 'weekly', weekdays: days, time: time() });
     }
     case 'months':
+      if (n('monthsInterval', 1) === 1) return schedule({ mode: 'monthly', dayOfMonth: n('triggerAtDayOfMonth', 1), time: time() });
       return cron(`${at('triggerAtMinute', 0)} ${at('triggerAtHour', 0)} ${n('triggerAtDayOfMonth', 1)} ${every(n('monthsInterval', 1), '*')} *`);
     case 'cronExpression':
-      return cron(fiveFieldCron(String(r.expression ?? ''), warn));
+      return cron(String(r.expression ?? '').trim());
     default:
       warn(`tipo de agendamento "${field}" desconhecido; ficou todo dia às 8h`);
-      return cron('0 8 * * *');
+      return schedule({ mode: 'daily', time: '08:00:00' });
   }
-}
-
-function fiveFieldCron(expression: string, warn: (m: string) => void): string {
-  const fields = expression.trim().split(/\s+/);
-  if (fields.length === 6) {
-    warn('a expressão cron tinha segundos; o campo de segundos foi removido');
-    return fields.slice(1).join(' ');
-  }
-  return expression.trim();
 }
 
 function cronTrigger({ params, warn, timezone }: Ctx): Converted {
@@ -320,24 +315,28 @@ function cronTrigger({ params, warn, timezone }: Ctx): Converted {
   const h = Number(t.hour ?? 14);
   const m = Number(t.minute ?? 0);
   const cron = (expr: string): Converted => ({ type: 'scheduleTrigger', parameters: { mode: 'cron', cron: expr, timezone } });
+  const schedule = (parameters: Converted['parameters']): Converted => ({ type: 'scheduleTrigger', parameters: { ...parameters, timezone } });
+  const time = [h, m, 0].map((v) => String(v).padStart(2, '0')).join(':');
   switch (t.mode) {
     case 'everyMinute':
-      return { type: 'scheduleTrigger', parameters: { mode: 'interval', intervalMinutes: 1 } };
+      return schedule({ mode: 'interval', intervalMinutes: 1, intervalUnit: 'minutes' });
     case 'everyHour':
       return cron(`${m} * * * *`);
     case 'everyDay':
-      return cron(`${m} ${h} * * *`);
+      return schedule({ mode: 'daily', time });
     case 'everyWeek':
-      return cron(`${m} ${h} * * ${Number(t.weekday ?? 1)}`);
+      return schedule({ mode: 'weekly', weekdays: [String(Number(t.weekday ?? 1))], time });
     case 'everyMonth':
-      return cron(`${m} ${h} ${Number(t.dayOfMonth ?? 1)} * *`);
+      return schedule({ mode: 'monthly', dayOfMonth: Number(t.dayOfMonth ?? 1), time });
     case 'everyX':
-      return t.unit === 'hours' ? cron(`0 */${Number(t.value ?? 1)} * * *`) : { type: 'scheduleTrigger', parameters: { mode: 'interval', intervalMinutes: Number(t.value ?? 1) } };
+      return t.unit === 'hours'
+        ? schedule({ mode: 'interval', intervalMinutes: Number(t.value ?? 1), intervalUnit: 'hours' })
+        : schedule({ mode: 'interval', intervalMinutes: Number(t.value ?? 1), intervalUnit: 'minutes' });
     case 'custom':
-      return cron(fiveFieldCron(String(t.cronExpression ?? ''), warn));
+      return cron(String(t.cronExpression ?? '').trim());
     default:
       warn('horário do nó Cron não reconhecido; ficou todo dia às 8h');
-      return cron('0 8 * * *');
+      return schedule({ mode: 'daily', time: '08:00:00' });
   }
 }
 

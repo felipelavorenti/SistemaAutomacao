@@ -97,7 +97,7 @@ describe('importador do n8n', () => {
 
   it('converte os nós equivalentes', () => {
     expect(result).toMatchObject({ n8nId: 'wf-precos', name: 'Reajuste de preços', wasActive: true });
-    expect(byName('Todo dia 8h')).toMatchObject({ type: 'scheduleTrigger', parameters: { mode: 'cron', cron: '30 8 * * *', timezone: 'America/Sao_Paulo' } });
+    expect(byName('Todo dia 8h')).toMatchObject({ type: 'scheduleTrigger', parameters: { mode: 'daily', time: '08:30:00', timezone: 'America/Sao_Paulo' } });
     expect(byName('Login')).toMatchObject({
       type: 'httpRequest',
       parameters: { method: 'POST', url: 'http://erp:8080/login', bodyType: 'json', failOnHttpError: false },
