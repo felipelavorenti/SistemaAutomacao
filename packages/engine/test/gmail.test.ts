@@ -180,6 +180,41 @@ describe('Gmail', () => {
     expect(JSON.parse(received.find((r) => r.url === '/gmail/drafts/send')!.body)).toEqual({ id: 'r-1' });
   });
 
+  it('busca rascunhos já existentes e devolve o id que Enviar rascunho usa', async () => {
+    handler = (r) => {
+      if (r.url === '/token') return tokenOk;
+      if (r.url.startsWith('/gmail/drafts?')) {
+        const page = new URL(`http://x${r.url}`).searchParams.get('pageToken');
+        return page
+          ? { body: { drafts: [{ id: 'r-2', message: { id: 'm2', threadId: 't2' } }] } }
+          : { body: { drafts: [{ id: 'r-1', message: { id: 'm1', threadId: 't1' } }], nextPageToken: 'p2' } };
+      }
+      const m = /^\/gmail\/messages\/(\w+)\?format=full$/.exec(r.url);
+      if (m) {
+        return {
+          body: {
+            id: m[1],
+            threadId: `t${m[1]!.slice(1)}`,
+            labelIds: ['DRAFT'],
+            payload: { mimeType: 'text/plain', headers: [{ name: 'To', value: 'cliente@x.com' }, { name: 'Subject', value: `Relatório ${m[1]}` }], body: { data: b64url('Segue') } },
+          },
+        };
+      }
+      return { status: 404, body: {} };
+    };
+    const result = await run({ operation: 'searchDrafts', query: 'subject:Relatório', limit: 5 });
+    expect(result.status).toBe('success');
+    const lists = received.filter((r) => r.url.startsWith('/gmail/drafts?')).map((r) => new URL(`http://x${r.url}`).searchParams);
+    expect(lists).toHaveLength(2);
+    expect(lists[0]!.get('q')).toBe('subject:Relatório');
+    expect(lists[0]!.get('maxResults')).toBe('5');
+    expect(lists[1]!.get('maxResults')).toBe('4');
+    expect(result.lastOutput.map((o) => o.json)).toMatchObject([
+      { id: 'r-1', emailId: 'm1', threadId: 't1', to: 'cliente@x.com', subject: 'Relatório m1', text: 'Segue', labelIds: ['DRAFT'] },
+      { id: 'r-2', emailId: 'm2', subject: 'Relatório m2' },
+    ]);
+  });
+
   it('busca, lê o texto e os anexos e devolve um item por e-mail', async () => {
     const full = (id: string) => ({
       id,
@@ -342,6 +377,7 @@ describe('Importação do Gmail do n8n', () => {
       operation: 'createDraft',
       to: 'x@y.com',
     });
+    expect(convert({ resource: 'draft', operation: 'getAll', limit: 10 }).definition.nodes[0]!.parameters).toMatchObject({ operation: 'searchDrafts', limit: 10 });
     const deleted = convert({ operation: 'delete', messageId: '={{ $json.id }}' });
     expect(deleted.definition.nodes[0]!.parameters).toMatchObject({ operation: 'trash', messageId: '={{ $json.id }}' });
     expect(deleted.warnings.map((w) => w.message)).toContain('no n8n o e-mail era apagado de vez; aqui ele vai para a lixeira');

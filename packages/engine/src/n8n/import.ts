@@ -859,6 +859,7 @@ const GMAIL_OPERATIONS: Record<string, string> = {
   'message.delete': 'trash',
   'draft.create': 'createDraft',
   'draft.delete': 'deleteDraft',
+  'draft.getAll': 'searchDrafts',
 };
 
 function gmail({ node, params, warn }: Ctx): Converted | null {
