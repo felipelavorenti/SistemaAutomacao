@@ -177,6 +177,8 @@ As conexões do tipo `gmailOAuth2` usam OAuth 2.0 com o app que a empresa cria n
 5. Na execução, o nó Gmail troca o refresh token por um access token (1 hora) e o guarda em memória no worker até 5 minutos antes de vencer. `invalid_grant` vira a mensagem pedindo para conectar de novo.
 6. A API devolve só `oauthAccount`; o refresh token nunca sai do servidor. Salvar a conexão mantém a autorização enquanto o Client ID não muda.
 
+Buscar rascunhos lista `GET /drafts` (com `q` e `maxResults`, seguindo `nextPageToken` até o máximo) e lê cada e-mail em `GET /messages/{id}?format=full`, como a busca de e-mails. No item, `id` é o ID do rascunho (o que `POST /drafts/send` e `DELETE /drafts/{id}` pedem) e `emailId` é o ID da mensagem.
+
 **Auditoria**
 
 - A tabela `audit_log` registra quem criou, alterou, ativou, desativou, excluiu ou executou cada coisa, com IP, antes e depois, sem os segredos.
