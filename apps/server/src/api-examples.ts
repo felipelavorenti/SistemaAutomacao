@@ -782,6 +782,27 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
     body: { type: 'postgres', data: { host: '127.0.0.1', port: '5432', database: 'cliente_exemplo', user: 'postgres', password: 'senha-do-banco' } },
     response: { ok: true, durationMs: 4 },
   },
+  'GET /oauth/google/redirect-uri': { response: { redirectUri: 'http://localhost:3000/api/oauth/google/callback' } },
+  'POST /connections/{id}/oauth/google/start': {
+    path: '/connections/5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21/oauth/google/start',
+    response: {
+      url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=1234-abc.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Foauth%2Fgoogle%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify&access_type=offline&prompt=consent&include_granted_scopes=true&state=eyJjIjoiNWYxYzJhNzctOGQwZS00YjhhLTlhNDMtMmY2ZjBmM2U5YjIxIiwidSI6ImM2MDMyOGVmLTIzZjctNGVhNi1hNzE5LTMwMjVmODI4ZDFkNSIsInIiOiJodHRwOi8vbG9jYWxob3N0OjMwMDAvYXBpL29hdXRoL2dvb2dsZS9jYWxsYmFjayIsImUiOjE3OTE1NzQ2NDE5ODd9.q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E',
+      redirectUri: 'http://localhost:3000/api/oauth/google/callback',
+    },
+  },
+  'POST /connections/{id}/oauth/google/complete': {
+    path: '/connections/5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21/oauth/google/complete',
+    body: {
+      url: 'http://localhost:3000/api/oauth/google/callback?state=eyJjIjoiNWYxYzJhNzct...q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E&code=4%2F0AVG7fiQ-exemplo&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify',
+    },
+    response: { id: '5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21', name: 'Gmail financeiro', account: 'financeiro@empresa.com' },
+    note: 'O state foi encurtado; cole o endereço inteiro, como aparece na barra do navegador.',
+  },
+  'GET /oauth/google/callback': {
+    path: '/oauth/google/callback?state=eyJjIjoiNWYxYzJhNzct...q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E&code=4%2F0AVG7fiQ-exemplo',
+    response: { status: 302, location: '/conexoes?google=ok&conexao=5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21&conta=financeiro%40empresa.com' },
+    note: 'A resposta é um redirecionamento; o exemplo mostra o status e o cabeçalho Location. Quem chama esta rota é o navegador, vindo do Google.',
+  },
   'GET /erps': {
     response: [
       {

@@ -30,4 +30,5 @@ export {
 export { testConnection, TESTABLE_CONNECTION_TYPES } from './connection-test.js';
 export { METABASE_CONNECTION_TYPES } from './nodes/metabase.js';
 export { CLICKUP_CONNECTION_TYPES } from './nodes/clickup.js';
+export { GMAIL_CONNECTION_TYPES, GMAIL_SCOPES, exchangeGoogleCode, googleAuthUrl } from './nodes/google.js';
 export { convertN8nWorkflow, readN8nExport, UNSUPPORTED_NODE_TYPE, type ConvertedWorkflow, type ImportWarning, type N8nWorkflow } from './n8n/import.js';

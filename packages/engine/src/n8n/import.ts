@@ -239,6 +239,8 @@ function convertNode(type: string, ctx: Ctx): Converted | null {
       return database(ctx, 'oracle');
     case 'clickUp':
       return clickUp(ctx);
+    case 'gmail':
+      return gmail(ctx);
     default:
       return null;
   }
@@ -842,6 +844,63 @@ function clickUp({ params, warn }: Ctx): Converted | null {
       customFields: [],
     },
   };
+}
+
+// ---------- Gmail ----------
+
+const GMAIL_OPERATIONS: Record<string, string> = {
+  'message.send': 'send',
+  'message.reply': 'reply',
+  'message.get': 'get',
+  'message.getAll': 'search',
+  'message.markAsRead': 'markRead',
+  'message.markAsUnread': 'markUnread',
+  'message.addLabels': 'addLabels',
+  'message.removeLabels': 'removeLabels',
+  'message.delete': 'trash',
+  'draft.create': 'createDraft',
+  'draft.delete': 'deleteDraft',
+};
+
+function gmail({ node, params, warn }: Ctx): Converted | null {
+  if ((node.typeVersion ?? 1) < 2) return null;
+  const resource = String(params.resource ?? 'message');
+  const operation = GMAIL_OPERATIONS[`${resource}.${String(params.operation ?? 'send')}`];
+  if (!operation) return null;
+  const options = isObject(params.options) ? params.options : {};
+  const filters = isObject(params.filters) ? params.filters : {};
+  const text = (value: unknown) => (value === undefined || value === null ? '' : Array.isArray(value) ? value.map(String).join(', ') : String(value));
+  warn('escolha a conexão do Gmail');
+  if (operation === 'trash') warn('no n8n o e-mail era apagado de vez; aqui ele vai para a lixeira');
+  if (isObject(options.attachmentsUi)) warn('os anexos do n8n vinham de dados binários; passe o conteúdo em base64 para a lista de anexos');
+  if (operation === 'search' && (filters.readStatus || filters.sender || filters.receivedAfter || filters.receivedBefore)) {
+    warn('os filtros de lido, remetente e datas do n8n não foram importados; escreva-os na busca (ex.: is:unread from:x after:2026/01/31)');
+  }
+  const parameters: JsonObject = {
+    connection: '',
+    operation,
+    messageId: text(params.messageId),
+    draftId: text(params.messageId ?? params.draftId),
+    to: text(params.sendTo ?? options.sendTo),
+    cc: text(options.ccList),
+    bcc: text(options.bccList),
+    subject: text(params.subject),
+    bodyType: params.emailType === 'html' ? 'html' : 'text',
+    body: text(params.message),
+    senderName: text(options.senderName),
+    replyTo: text(options.replyTo),
+    attachments: [],
+    replyAll: options.replyToSenderOnly === false,
+    replyToMessageId: '',
+    query: text(filters.q),
+    labelFilter: text(filters.labelIds),
+    includeSpamTrash: filters.includeSpamTrash === true,
+    limit: params.returnAll === true ? 500 : Number(params.limit ?? 50),
+    downloadAttachments: options.downloadAttachments === true || filters.downloadAttachments === true,
+    labels: text(params.labelIds),
+  };
+  if (operation === 'createDraft' && options.threadId) warn('o rascunho do n8n ia para uma conversa (threadId); informe o ID de um e-mail dela em "Em resposta ao e-mail"');
+  return { type: 'gmail', parameters };
 }
 
 // ---------- Expressões ----------

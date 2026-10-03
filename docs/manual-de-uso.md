@@ -163,6 +163,20 @@ Exemplos de cron: 0 8 \* \* \* roda todo dia às 8h; \*/15 \* \* \* \* roda a ca
 
 **ClickUp.** Cria uma tarefa para cada item e devolve a tarefa criada. Campos: lista (ID ou link), nome, descrição em Markdown, responsáveis (e-mails ou IDs, separados por vírgula), prazo (dd/mm/aaaa, dd/mm/aaaa hh:mm ou ISO) e campos personalizados (ID do campo e valor).
 
+**Gmail.** Envia, responde e organiza e-mails de uma conta do Google, uma vez por item. Usa uma conexão Gmail (login com Google); veja [Conectar o Gmail](#conectar-o-gmail).
+
+- **Enviar e-mail:** Para, Cc e Cco (endereços separados por vírgula, como `Ana <ana@empresa.com>, bruno@cliente.com`), assunto, texto em texto simples ou HTML, nome do remetente, Responder para e anexos. O e-mail sai sempre da conta conectada; o nome do remetente só muda o nome que aparece. Devolve id, threadId e labelIds do e-mail enviado.
+- **Responder e-mail:** informe o ID do e-mail. A resposta vai para quem enviou (ou para o Responder para dele), na mesma conversa, com "Re:" e o assunto original quando o assunto fica em branco. Responder a todos inclui quem estava em Para e Cc, menos a própria conta. Para, Cc e Cco preenchidos somam aos destinatários.
+- **Criar rascunho:** os mesmos campos do envio. Com Em resposta ao e-mail, o rascunho já fica na conversa com os destinatários e o assunto da resposta. Devolve o id do rascunho e a mensagem.
+- **Enviar rascunho:** envia o rascunho pelo ID que Criar rascunho devolveu. **Excluir rascunho** apaga o rascunho.
+- **Buscar e-mails:** usa a mesma busca da caixa do Gmail (`from:nf@fornecedor.com is:unread newer_than:2d has:attachment`), com filtro opcional por etiquetas, opção de incluir spam e lixeira e máximo de e-mails (1 a 500, padrão 20). Cada e-mail vira um item com id, threadId, labelIds, snippet, from, to, cc, replyTo, subject, date, text, html e attachments. Sem e-mails encontrados, o caminho termina ali sem erro.
+- **Ler e-mail:** traz um e-mail pelo ID, no mesmo formato da busca.
+- **Trazer o conteúdo dos anexos:** na busca e na leitura, põe o conteúdo de cada anexo em base64 em attachments[].content. Sem isso, cada anexo vem só com nome, tipo, tamanho e attachmentId.
+- **Anexos:** cada anexo tem nome do arquivo, conteúdo em base64 e tipo (ex.: application/pdf). Para reenviar um anexo recebido, use a busca com anexos e, em Expressão, `{{ $json.attachments[0].content }}`.
+- **Marcar como lido** e **Marcar como não lido:** pelo ID do e-mail.
+- **Pôr etiquetas** e **Tirar etiquetas:** nomes ou IDs separados por vírgula. As do sistema são INBOX (tirar arquiva o e-mail), STARRED, IMPORTANT, UNREAD, SPAM e TRASH. A etiqueta precisa existir no Gmail.
+- **Mover para a lixeira:** o e-mail fica 30 dias na lixeira do Gmail. O Info8n não apaga e-mails de vez.
+
 **Execute Workflow.** Chama outro fluxo, que precisa começar pelo gatilho Chamado por outro fluxo, e devolve a saída do último nó que rodou nele. Escolha rodar uma vez com todos os itens ou uma vez para cada item. A execução do subfluxo aparece separada em Execuções, ligada à execução que a chamou.
 
 ### Lógica
@@ -238,11 +252,45 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 | Oracle | Servidor, porta e service name, ou connect string; usuário, senha, tempo limite | Banco de dados |
 | Metabase | URL e API key, ou usuário e senha | Metabase |
 | ClickUp | Token pessoal da API (no ClickUp: Configurações, Apps, API Token) | ClickUp |
+| Gmail (login com Google) | Client ID e client secret do app do Google Cloud, e o botão Conectar com Google | Gmail |
 
-- **Testar conexão:** bancos, Metabase e ClickUp têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
+- **Testar conexão:** bancos, Metabase, ClickUp e Gmail têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
 - **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual.
 - **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
+
+#### Conectar o Gmail
+
+O Gmail não usa senha: a conta do Google autoriza o Info8n uma vez, pelo botão Conectar com Google, e o Info8n guarda essa autorização criptografada. Para isso é preciso um app OAuth no Google Cloud, criado uma vez e usado por todas as conexões do Gmail.
+
+**1. Criar o app no Google Cloud** (uma vez só)
+
+1. Entre em [console.cloud.google.com](https://console.cloud.google.com) com a conta do Google da empresa e crie um projeto (ex.: Info8n).
+2. Em APIs e serviços, Biblioteca, procure Gmail API e clique em Ativar.
+3. Abra Google Auth Platform (ou Tela de consentimento OAuth) e preencha o nome do app (ex.: Info8n) e o e-mail de suporte. Em Público:
+   - **Interno**, se as contas que vão ser conectadas são do Google Workspace da empresa. É a melhor opção: não pede verificação nem vence.
+   - **Externo**, para contas @gmail.com. Adicione cada conta em Usuários de teste. Enquanto o app estiver em Teste, a autorização vence a cada 7 dias; para não vencer, clique em Publicar app. O Google vai mostrar o aviso de app não verificado na hora de conectar, o que é normal para uso próprio.
+4. Em Clientes (ou Credenciais), crie um ID do cliente OAuth do tipo **Aplicativo da Web**. Em URIs de redirecionamento autorizados, cole o Endereço de retorno que aparece na conexão do Gmail no Info8n (ex.: `http://localhost:3000/api/oauth/google/callback`). Se o Info8n é aberto por mais de um endereço, cadastre todos.
+5. Copie o ID do cliente e a chave secreta do cliente.
+
+**2. Criar a conexão no Info8n**
+
+1. Conexões, Nova conexão, tipo **Gmail (login com Google)**. Dê um nome que identifique a conta (ex.: Gmail financeiro).
+2. Cole o Client ID e o Client secret.
+3. Clique em **Conectar com Google**. A conexão é salva e o Google abre. Escolha a conta e autorize. Se aparecer "O Google não verificou este app", clique em Avançado e depois em Acessar Info8n.
+4. O Google volta para Conexões com a mensagem "Conta do Google conectada". Na lista, a conexão mostra o e-mail conectado.
+
+**Info8n aberto por IP**
+
+O Google só aceita voltar para localhost ou para um domínio, nunca para um IP. Quando o Info8n é aberto por IP (ex.: `http://10.0.0.20:3000`), o endereço de retorno vira `http://localhost:3000/...`, o Google abre numa nova aba e essa aba não carrega. Copie o endereço inteiro daquela aba, volte para a conexão, cole em Endereço da página de retorno e clique em Concluir.
+
+Para não precisar colar, abra o Info8n por `http://localhost:3000` no próprio servidor, ou configure um nome (ex.: `http://info8n.empresa.local:3000`) na variável `PUBLIC_URL` do servidor e cadastre esse endereço no Google Cloud.
+
+**Depois de conectado**
+
+- O acesso vale até alguém revogar em [myaccount.google.com/permissions](https://myaccount.google.com/permissions), trocar a senha da conta, ou, com o app Externo em Teste, por 7 dias. Nesses casos o nó falha com "O Google recusou o acesso salvo"; abra a conexão e clique em Conectar com Google de novo.
+- Trocar o Client ID desfaz a conexão com a conta, porque a autorização é do app antigo. Trocar só o nome ou o cliente não desfaz.
+- O Info8n pede ao Google permissão para ler, enviar, criar rascunhos, mudar etiquetas e mover para a lixeira. Não pede permissão para apagar e-mails de vez.
 
 ### APIs dos ERPs
 
@@ -361,6 +409,7 @@ Uma forma simples de organizar é uma pasta por área ou por cliente, e marcar e
 | Code em Python com \_items ou .to\_py() | Use \_input.all() e \_json; os itens já são dicionários. Só a biblioteca padrão do Python |
 | Code em JavaScript com require() | Não existe |
 | Execute Workflow sem esperar | Sempre espera o subfluxo terminar |
+| Gmail | Mesmas operações principais; excluir e-mail vira mover para a lixeira. Escolha a conexão do Gmail depois de importar, e refaça os anexos, que no n8n vinham de dados binários |
 
 A importação mostra esses pontos fluxo por fluxo, e o que não tem equivalente vira um nó do n8n não convertido, que impede a ativação até ser substituído. O importador ainda aponta .toJsonString() como incompatível; esse aviso pode ser ignorado.
 
@@ -381,4 +430,7 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | Outra pessoa salvou este fluxo enquanto você editava | Duas pessoas no mesmo fluxo | Recarregue a página e refaça a alteração sobre a versão atual |
 | A execução agendada não mostra entrada e saída | Sucesso agendado guarda só o resumo | Use Executar de novo, que guarda todos os dados. Lembre que ela roda tudo outra vez, inclusive gravações em bancos e APIs |
 | Testar conexão falha no banco | O banco não aceita o IP do servidor, ou os dados estão errados | Confira servidor, porta e usuário, e libere o IP do servidor do Info8n no banco |
+| No Google, erro 400 redirect_uri_mismatch | O endereço de retorno não está cadastrado no app do Google Cloud | Copie o Endereço de retorno da conexão e cadastre em URIs de redirecionamento autorizados |
+| O Google recusou o acesso salvo na conexão do Gmail | Acesso revogado, senha trocada ou app Externo em Teste há mais de 7 dias | Abra a conexão e clique em Conectar com Google de novo. Para não vencer, publique o app no Google Cloud |
+| A conexão do Gmail ainda não foi conectada | Salvou a conexão sem clicar em Conectar com Google | Abra a conexão e clique em Conectar com Google |
 | A execução fica Na fila | O servidor já está rodando o máximo de execuções ao mesmo tempo (5, por padrão) | Aguarde, ou peça ao administrador para aumentar esse limite |

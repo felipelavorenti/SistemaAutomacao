@@ -1737,7 +1737,7 @@ curl "$INFO8N/api/connection-types" \
 
 **Exemplo de resposta**
 
-Campos com secret true são guardados criptografados e o valor deles nunca volta. options, quando existe, lista os valores aceitos.
+Campos com secret true são guardados criptografados e o valor deles nunca volta. options, quando existe, lista os valores aceitos. oauth: "google" marca os tipos conectados pelo login com Google (Gmail), que além dos campos precisam de POST /connections/{id}/oauth/google/start.
 
 ```json
 [
@@ -1806,7 +1806,7 @@ curl "$INFO8N/api/connections" \
 
 **Exemplo de resposta**
 
-Em data, os campos secretos vêm como •••••• quando estão preenchidos e vazios quando não estão.
+Em data, os campos secretos vêm como •••••• quando estão preenchidos e vazios quando não estão. Nas conexões do Gmail, data.oauthAccount é o e-mail da conta do Google conectada, ou vazio enquanto ninguém clicou em Conectar com Google.
 
 ```json
 [
@@ -2136,6 +2136,140 @@ Uma falha no teste também volta com status 200, com ok false e o motivo em mess
 **Erros próprios**
 
 - 400: o tipo é testado no próprio nó, ou falta campo obrigatório
+
+### GET /api/oauth/google/redirect-uri
+
+Endereço de retorno que precisa estar cadastrado no app OAuth do Google Cloud para o login com Google das conexões do Gmail.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros:** nenhum.
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/oauth/google/redirect-uri" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Exemplo de resposta**
+
+Vem de PUBLIC_URL quando a variável existe. Sem ela, usa o endereço pelo qual o Info8n foi aberto, trocando IP por localhost, porque o Google só aceita retorno para localhost ou para um domínio.
+
+```json
+{"redirectUri": "http://localhost:3000/api/oauth/google/callback"}
+```
+
+### POST /api/connections/{id}/oauth/google/start
+
+Começa o login com Google de uma conexão do Gmail já salva: devolve o endereço do Google onde a pessoa autoriza o acesso.
+
+**Perfil:** Editor ou acima
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID da conexão |
+
+**Exemplo de chamada**
+
+```bash
+curl -X POST "$INFO8N/api/connections/5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21/oauth/google/start" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Exemplo de resposta**
+
+Abra url no navegador. O pedido vale 15 minutos e só pode ser concluído pelo mesmo usuário. Depois de autorizar, o Google manda o navegador para redirectUri.
+
+```json
+{
+  "url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=1234-abc.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fapi%2Foauth%2Fgoogle%2Fcallback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify&access_type=offline&prompt=consent&include_granted_scopes=true&state=eyJjIjoiNWYxYzJhNzctOGQwZS00YjhhLTlhNDMtMmY2ZjBmM2U5YjIxIiwidSI6ImM2MDMyOGVmLTIzZjctNGVhNi1hNzE5LTMwMjVmODI4ZDFkNSIsInIiOiJodHRwOi8vbG9jYWxob3N0OjMwMDAvYXBpL29hdXRoL2dvb2dsZS9jYWxsYmFjayIsImUiOjE3OTE1NzQ2NDE5ODd9.q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E",
+  "redirectUri": "http://localhost:3000/api/oauth/google/callback"
+}
+```
+
+**Erros próprios**
+
+- 400: a conexão não usa login com Google, ou falta salvar o client ID e o client secret
+- 404: não existe ou é de um cliente sem acesso
+
+### POST /api/connections/{id}/oauth/google/complete
+
+Conclui o login com Google colando o endereço da página para onde o Google mandou. Serve quando o Info8n é aberto por IP e o retorno foi para localhost, onde ele não roda.
+
+**Perfil:** Editor ou acima · registra na auditoria
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID da conexão |
+| `url` | corpo | texto | sim | Endereço completo da página de retorno, com code e state (ex.: http://localhost:3000/api/oauth/google/callback?state=...&code=...) |
+
+**Exemplo de chamada**
+
+```bash
+curl -X POST "$INFO8N/api/connections/5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21/oauth/google/complete" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+  "url": "http://localhost:3000/api/oauth/google/callback?state=eyJjIjoiNWYxYzJhNzct...q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E&code=4%2F0AVG7fiQ-exemplo&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.modify"
+}'
+```
+
+**Exemplo de resposta**
+
+account é o e-mail da conta do Google conectada. O acesso fica guardado criptografado na conexão e nunca volta pela API.
+
+```json
+{
+  "id": "5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21",
+  "name": "Gmail financeiro",
+  "account": "financeiro@empresa.com"
+}
+```
+
+_O state foi encurtado; cole o endereço inteiro, como aparece na barra do navegador._
+
+**Erros próprios**
+
+- 400: endereço sem code e state, pedido vencido ou de outra conexão, autorização cancelada, ou o Google não aceitou o código (a mensagem traz o motivo)
+- 403: o pedido foi começado por outro usuário
+
+### GET /api/oauth/google/callback
+
+Retorno do Google depois da autorização. Quem chama é o navegador, sem sessão: a conexão e o usuário vêm do state assinado. Grava o acesso na conexão e volta para a tela de conexões.
+
+**Perfil:** Sem login · registra na auditoria
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `code` | URL | texto | não | Código da autorização, enviado pelo Google |
+| `state` | URL | texto | não | Pedido assinado criado por POST /connections/{id}/oauth/google/start |
+| `error` | URL | texto | não | Enviado pelo Google quando a autorização falha ou é cancelada (ex.: access_denied) |
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/oauth/google/callback?state=eyJjIjoiNWYxYzJhNzct...q3Jx0Ue1y8b3tYwKkqv0p2r7oJmZ6c1nB4sVh9dXa0E&code=4%2F0AVG7fiQ-exemplo"
+```
+
+**Exemplo de resposta**
+
+Responde com redirecionamento (302) para /conexoes?google=ok&conexao={id}&conta={e-mail}, ou para /conexoes?google=erro&mensagem={motivo} quando algo falha.
+
+```json
+{
+  "status": 302,
+  "location": "/conexoes?google=ok&conexao=5f1c2a77-8d0e-4b8a-9a43-2f6f0f3e9b21&conta=financeiro%40empresa.com"
+}
+```
+
+_A resposta é um redirecionamento; o exemplo mostra o status e o cabeçalho Location. Quem chama esta rota é o navegador, vindo do Google._
 
 ## APIs dos ERPs
 

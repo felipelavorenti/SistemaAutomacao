@@ -1387,3 +1387,15 @@ textarea.code-editor {
 .api-docs .filters input {
   min-width: 320px;
 }
+.google-login {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.google-login p {
+  margin: 4px 0 10px;
+}
+.google-login > button {
+  margin-bottom: 12px;
+}
