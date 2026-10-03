@@ -12,6 +12,7 @@ type Operation =
   | 'createDraft'
   | 'sendDraft'
   | 'deleteDraft'
+  | 'searchDrafts'
   | 'search'
   | 'get'
   | 'markRead'
@@ -39,6 +40,7 @@ const properties: PropertyDescription[] = [
       { name: 'Criar rascunho', value: 'createDraft' },
       { name: 'Enviar rascunho', value: 'sendDraft' },
       { name: 'Excluir rascunho', value: 'deleteDraft' },
+      { name: 'Buscar rascunhos', value: 'searchDrafts' },
       { name: 'Buscar e-mails', value: 'search' },
       { name: 'Ler e-mail', value: 'get' },
       { name: 'Marcar como lido', value: 'markRead' },
@@ -73,7 +75,7 @@ const properties: PropertyDescription[] = [
     default: '',
     required: true,
     placeholder: '={{ $json.id }}',
-    description: 'O id que Criar rascunho devolve.',
+    description: 'O id que Criar rascunho ou Buscar rascunhos devolve.',
     showWhen: when(...BY_DRAFT),
   },
   {
@@ -145,7 +147,7 @@ const properties: PropertyDescription[] = [
     default: '',
     placeholder: 'from:nf@fornecedor.com is:unread newer_than:2d',
     description: 'Mesma sintaxe da caixa de busca do Gmail. Em branco, traz os mais recentes.',
-    showWhen: when('search'),
+    showWhen: when('search', 'searchDrafts'),
   },
   {
     name: 'labelFilter',
@@ -168,8 +170,8 @@ const properties: PropertyDescription[] = [
     displayName: 'Máximo de e-mails',
     type: 'number',
     default: 20,
-    description: 'De 1 a 500. Cada e-mail encontrado vira um item.',
-    showWhen: when('search'),
+    description: 'De 1 a 500. Cada e-mail ou rascunho encontrado vira um item.',
+    showWhen: when('search', 'searchDrafts'),
   },
   {
     name: 'downloadAttachments',
@@ -177,7 +179,7 @@ const properties: PropertyDescription[] = [
     type: 'boolean',
     default: false,
     description: 'Põe o conteúdo de cada anexo em base64 no item. Sem isso, vem só o nome, o tipo e o tamanho.',
-    showWhen: when('search', 'get'),
+    showWhen: when('search', 'searchDrafts', 'get'),
   },
   {
     name: 'labels',
@@ -195,7 +197,7 @@ export const gmail: NodeType = {
   description: {
     type: 'gmail',
     displayName: 'Gmail',
-    description: 'Envia e responde e-mails, cria e envia rascunhos, busca e lê e-mails e cuida de etiquetas, uma vez por item.',
+    description: 'Envia e responde e-mails, cria, busca e envia rascunhos, busca e lê e-mails e cuida de etiquetas, uma vez por item.',
     group: 'action',
     inputs: 1,
     outputs: 1,
@@ -265,6 +267,17 @@ export const gmail: NodeType = {
           });
           const download = flag(await ctx.getParam('downloadAttachments', i));
           for (const id of ids) output.push({ json: await api.readMessage(id, download) });
+          break;
+        }
+        case 'searchDrafts': {
+          const limit = Math.min(500, Math.max(1, Math.trunc(Number(await ctx.getParam('limit', i)) || 20)));
+          const drafts = await api.searchDrafts({ q: await param('query'), limit });
+          const download = flag(await ctx.getParam('downloadAttachments', i));
+          for (const draft of drafts) {
+            const message = await api.readMessage(draft.messageId, download);
+            // id é o do rascunho, o que Enviar e Excluir rascunho pedem; o do e-mail fica em emailId.
+            output.push({ json: { ...message, id: draft.id, emailId: draft.messageId } });
+          }
           break;
         }
         case 'get':
@@ -364,6 +377,25 @@ class GmailApi {
       pageToken = page.nextPageToken;
     }
     return ids.slice(0, options.limit);
+  }
+
+  /** ID de cada rascunho e do e-mail que ele guarda. */
+  async searchDrafts(options: { q: string; limit: number }): Promise<{ id: string; messageId: string }[]> {
+    const drafts: { id: string; messageId: string }[] = [];
+    let pageToken = '';
+    while (drafts.length < options.limit) {
+      const params = new URLSearchParams({ maxResults: String(Math.min(500, options.limit - drafts.length)) });
+      if (options.q) params.set('q', options.q);
+      if (pageToken) params.set('pageToken', pageToken);
+      const page = await this.get(`/drafts?${params}`);
+      for (const d of (Array.isArray(page.drafts) ? page.drafts : []).filter(isPlainObject)) {
+        const message = isPlainObject(d.message) ? d.message : {};
+        if (typeof d.id === 'string' && typeof message.id === 'string') drafts.push({ id: d.id, messageId: message.id });
+      }
+      if (typeof page.nextPageToken !== 'string' || !page.nextPageToken) break;
+      pageToken = page.nextPageToken;
+    }
+    return drafts.slice(0, options.limit);
   }
 
   async readMessage(id: string, downloadAttachments: boolean): Promise<JsonObject> {
