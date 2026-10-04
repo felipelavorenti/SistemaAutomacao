@@ -272,6 +272,8 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 
 O Gmail não usa senha: a conta do Google autoriza o Info8n uma vez, pelo botão Conectar com Google, e o Info8n guarda essa autorização criptografada. Para isso é preciso um app OAuth no Google Cloud, criado uma vez e usado por todas as conexões do Gmail.
 
+O passo a passo completo, com telas do Google Cloud, uso no fluxo e problemas comuns, está em [Conectar o Gmail (guia completo)](conectar-gmail.md).
+
 **1. Criar o app no Google Cloud** (uma vez só)
 
 1. Entre em [console.cloud.google.com](https://console.cloud.google.com) com a conta do Google da empresa e crie um projeto (ex.: Info8n).
