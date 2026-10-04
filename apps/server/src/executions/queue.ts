@@ -33,6 +33,21 @@ export class ExecutionQueue {
     );
   }
 
+  /**
+   * Próxima execução agendada de cada fluxo. O agendamento (e a execução única) deixa
+   * sempre o próximo disparo como um job atrasado na fila; vale o mais cedo de cada fluxo.
+   */
+  async nextRuns(): Promise<Map<string, number>> {
+    const next = new Map<string, number>();
+    for (const job of await this.queue.getJobs(['delayed'], 0, -1, true)) {
+      if (job?.data?.kind !== 'scheduled') continue;
+      const at = job.timestamp + (job.delay ?? 0);
+      const current = next.get(job.data.workflowId);
+      if (current === undefined || at < current) next.set(job.data.workflowId, at);
+    }
+    return next;
+  }
+
   async requestCancel(executionId: string): Promise<void> {
     await this.redis.publish(CANCEL_CHANNEL, executionId);
   }

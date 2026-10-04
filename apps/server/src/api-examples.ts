@@ -72,6 +72,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: null,
         scheduled: true,
         callable: false,
+        next_run: '2026-10-01T11:00:00.000Z',
       },
       {
         id: '001f6938-0a6c-411e-b8b8-d0f9c96efd04',
@@ -85,6 +86,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: { id: 'b449e37f-eb2d-4b32-b2a0-7a17fece43ac', status: 'success', createdAt: '2026-09-30T12:44:10.690956+00:00' },
         scheduled: false,
         callable: true,
+        next_run: null,
       },
       {
         id: '28eed8f6-3e9c-48e0-a144-c4b5226d3b79',
@@ -98,6 +100,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: { id: '4b31556c-2e1d-48da-9043-d1a708320b46', status: 'success', createdAt: '2026-09-30T12:44:10.139475+00:00' },
         scheduled: false,
         callable: false,
+        next_run: null,
       },
     ],
     note: 'Lista encurtada para três fluxos.',

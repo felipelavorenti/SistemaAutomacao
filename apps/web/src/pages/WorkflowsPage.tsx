@@ -58,17 +58,16 @@ export function WorkflowsPage() {
                     {w.name}
                   </Link>
                   <div className="wf-meta">
-                    Alterado em {formatDate(w.updated_at)}
-                    {w.updated_by_name && ` por ${w.updated_by_name}`}
+                    {w.scheduled && `${nextRunLabel(w)} | `}
                     {w.last_execution ? (
                       <>
-                        {' | '}Última execução{' '}
+                        Última execução{' '}
                         <Link to={`/execucoes/${w.last_execution.id}`} onClick={(e) => e.stopPropagation()}>
                           <StatusBadge status={w.last_execution.status} /> {formatDate(w.last_execution.createdAt)}
                         </Link>
                       </>
                     ) : (
-                      ' | Nunca executado'
+                      'Nunca executado'
                     )}
                   </div>
                 </div>
@@ -280,4 +279,10 @@ function N8nImportModal({ folders, onClose }: { folders: Folder[]; onClose: () =
       </div>
     </Modal>
   );
+}
+
+/** Próximo disparo do agendamento, para a linha do fluxo. */
+function nextRunLabel(w: WorkflowListItem): string {
+  if (w.next_run) return `Próxima execução ${formatDate(w.next_run)}`;
+  return w.active ? 'Sem próxima execução' : 'Sem próxima execução (inativo)';
 }

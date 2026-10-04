@@ -436,7 +436,7 @@ curl "$INFO8N/api/workflows" \
 
 **Exemplo de resposta**
 
-scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou.
+scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).
 
 ```json
 [
@@ -451,7 +451,8 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     "updated_by_name": "Administrador",
     "last_execution": null,
     "scheduled": true,
-    "callable": false
+    "callable": false,
+    "next_run": "2026-10-01T11:00:00.000Z"
   },
   {
     "id": "001f6938-0a6c-411e-b8b8-d0f9c96efd04",
@@ -468,7 +469,8 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
       "createdAt": "2026-09-30T12:44:10.690956+00:00"
     },
     "scheduled": false,
-    "callable": true
+    "callable": true,
+    "next_run": null
   },
   {
     "id": "28eed8f6-3e9c-48e0-a144-c4b5226d3b79",
@@ -485,7 +487,8 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
       "createdAt": "2026-09-30T12:44:10.139475+00:00"
     },
     "scheduled": false,
-    "callable": false
+    "callable": false,
+    "next_run": null
   }
 ]
 ```

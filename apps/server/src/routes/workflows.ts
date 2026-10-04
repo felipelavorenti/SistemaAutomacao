@@ -161,18 +161,25 @@ export const workflowRoutes =
     app.get('/workflows', async (request) => {
       const user = currentUser(request);
       requireCap(user, 'workflow:view');
-      return many(
-        db,
-        `SELECT w.id, w.name, w.folder_id, f.name AS folder_name, w.active, w.version, w.updated_at, u.name AS updated_by_name,
-                (SELECT jsonb_build_object('id', e.id, 'status', e.status, 'createdAt', e.created_at)
-                   FROM executions e WHERE e.workflow_id = w.id ORDER BY e.created_at DESC LIMIT 1) AS last_execution,
-                EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'scheduleTrigger') AS scheduled,
-                EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'executeWorkflowTrigger') AS callable
-         FROM workflows w JOIN folders f ON f.id = w.folder_id LEFT JOIN users u ON u.id = w.updated_by
-         WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
-         ORDER BY f.name, w.name`,
-        [user.folderIds],
-      );
+      const [rows, nextRuns] = await Promise.all([
+        many<{ id: string; active: boolean }>(
+          db,
+          `SELECT w.id, w.name, w.folder_id, f.name AS folder_name, w.active, w.version, w.updated_at, u.name AS updated_by_name,
+                  (SELECT jsonb_build_object('id', e.id, 'status', e.status, 'createdAt', e.created_at)
+                     FROM executions e WHERE e.workflow_id = w.id ORDER BY e.created_at DESC LIMIT 1) AS last_execution,
+                  EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'scheduleTrigger') AS scheduled,
+                  EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'executeWorkflowTrigger') AS callable
+           FROM workflows w JOIN folders f ON f.id = w.folder_id LEFT JOIN users u ON u.id = w.updated_by
+           WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
+           ORDER BY f.name, w.name`,
+          [user.folderIds],
+        ),
+        queue.nextRuns(),
+      ]);
+      return rows.map((w) => {
+        const at = w.active ? nextRuns.get(w.id) : undefined;
+        return { ...w, next_run: at === undefined ? null : new Date(at).toISOString() };
+      });
     });
 
     app.get('/workflows/:id', async (request) => {

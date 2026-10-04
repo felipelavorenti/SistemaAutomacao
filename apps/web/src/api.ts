@@ -161,6 +161,8 @@ export interface WorkflowListItem {
   updated_at: string;
   updated_by_name: string | null;
   last_execution: { id: string; status: ExecutionStatus; createdAt: string } | null;
+  /** Próximo disparo do agendamento; null quando o fluxo está inativo ou não tem próximo. */
+  next_run: string | null;
 }
 
 export interface Workflow {
