@@ -580,6 +580,8 @@ describe.skipIf(!available)('API', () => {
     expect((await call(editor, 'POST', `/api/workflows/${wf.id}/activate`)).status).toBe(200);
     const weekly = (await queue.queue.getJobSchedulers()).find((s) => s.key === `wf:${wf.id}`);
     expect(weekly).toMatchObject({ pattern: '15 30 7 * * 1,5', tz: 'America/Sao_Paulo' });
+    const listed = async () => (await call(viewer, 'GET', '/api/workflows')).body.find((w: { id: string }) => w.id === wf.id);
+    expect((await listed()).next_run).toBe(new Date(weekly!.next!).toISOString());
 
     // Fluxo ativo não aceita data que já passou nem horário inválido.
     const past = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'once', dateTime: '2020-01-01T08:00:00' }) });
@@ -593,6 +595,7 @@ describe.skipIf(!available)('API', () => {
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect((await queue.queue.getJobSchedulers()).map((s) => s.key)).not.toContain(`wf:${wf.id}`);
     expect(await (await queue.queue.getJob(`once-${wf.id}`))?.getState()).toBe('delayed');
+    expect((await listed()).next_run).toBe(`${at}.000Z`);
 
     let executions: { mode: string }[] = [];
     for (let i = 0; i < 100 && !executions.length; i++) {
@@ -601,6 +604,7 @@ describe.skipIf(!available)('API', () => {
     }
     expect(executions.map((e) => e.mode)).toEqual(['schedule']);
     expect((await call(viewer, 'GET', `/api/workflows/${wf.id}`)).body.active).toBe(false);
+    expect((await listed()).next_run).toBeNull();
     const audit = await call(admin, 'GET', `/api/audit?entityType=workflow&entityId=${wf.id}`);
     expect(audit.body[0]).toMatchObject({ action: 'deactivate', user_email: null });
   });

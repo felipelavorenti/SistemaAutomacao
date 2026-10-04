@@ -48,7 +48,7 @@ Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...
 
 ## Fluxos
 
-A tela Fluxos lista os fluxos que você enxerga, com a pasta, quem alterou por último, a última execução e a situação: **Ativo** (roda sozinho no agendamento), **Inativo** (tem agendamento, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
+A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execução (nos fluxos com agendamento; inativo ou sem próximo disparo, aparece Sem próxima execução), a última execução e a situação: **Ativo** (roda sozinho no agendamento), **Inativo** (tem agendamento, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
 
 **Criar, duplicar e excluir**
 
