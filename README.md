@@ -29,6 +29,7 @@ Info8n é a plataforma de automação de processos baseada em fluxos de nós, fo
 - [Manual de uso](docs/manual-de-uso.md): como usar cada tela e cada nó.
 - [Documentação técnica](docs/documentacao-tecnica.md): arquitetura, instalação, configuração e segurança.
 - [Documentação da API](docs/api.md): autenticação, erros e cada chamada da API, com os parâmetros, um exemplo de chamada e um exemplo de resposta.
+- [Conectar o Gmail](docs/conectar-gmail.md): passo a passo do login com Google, do Google Cloud ao uso no fluxo.
 
 Toda funcionalidade nova ou alterada atualiza os três documentos, que também são publicados no Claude ([manual](https://claude.ai/code/artifact/278d0b6e-2f6e-48f1-ba10-9b7b3ffd0b46), [técnica](https://claude.ai/code/artifact/df07d67b-3f8d-442b-90ea-252c386ddced) e [API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9)). As cópias daqui e de lá são mantidas iguais.
 
