@@ -27,14 +27,18 @@ export function parseTime(raw: JsonValue | undefined): [number, number, number] 
 }
 
 /** "2026-10-04T14:30:00" no fuso informado → milissegundos desde 1970. */
+const INVALID_DATE_TIME = 'Data e hora inválidas; use aaaa-mm-dd hh:mm:ss ou, com milissegundos, aaaa-mm-dd hh:mm:ss.mmm';
+
 export function parseLocalDateTime(raw: JsonValue | undefined, timezone: string): number {
-  const match = /^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?\s*$/.exec(String(raw ?? ''));
-  if (!match) throw new ScheduleError('Data e hora inválidas; use aaaa-mm-dd hh:mm:ss');
-  const [y, mo, d, h, mi, s] = match.slice(1).map((v) => Number(v ?? 0)) as number[];
-  const asUtc = Date.UTC(y!, mo! - 1, d!, h!, mi!, s!);
+  const match = /^\s*(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,3}))?)?\s*$/.exec(String(raw ?? ''));
+  if (!match) throw new ScheduleError(INVALID_DATE_TIME);
+  const [y, mo, d, h, mi, s] = match.slice(1, 7).map((v) => Number(v ?? 0)) as number[];
+  // Milissegundos: ".5" é meio segundo, então completa com zeros à direita.
+  const ms = Number((match[7] ?? '').padEnd(3, '0'));
+  const asUtc = Date.UTC(y!, mo! - 1, d!, h!, mi!, s!, ms);
   const check = new Date(asUtc);
   if (check.getUTCMonth() !== mo! - 1 || check.getUTCDate() !== d! || h! > 23 || mi! > 59 || s! > 59) {
-    throw new ScheduleError('Data e hora inválidas; use aaaa-mm-dd hh:mm:ss');
+    throw new ScheduleError(INVALID_DATE_TIME);
   }
   // O fuso pode mudar o deslocamento perto da data (horário de verão); duas passadas acertam.
   let at = asUtc - offsetMs(asUtc, timezone);

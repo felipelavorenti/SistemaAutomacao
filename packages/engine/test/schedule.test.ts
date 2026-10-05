@@ -28,6 +28,14 @@ describe('Agendamento', () => {
     expect(parseLocalDateTime('2026-01-01 09:00', 'UTC')).toBe(Date.parse('2026-01-01T09:00:00Z'));
   });
 
+  it('aceita milissegundos na execução única', () => {
+    expect(scheduleRepeat({ mode: 'once', dateTime: '2026-10-04T14:30:00.250' })).toEqual({ kind: 'once', at: Date.parse('2026-10-04T17:30:00.250Z') });
+    expect(parseLocalDateTime('2026-01-01T09:00:05.5', 'UTC')).toBe(Date.parse('2026-01-01T09:00:05.500Z'));
+    expect(parseLocalDateTime('2026-01-01 09:00:05,007', 'UTC')).toBe(Date.parse('2026-01-01T09:00:05.007Z'));
+    expect(() => parseLocalDateTime('2026-01-01T09:00:05.1234', 'UTC')).toThrow('Data e hora inválidas');
+    expect(() => parseLocalDateTime('2026-01-01T09:00.500', 'UTC')).toThrow('Data e hora inválidas');
+  });
+
   it('recusa valores errados com mensagem clara', () => {
     expect(() => parseTime('25:00')).toThrow('Horário inválido');
     expect(() => scheduleRepeat({ mode: 'weekly', weekdays: [] })).toThrow('pelo menos um dia');

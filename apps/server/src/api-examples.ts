@@ -480,7 +480,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
             type: 'dateTime',
             default: '',
             required: true,
-            description: 'Roda uma vez nesse momento e depois o fluxo é desativado sozinho.',
+            description: 'Roda uma vez nesse momento, com precisão de milissegundos, e depois o fluxo é desativado sozinho.',
             showWhen: { mode: ['once'] },
           },
           {

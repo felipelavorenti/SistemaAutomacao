@@ -590,12 +590,13 @@ describe.skipIf(!available)('API', () => {
     const badTime = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'daily', time: '25:00' }) });
     expect(badTime.body.error).toBe('Horário inválido; use hh:mm:ss, como 08:30:00 no nó "Agendamento"');
 
-    const at = new Date(Date.now() + 1500).toISOString().slice(0, 19);
+    // Com milissegundos: o job atrasado dispara no milissegundo pedido.
+    const at = new Date(Date.now() + 1500).toISOString().slice(0, 23);
     const saved = await call(editor, 'PUT', `/api/workflows/${wf.id}`, { name: 'Agenda simples', folderId: folderA, definition: definition({ mode: 'once', dateTime: at, timezone: 'UTC' }) });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect((await queue.queue.getJobSchedulers()).map((s) => s.key)).not.toContain(`wf:${wf.id}`);
     expect(await (await queue.queue.getJob(`once-${wf.id}`))?.getState()).toBe('delayed');
-    expect((await listed()).next_run).toBe(`${at}.000Z`);
+    expect((await listed()).next_run).toBe(`${at}Z`);
 
     let executions: { mode: string }[] = [];
     for (let i = 0; i < 100 && !executions.length; i++) {
