@@ -48,7 +48,7 @@ Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...
 
 ## Fluxos
 
-A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execução (nos fluxos com agendamento; inativo ou sem próximo disparo, aparece Sem próxima execução), a última execução e a situação: **Ativo** (roda sozinho no agendamento), **Inativo** (tem agendamento, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
+A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execução (nos fluxos com agendamento; inativo ou sem próximo disparo, aparece Sem próxima execução; na execução única com milissegundos, eles aparecem depois dos segundos), a última execução e a situação: **Ativo** (roda sozinho no agendamento), **Inativo** (tem agendamento, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
 
 **Criar, duplicar e excluir**
 
@@ -146,7 +146,7 @@ Todo fluxo começa por exatamente um gatilho.
 - **Toda semana:** marque os dias da semana e escolha o horário. Ex.: Seg, Qua e Sex às 07:00:00.
 - **Todo mês:** escolha o dia do mês (1 a 31) e o horário. Nos meses que não têm o dia escolhido (ex.: 31 em abril), não roda.
 - **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico.
-- **Uma vez, numa data e hora:** roda uma única vez no momento escolhido e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
+- **Uma vez, numa data e hora:** roda uma única vez no momento escolhido, com dia, hora, minuto, segundo e milissegundo (ex.: 05/10/2026 14:30:00,250), e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
 - **Expressão cron:** para casos que as opções acima não cobrem. São 5 campos (minuto, hora, dia do mês, mês, dia da semana), ou 6 com os segundos no começo. `*` é qualquer valor, `*/15` é a cada 15, `1-5` é um intervalo e `8,12,18` é uma lista; no dia da semana, 0 é domingo. Exemplos: `0 8 * * *` todo dia às 8h; `*/15 * * * *` a cada 15 minutos; `0 8-18 * * 1-5` de hora em hora das 8h às 18h, de segunda a sexta; `*/30 * * * * *` a cada 30 segundos.
 
 ### Ações

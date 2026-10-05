@@ -283,6 +283,9 @@ function N8nImportModal({ folders, onClose }: { folders: Folder[]; onClose: () =
 
 /** Próximo disparo do agendamento, para a linha do fluxo. */
 function nextRunLabel(w: WorkflowListItem): string {
-  if (w.next_run) return `Próxima execução ${formatDate(w.next_run)}`;
+  if (w.next_run) {
+    const ms = new Date(w.next_run).getMilliseconds();
+    return `Próxima execução ${formatDate(w.next_run)}${ms ? `,${String(ms).padStart(3, '0')}` : ''}`;
+  }
   return w.active ? 'Sem próxima execução' : 'Sem próxima execução (inativo)';
 }

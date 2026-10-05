@@ -127,7 +127,7 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
       return <input type="time" step={1} disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(withSeconds(e.target.value))} />;
     case 'dateTime':
       return (
-        <input type="datetime-local" step={1} disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(withSeconds(e.target.value))} />
+        <input type="datetime-local" step={0.001} disabled={disabled} value={String(value ?? '')} onChange={(e) => onChange(withSeconds(e.target.value))} />
       );
     case 'code':
       return <CodeInput value={typeof value === 'string' ? value : ''} disabled={disabled} onChange={onChange} />;
