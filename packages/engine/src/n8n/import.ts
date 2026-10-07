@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { parseTemplate, TemplateSyntaxError } from '../expressions/template.js';
 import type { Connection, JsonObject, JsonValue, NodeInstance, NodeSettings, WorkflowDefinition } from '../types.js';
+import { converters as flowExtraConverters } from './convert-flow-extra.js';
+import { converters as transformConverters } from './convert-transform.js';
+import { converters as formatConverters } from './convert-formats.js';
+
+/** Conversores dos nós da Fase 1, cada grupo no seu arquivo; valem antes dos de baixo. */
+const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({ ...flowExtraConverters, ...transformConverters, ...formatConverters });
 
 /**
  * Converte fluxos exportados do n8n para o formato da plataforma.
@@ -82,9 +88,9 @@ export function readN8nExport(json: unknown): N8nWorkflow[] {
   return workflows;
 }
 
-type Params = Record<string, unknown>;
+export type Params = Record<string, unknown>;
 
-interface Converted {
+export interface Converted {
   type: string;
   parameters: JsonObject;
   settings?: NodeSettings;
@@ -92,7 +98,7 @@ interface Converted {
   outputMap?: (index: number) => number | null;
 }
 
-interface Ctx {
+export interface Ctx {
   node: N8nNode;
   params: Params;
   warn: (message: string) => void;
@@ -193,6 +199,8 @@ export function convertN8nWorkflow(workflow: N8nWorkflow, options: ConvertOption
 }
 
 function convertNode(type: string, ctx: Ctx): Converted | null {
+  const extra = extraConverters()[type];
+  if (extra) return extra(ctx);
   switch (type) {
     case 'manualTrigger':
       return { type: 'manualTrigger', parameters: {} };
@@ -219,16 +227,10 @@ function convertNode(type: string, ctx: Ctx): Converted | null {
       return merge(ctx);
     case 'if':
       return ifNode(ctx);
-    case 'filter':
-      ctx.warn('o nó Filter virou um If; os itens que passam saem por "verdadeiro"');
-      return ifNode(ctx);
     case 'splitInBatches':
       return splitInBatches(ctx);
     case 'stopAndError':
       return stopAndError(ctx);
-    case 'noOp':
-      ctx.warn('o nó No Operation virou um Code que repassa os itens');
-      return { type: 'code', parameters: { language: 'javaScript', mode: 'all', jsCode: 'return $input.all();' } };
     case 'set':
       return setNode(ctx);
     case 'postgres':
@@ -575,7 +577,7 @@ function executeWorkflow({ params, warn, options }: Ctx): Converted {
   return { type: 'executeWorkflow', parameters: { workflowId, mode: params.mode === 'each' ? 'each' : 'once' } };
 }
 
-function splitOut({ params, warn }: Ctx): Converted {
+export function splitOut({ params, warn }: Ctx): Converted {
   const fields = String(params.fieldToSplitOut ?? '')
     .split(',')
     .map((f) => f.trim())
@@ -590,7 +592,7 @@ function splitOut({ params, warn }: Ctx): Converted {
   };
 }
 
-function aggregate({ params }: Ctx): Converted {
+export function aggregate({ params }: Ctx): Converted {
   if (params.aggregate === 'aggregateAllItemData') {
     return { type: 'aggregate', parameters: { mode: 'all', destination: String(params.destinationFieldName ?? 'data') } };
   }
@@ -692,7 +694,7 @@ const IF_V1_OPERATIONS: Record<string, string> = {
   regex: 'regex',
 };
 
-function ifNode({ params, warn }: Ctx): Converted {
+export function ifNode({ params, warn }: Ctx): Converted {
   const conditions: JsonObject[] = [];
   let combinator = 'and';
   const v2 = isObject(params.conditions) && Array.isArray(params.conditions.conditions);
@@ -726,7 +728,7 @@ function ifNode({ params, warn }: Ctx): Converted {
   return { type: 'if', parameters: { combinator, conditions } };
 }
 
-function jsonish(value: unknown): JsonValue {
+export function jsonish(value: unknown): JsonValue {
   if (value === undefined) return '';
   return (typeof value === 'object' && value !== null ? JSON.stringify(value) : value) as JsonValue;
 }
@@ -938,6 +940,6 @@ function uniqueName(name: string, used: Set<string>): string {
   return candidate;
 }
 
-function isObject(value: unknown): value is Params {
+export function isObject(value: unknown): value is Params {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

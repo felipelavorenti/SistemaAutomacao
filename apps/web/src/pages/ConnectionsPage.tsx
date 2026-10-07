@@ -221,6 +221,14 @@ function ConnectionModal({
                 </option>
               ))}
             </select>
+          ) : f.multiline ? (
+            <textarea
+              className="code"
+              rows={6}
+              value={data[f.name] ?? ''}
+              placeholder={f.secret && saved ? saved.data[f.name] : f.placeholder}
+              onChange={(e) => setData({ ...data, [f.name]: e.target.value })}
+            />
           ) : (
             <input
               type={f.secret ? 'password' : 'text'}

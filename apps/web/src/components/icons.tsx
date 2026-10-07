@@ -164,6 +164,78 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M3.5 6.5L12 13l8.5-6.5" />
     </>
   ),
+  filter: <path d="M3 5h18l-7 8v6l-4 2v-8z" />,
+  switch: (
+    <>
+      <path d="M3 12h6M9 12l4-6h8M9 12h12M9 12l4 6h8" />
+      <circle cx="9" cy="12" r="1.5" />
+    </>
+  ),
+  compareDatasets: (
+    <>
+      <circle cx="9" cy="12" r="6" />
+      <circle cx="15" cy="12" r="6" />
+    </>
+  ),
+  wait: (
+    <>
+      <circle cx="12" cy="13" r="8" />
+      <path d="M12 9v4l3 2M9 2h6" />
+    </>
+  ),
+  noOp: <path d="M5 12h14M15 8l4 4-4 4" />,
+  executionData: (
+    <>
+      <path d="M4 4h16v16H4z" />
+      <path d="M8 9h8M8 13h8M8 17h5" />
+    </>
+  ),
+  limit: <path d="M4 6h16M4 10h16M4 14h10M4 19h16" />,
+  sort: <path d="M7 4v16M4 17l3 3 3-3M14 6h7M14 11h5M14 16h3" />,
+  removeDuplicates: (
+    <>
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M4 16V6a2 2 0 0 1 2-2h10M11 14h6" />
+    </>
+  ),
+  renameKeys: (
+    <>
+      <path d="M4 7h9M4 12h6M4 17h9" />
+      <path d="M15 17l5-5-3-3-5 5v3z" />
+    </>
+  ),
+  summarize: <path d="M18 4H6l6 8-6 8h12" />,
+  dateTime: (
+    <>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4M12 14v3h3" />
+    </>
+  ),
+  crypto: (
+    <>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4M12 15v2" />
+    </>
+  ),
+  html: <path d="M8 7l-5 5 5 5M16 7l5 5-5 5M10 19l4-14" />,
+  markdown: (
+    <>
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M6 15V9l2.5 3L11 9v6M15 9v6M13 13l2 2 2-2" />
+    </>
+  ),
+  xml: (
+    <>
+      <path d="M7 8l-4 4 4 4M17 8l4 4-4 4" />
+      <path d="M10 10l4 4M14 10l-4 4" />
+    </>
+  ),
+  totp: (
+    <>
+      <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+      <path d="M12 8v4l2 2" />
+    </>
+  ),
   unknown: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -191,6 +263,23 @@ export const NODE_COLOR: Record<string, string> = {
   metabase: '#509ee3',
   clickup: '#7b68ee',
   gmail: '#ea4335',
+  filter: '#229eff',
+  switch: '#506000',
+  compareDatasets: '#506000',
+  wait: '#ff6d5a',
+  noOp: '#b0b0b0',
+  executionData: '#29a568',
+  limit: '#3e8abd',
+  sort: '#3e8abd',
+  removeDuplicates: '#3e8abd',
+  renameKeys: '#3e8abd',
+  summarize: '#3e8abd',
+  dateTime: '#408000',
+  crypto: '#408000',
+  html: '#e44d26',
+  markdown: '#555555',
+  xml: '#333377',
+  totp: '#2b6cb0',
 };
 
 export function Icon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {

@@ -75,7 +75,7 @@ const exported: N8nWorkflow = {
       parameters: { workflowId: { __rl: true, value: 'n8n-sub-1', mode: 'list' }, mode: 'each', options: {} },
     },
     { id: 'a8', name: 'Erro', type: 'n8n-nodes-base.stopAndError', typeVersion: 1, position: [1200, 300], parameters: { errorMessage: '=Sem preço: {{ $json.sku }}' } },
-    { id: 'a9', name: 'Roteia', type: 'n8n-nodes-base.switch', typeVersion: 3, position: [1400, 100], parameters: { rules: {} } },
+    { id: 'a9', name: 'Roteia', type: 'n8n-nodes-base.slack', typeVersion: 2, position: [1400, 100], parameters: { rules: {} } },
     { id: 'a10', name: 'Nota', type: 'n8n-nodes-base.stickyNote', typeVersion: 1, position: [0, 300], parameters: { content: 'oi' } },
   ],
   connections: {
@@ -124,8 +124,8 @@ describe('importador do n8n', () => {
   });
 
   it('marca o que precisa de revisão', () => {
-    expect(byName('Roteia')).toMatchObject({ type: 'n8nUnsupported', parameters: { n8nType: 'n8n-nodes-base.switch' } });
-    expect(warningsOf('Roteia')).toEqual(['o nó "switch" do n8n não tem equivalente aqui; substitua-o', expect.stringMatching(/saída 2 para "Erro" foi removida/)]);
+    expect(byName('Roteia')).toMatchObject({ type: 'n8nUnsupported', parameters: { n8nType: 'n8n-nodes-base.slack' } });
+    expect(warningsOf('Roteia')).toEqual(['o nó "slack" do n8n não tem equivalente aqui; substitua-o', expect.stringMatching(/saída 2 para "Erro" foi removida/)]);
     expect(warningsOf('Produtos')).toEqual(expect.arrayContaining([expect.stringMatching(/escolha a conexão/), expect.stringMatching(/"Banco Cliente X"/)]));
     expect(warningsOf('Calcula')).toEqual([expect.stringMatching(/usa \$now, \.toISO\(\)/)]);
     expect(result.warnings).toContainEqual({ message: '1 nota(s) do canvas do n8n não foram importadas' });

@@ -1,5 +1,5 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { ExecutionResult, Item, JsonValue, NodeRun, WorkflowDefinition } from '@sa/engine';
+import type { ExecutionResult, Item, JsonObject, JsonValue, NodeRun, WorkflowDefinition } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
 
 export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry';
@@ -125,7 +125,7 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
   await db.query(
     `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,
-       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 THEN input END
+       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 THEN input END, custom_data = $12
      WHERE id = $1`,
     [
       id,
@@ -139,8 +139,19 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
       result.error?.message ?? null,
       result.error?.nodeName ?? null,
       keepData,
+      customData(result.runs),
     ],
   );
+}
+
+/** Junta o que os nós Execution Data gravaram; um nó rodado depois sobrescreve a mesma chave. */
+export function customData(runs: NodeRun[]): string | null {
+  const merged: JsonObject = {};
+  for (const run of runs) {
+    const saved = run.meta?.executionData;
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) Object.assign(merged, saved);
+  }
+  return Object.keys(merged).length ? JSON.stringify(merged) : null;
 }
 
 export async function failExecution(db: Queryable, id: string, message: string): Promise<void> {

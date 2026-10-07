@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ApiCatalog, ConnectionItem, Item, JsonValue, NodeInstance, NodeRun, NodeSettings, NodeTypeDescription, WorkflowListItem } from '../api';
+import { resolveOutputs, type ApiCatalog, type ConnectionItem, type Item, type JsonValue, type NodeInstance, type NodeRun, type NodeSettings, type NodeTypeDescription, type WorkflowListItem } from '../api';
 import { ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
 import { Icon, NODE_COLOR } from '../components/icons';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
@@ -208,7 +208,7 @@ export function NodePanel({
           {run?.output.map((items, i) => (
             <div key={i}>
               <div className="muted small">
-                {run.output.length > 1 ? `Saída ${description?.outputNames?.[i] ?? i + 1} · ` : ''}
+                {run.output.length > 1 ? `Saída ${(description ? resolveOutputs(description, node.parameters).names?.[i] : undefined) ?? i + 1} · ` : ''}
                 {items.length} {items.length === 1 ? 'item' : 'itens'}
               </div>
               <JsonView value={items.map((it) => it.json)} />

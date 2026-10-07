@@ -77,8 +77,45 @@ export interface NodeTypeDescription {
   outputs: number;
   outputNames?: string[];
   inputNames?: string[];
+  dynamicOutputs?: DynamicOutputs;
   hidden?: boolean;
   properties: PropertyDescription[];
+}
+
+/** Saídas que dependem da configuração do nó (igual a resolveOutputs do motor). */
+export interface DynamicOutputs {
+  countFrom?: string;
+  listFrom?: string;
+  nameField?: string;
+  modeField?: string;
+  listModes?: string[];
+  countModes?: string[];
+  extraWhen?: Record<string, JsonValue[]>;
+  extraName?: string;
+}
+
+export function resolveOutputs(description: NodeTypeDescription, parameters: Record<string, JsonValue>): { count: number; names?: string[] } {
+  const dyn = description.dynamicOutputs;
+  if (!dyn) return { count: description.outputs, names: description.outputNames };
+  // Campo nunca editado vale o padrão do nó.
+  const defaults = Object.fromEntries(description.properties.map((p) => [p.name, p.default]));
+  parameters = { ...defaults, ...parameters };
+  const mode = dyn.modeField ? String(parameters[dyn.modeField] ?? '') : '';
+  if (dyn.countFrom && (!dyn.modeField || dyn.countModes?.includes(mode))) {
+    const n = Math.trunc(Number(parameters[dyn.countFrom]));
+    return { count: Number.isFinite(n) && n > 0 ? Math.min(n, 64) : 1 };
+  }
+  if (dyn.listFrom && (!dyn.modeField || dyn.listModes?.includes(mode))) {
+    const list = Array.isArray(parameters[dyn.listFrom]) ? (parameters[dyn.listFrom] as JsonValue[]) : [];
+    const names = list.map((row, i) => {
+      const name = dyn.nameField && row && typeof row === 'object' && !Array.isArray(row) ? String(row[dyn.nameField] ?? '').trim() : '';
+      return name || String(i);
+    });
+    const extra = dyn.extraWhen && Object.entries(dyn.extraWhen).every(([k, allowed]) => allowed.includes(parameters[k] ?? null));
+    if (extra) names.push(dyn.extraName ?? 'outros');
+    return { count: Math.max(names.length, 1), names: names.length ? names : undefined };
+  }
+  return { count: description.outputs, names: description.outputNames };
 }
 
 export interface N8nImportResult {
@@ -136,6 +173,8 @@ export interface ExecutionListItem {
   duration_ms: number | null;
   data_size: number | null;
   parent_execution_id: string | null;
+  /** Pares gravados pelo nó Execution Data. */
+  custom_data: Record<string, string> | null;
 }
 
 export interface ExecutionDetail extends ExecutionListItem {
@@ -205,6 +244,8 @@ export interface ConnectionField {
   default?: string;
   options?: { name: string; value: string }[];
   hint?: string;
+  /** Texto de várias linhas (ex.: chave privada). */
+  multiline?: boolean;
 }
 
 export interface ConnectionType {

@@ -100,6 +100,18 @@ export function ExecutionPage() {
           <span className="muted">Versão do fluxo</span>
           {ex.workflow_version ?? 'não salva (editor)'}
         </div>
+        {ex.custom_data && (
+          <div>
+            <span className="muted">Dados gravados</span>
+            {Object.entries(ex.custom_data).map(([k, v]) => (
+              <div key={k}>
+                <Link to={`/execucoes?data=${encodeURIComponent(`${k}=${v}`)}`}>
+                  {k}: {v}
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
         {!!dbCommands.data?.length && (
           <div>
             <span className="muted">Bancos de dados</span>

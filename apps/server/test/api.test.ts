@@ -610,6 +610,36 @@ describe.skipIf(!available)('API', () => {
     expect(audit.body[0]).toMatchObject({ action: 'deactivate', user_email: null });
   });
 
+  it('grava os dados do nó Execution Data e filtra as execuções por eles', async () => {
+    const wf = await call(editor, 'POST', '/api/workflows', { name: 'Pedido com dados', folderId: folderA });
+    const definition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        {
+          id: 'd',
+          name: 'Guardar pedido',
+          type: 'executionData',
+          position: { x: 0, y: 0 },
+          parameters: { dataToSave: [{ key: 'pedido', value: '={{ $json.pedido }}' }] },
+        },
+      ],
+      connections: [{ from: 't', fromOutput: 0, to: 'd', toInput: 0 }],
+    };
+    const ids: string[] = [];
+    for (const pedido of ['1043', '2077']) {
+      const run = await call(editor, 'POST', `/api/workflows/${wf.body.id}/run`, { definition, input: [{ json: { pedido } }] });
+      const execution = await waitExecution(editor, run.body.executionId);
+      expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+      expect(execution.custom_data).toEqual({ pedido });
+      ids.push(run.body.executionId);
+    }
+    const byKey = await call(viewer, 'GET', `/api/executions?workflowId=${wf.body.id}&dataKey=pedido`);
+    expect(byKey.body.map((e: { id: string }) => e.id).sort()).toEqual([...ids].sort());
+    const byValue = await call(viewer, 'GET', `/api/executions?dataKey=pedido&dataValue=2077`);
+    expect(byValue.body.map((e: { id: string; custom_data: unknown }) => [e.id, e.custom_data])).toEqual([[ids[1], { pedido: '2077' }]]);
+    expect((await call(viewer, 'GET', `/api/executions?dataKey=outra`)).body).toEqual([]);
+  });
+
   it('guarda arquivos enviados pela tela e devolve o conteúdo', async () => {
     const pdf = Buffer.from('%PDF-1.4 relatório');
     const upload = (cookie: string, url: string) =>

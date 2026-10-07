@@ -1444,6 +1444,8 @@ Execuções dos fluxos que o usuário enxerga, mais novas primeiro.
 | `from` | URL | data e hora | não | A partir de quando, com fuso (ex.: 2026-09-30T00:00:00-03:00) |
 | `to` | URL | data e hora | não | Até quando, com fuso |
 | `search` | URL | texto | não | Procura no nome do fluxo, na mensagem de erro e no nó do erro |
+| `dataKey` | URL | texto | não | Só as execuções em que o nó Execution Data gravou esta chave |
+| `dataValue` | URL | texto | não | Junto com dataKey: só quando o valor gravado é exatamente este |
 | `before` | URL | data e hora | não | Para paginar: created_at da última linha recebida |
 | `limit` | URL | número | não | Quantas linhas devolver, de 1 a 200 (padrão 50) |
 
@@ -1456,7 +1458,7 @@ curl "$INFO8N/api/executions?status=error&limit=2" \
 
 **Exemplo de resposta**
 
-duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados).
+duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).
 
 ```json
 [
@@ -1474,6 +1476,7 @@ duration_ms é quanto a execução levou, em milissegundos (null enquanto não t
     "triggered_by_name": "Administrador",
     "data_size": 259,
     "parent_execution_id": null,
+    "custom_data": null,
     "duration_ms": 6
   },
   {
@@ -1490,6 +1493,7 @@ duration_ms é quanto a execução levou, em milissegundos (null enquanto não t
     "triggered_by_name": "Administrador",
     "data_size": 258,
     "parent_execution_id": null,
+    "custom_data": null,
     "duration_ms": 6
   }
 ]
@@ -1587,6 +1591,7 @@ runs traz um item por nó executado, na ordem em que rodaram; input e output sã
   "error_message": null,
   "error_node": null,
   "error": null,
+  "custom_data": null,
   "summary": [
     {
       "runs": 1,

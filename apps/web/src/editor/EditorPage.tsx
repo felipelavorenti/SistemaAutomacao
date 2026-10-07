@@ -74,6 +74,7 @@ function Editor() {
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [running, setRunning] = useState(false);
   const [testInput, setTestInput] = useState('');
+  const [paletteQuery, setPaletteQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showVersions, setShowVersions] = useState(false);
@@ -308,7 +309,11 @@ function Editor() {
 
   const selected = definition.nodes.find((n) => n.id === openId);
   const hasSchedule = definition.nodes.some((n) => n.type === 'scheduleTrigger');
-  const groups = ['trigger', 'action', 'logic', 'data'].map((g) => [g, descriptions.filter((d) => d.group === g && !d.hidden)] as const).filter(([, list]) => list.length);
+  const query = paletteQuery.trim().toLowerCase();
+  const matches = (d: NodeTypeDescription) => !query || `${d.displayName} ${d.description}`.toLowerCase().includes(query);
+  const groups = ['trigger', 'action', 'logic', 'data']
+    .map((g) => [g, descriptions.filter((d) => d.group === g && !d.hidden && matches(d))] as const)
+    .filter(([, list]) => list.length);
 
   return (
     <div className="editor">
@@ -369,6 +374,8 @@ function Editor() {
       <div className="editor-body">
         {!readOnly && (
           <aside className="palette">
+            <input className="palette-search" type="search" placeholder="Buscar nó" value={paletteQuery} onChange={(e) => setPaletteQuery(e.target.value)} />
+            {!groups.length && <p className="muted small">Nenhum nó com esse nome.</p>}
             {groups.map(([group, list]) => (
               <div key={group}>
                 <div className="palette-group">{GROUP_LABEL[group]}</div>
