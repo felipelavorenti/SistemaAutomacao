@@ -410,11 +410,13 @@ const GROUPS: ApiGroup[] = [
           from,
           to,
           { name: 'search', type: 'texto', description: 'Procura no nome do fluxo, na mensagem de erro e no nó do erro' },
+          { name: 'dataKey', type: 'texto', description: 'Só as execuções em que o nó Execution Data gravou esta chave' },
+          { name: 'dataValue', type: 'texto', description: 'Junto com dataKey: só quando o valor gravado é exatamente este' },
           { name: 'before', type: 'data e hora', description: 'Para paginar: created_at da última linha recebida' },
           limit,
         ],
         response:
-          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados).',
+          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).',
       },
       {
         method: 'GET',

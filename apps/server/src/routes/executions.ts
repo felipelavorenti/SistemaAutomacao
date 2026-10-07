@@ -27,6 +27,7 @@ interface ExecutionRow {
   error_node: string | null;
   error: unknown;
   summary: unknown;
+  custom_data: unknown;
   data: Buffer | null;
   data_size: number | null;
 }
@@ -58,6 +59,9 @@ export const executionRoutes =
           from: z.string().datetime({ offset: true }).optional(),
           to: z.string().datetime({ offset: true }).optional(),
           search: z.string().trim().optional(),
+          /** Dados gravados pelo nó Execution Data: chave e, opcionalmente, o valor exato. */
+          dataKey: z.string().trim().min(1).max(50).optional(),
+          dataValue: z.string().max(512).optional(),
           before: z.string().datetime({ offset: true }).optional(),
           limit: z.coerce.number().int().min(1).max(200).default(50),
         })
@@ -65,7 +69,7 @@ export const executionRoutes =
       return many(
         db,
         `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.mode, e.status, e.created_at, e.started_at, e.finished_at,
-                e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size, e.parent_execution_id,
+                e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size, e.parent_execution_id, e.custom_data,
                 round(extract(epoch FROM (e.finished_at - e.started_at)) * 1000)::float8 AS duration_ms
          FROM executions e JOIN workflows w ON w.id = e.workflow_id LEFT JOIN users u ON u.id = e.triggered_by
          WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
@@ -77,6 +81,7 @@ export const executionRoutes =
            AND ($7::text IS NULL OR w.name ILIKE '%' || $7 || '%' OR e.error_message ILIKE '%' || $7 || '%' OR e.error_node ILIKE '%' || $7 || '%')
            AND ($8::timestamptz IS NULL OR e.created_at < $8)
            AND ($10::uuid IS NULL OR e.parent_execution_id = $10)
+           AND ($11::text IS NULL OR (e.custom_data ? $11 AND ($12::text IS NULL OR e.custom_data ->> $11 = $12)))
          ORDER BY e.created_at DESC LIMIT $9`,
         [
           user.folderIds,
@@ -89,6 +94,8 @@ export const executionRoutes =
           q.before ?? null,
           q.limit,
           q.parentId ?? null,
+          q.dataKey ?? null,
+          q.dataKey ? (q.dataValue ?? null) : null,
         ],
       );
     });

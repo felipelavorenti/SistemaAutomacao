@@ -11,17 +11,26 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "cheerio": "^1.2.0",
     "isolated-vm": "^7.0.1",
+    "luxon": "^3.7.2",
     "mssql": "^12.7.2",
+    "node-html-markdown": "^2.0.0",
     "oracledb": "^7.0.1",
+    "otpauth": "^9.5.2",
     "pg": "^8.23.0",
-    "pyodide": "^314.0.7"
+    "pyodide": "^314.0.7",
+    "showdown": "^2.1.0",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
+    "@types/luxon": "^3.7.6",
     "@types/mssql": "^12.3.0",
     "@types/node": "^22.10.0",
     "@types/oracledb": "^7.0.3",
     "@types/pg": "^8.23.1",
+    "@types/showdown": "^2.0.6",
+    "@types/xml2js": "^0.4.14",
     "typescript": "^5.6.0",
     "vitest": "^3.2.0"
   }

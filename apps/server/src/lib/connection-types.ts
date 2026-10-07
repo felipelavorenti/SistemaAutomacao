@@ -12,6 +12,8 @@ export interface ConnectionField {
   /** Quando preenchido, o campo vira uma lista de escolha. */
   options?: { name: string; value: string }[];
   hint?: string;
+  /** Texto de várias linhas (ex.: chave privada). */
+  multiline?: boolean;
 }
 
 export interface ConnectionTypeDescription {
@@ -171,6 +173,36 @@ export const connectionTypes: ConnectionTypeDescription[] = [
         hint: 'Do app OAuth criado no Google Cloud (APIs e serviços > Credenciais).',
       },
       { name: 'clientSecret', displayName: 'Client secret', secret: true, required: true },
+    ],
+  },
+  {
+    type: 'totp',
+    displayName: 'TOTP (código de dois fatores)',
+    fields: [
+      {
+        name: 'secret',
+        displayName: 'Chave secreta',
+        secret: true,
+        required: true,
+        placeholder: 'BVDRSBXQB2ZEL5HE',
+        hint: 'A chave em base32 mostrada pelo site ao ativar a autenticação em dois fatores (a que acompanha o QR code).',
+      },
+      { name: 'label', displayName: 'Identificação', secret: false, required: false, placeholder: 'GitHub:usuario@empresa.com' },
+    ],
+  },
+  {
+    type: 'cryptoPrivateKey',
+    displayName: 'Chave privada (assinatura)',
+    fields: [
+      {
+        name: 'privateKey',
+        displayName: 'Chave privada (PEM)',
+        secret: true,
+        required: true,
+        multiline: true,
+        placeholder: '-----BEGIN PRIVATE KEY-----',
+        hint: 'Usada pelo nó Crypto na operação Assinar.',
+      },
     ],
   },
 ];

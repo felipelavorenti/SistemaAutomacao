@@ -26,10 +26,11 @@ export function ExecutionsPage() {
     search: params.get('search') ?? '',
     from: params.get('from') ?? '',
     to: params.get('to') ?? '',
+    data: params.get('data') ?? '',
   };
 
   // Agendados esperando vaga só aparecem quando os filtros não os excluiriam.
-  const showsWaiting = ['', 'queued'].includes(filters.status) && ['', 'schedule'].includes(filters.mode) && !filters.search && !filters.from && !filters.to;
+  const showsWaiting = ['', 'queued'].includes(filters.status) && ['', 'schedule'].includes(filters.mode) && !filters.search && !filters.from && !filters.to && !filters.data;
 
   const query = (before?: string) => {
     const q = new URLSearchParams();
@@ -39,6 +40,12 @@ export function ExecutionsPage() {
     if (filters.search) q.set('search', filters.search);
     if (filters.from) q.set('from', new Date(filters.from).toISOString());
     if (filters.to) q.set('to', new Date(filters.to).toISOString());
+    if (filters.data) {
+      // "chave" acha quem gravou a chave; "chave=valor", o valor exato.
+      const at = filters.data.indexOf('=');
+      q.set('dataKey', (at < 0 ? filters.data : filters.data.slice(0, at)).trim());
+      if (at >= 0) q.set('dataValue', filters.data.slice(at + 1).trim());
+    }
     if (before) q.set('before', before);
     q.set('limit', String(PAGE));
     return `/executions?${q}`;
@@ -103,6 +110,12 @@ export function ExecutionsPage() {
         <input type="datetime-local" value={filters.from} onChange={(e) => set('from', e.target.value)} title="De" />
         <input type="datetime-local" value={filters.to} onChange={(e) => set('to', e.target.value)} title="Até" />
         <input placeholder="Buscar no fluxo, nó ou erro" defaultValue={filters.search} onKeyDown={(e) => e.key === 'Enter' && set('search', e.currentTarget.value)} />
+        <input
+          placeholder="Dado gravado: chave=valor"
+          title="Execuções em que o nó Execution Data gravou a chave (e o valor, se informado). Enter para filtrar."
+          defaultValue={filters.data}
+          onKeyDown={(e) => e.key === 'Enter' && set('data', e.currentTarget.value)}
+        />
       </div>
       <ErrorBox message={error} />
       <table>
@@ -140,6 +153,13 @@ export function ExecutionsPage() {
               </td>
               <td>
                 <Link to={`/execucoes/${e.id}`}>{e.workflow_name}</Link>
+                {e.custom_data && (
+                  <div className="muted small">
+                    {Object.entries(e.custom_data)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(' · ')}
+                  </div>
+                )}
               </td>
               <td>
                 {MODE_LABEL[e.mode] ?? e.mode}

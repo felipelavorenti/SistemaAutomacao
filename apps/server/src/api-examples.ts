@@ -525,6 +525,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         triggered_by_name: 'Administrador',
         data_size: 259,
         parent_execution_id: null,
+        custom_data: null,
         duration_ms: 6,
       },
       {
@@ -541,6 +542,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         triggered_by_name: 'Administrador',
         data_size: 258,
         parent_execution_id: null,
+        custom_data: null,
         duration_ms: 6,
       },
     ],
@@ -583,6 +585,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
       error_message: null,
       error_node: null,
       error: null,
+      custom_data: null,
       summary: [
         {
           runs: 1,

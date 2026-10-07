@@ -244,4 +244,12 @@ CREATE TABLE files (
 );
 `,
   },
+  {
+    id: '006_dados_execucao',
+    sql: `
+-- Pares chave e valor gravados pelo nó Execution Data, para achar a execução depois.
+ALTER TABLE executions ADD COLUMN custom_data jsonb;
+CREATE INDEX executions_custom_data_idx ON executions USING gin (custom_data jsonb_path_ops);
+`,
+  },
 ];

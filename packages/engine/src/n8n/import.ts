@@ -82,9 +82,9 @@ export function readN8nExport(json: unknown): N8nWorkflow[] {
   return workflows;
 }
 
-type Params = Record<string, unknown>;
+export type Params = Record<string, unknown>;
 
-interface Converted {
+export interface Converted {
   type: string;
   parameters: JsonObject;
   settings?: NodeSettings;
@@ -92,7 +92,7 @@ interface Converted {
   outputMap?: (index: number) => number | null;
 }
 
-interface Ctx {
+export interface Ctx {
   node: N8nNode;
   params: Params;
   warn: (message: string) => void;
@@ -692,7 +692,7 @@ const IF_V1_OPERATIONS: Record<string, string> = {
   regex: 'regex',
 };
 
-function ifNode({ params, warn }: Ctx): Converted {
+export function ifNode({ params, warn }: Ctx): Converted {
   const conditions: JsonObject[] = [];
   let combinator = 'and';
   const v2 = isObject(params.conditions) && Array.isArray(params.conditions.conditions);
@@ -726,7 +726,7 @@ function ifNode({ params, warn }: Ctx): Converted {
   return { type: 'if', parameters: { combinator, conditions } };
 }
 
-function jsonish(value: unknown): JsonValue {
+export function jsonish(value: unknown): JsonValue {
   if (value === undefined) return '';
   return (typeof value === 'object' && value !== null ? JSON.stringify(value) : value) as JsonValue;
 }
@@ -938,6 +938,6 @@ function uniqueName(name: string, used: Set<string>): string {
   return candidate;
 }
 
-function isObject(value: unknown): value is Params {
+export function isObject(value: unknown): value is Params {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
