@@ -560,11 +560,11 @@ describe('conversores do n8n', () => {
     const expr = convert('wait', { resume: 'specificTime', dateTime: '={{ $json.quando }}' }, 1.1);
     expect(expr.converted?.parameters.dateTime).toBe('={{ $json.quando }}');
     expect(expr.warnings).toEqual([expect.stringMatching(/expressão/)]);
-    for (const resume of ['webhook', 'form']) {
-      const r = convert('wait', { resume }, 1.1);
-      expect(r.converted).toBeNull();
-      expect(r.warnings).toEqual([expect.stringMatching(/ainda não existe aqui/)]);
-    }
+    const hook = convert('wait', { resume: 'webhook', httpMethod: 'POST', options: { webhookSuffix: 'ok' }, limitWaitTime: true, resumeAmount: 2, resumeUnit: 'days' }, 1.1);
+    expect(hook.converted?.parameters).toMatchObject({ resume: 'webhook', httpMethod: 'POST', webhookSuffix: 'ok', limitWaitTime: true, resumeAmount: 2, resumeUnit: 'days' });
+    expect(hook.warnings).toEqual([expect.stringMatching(/resumeUrl/)]);
+    const form = convert('wait', { resume: 'form', formTitle: 'Aprovar', formFields: { values: [{ fieldLabel: 'Ok?', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Sim' }, { option: 'Não' }] } }] } }, 1.1);
+    expect(form.converted?.parameters).toMatchObject({ resume: 'form', formTitle: 'Aprovar', formFields: [{ fieldLabel: 'Ok?', fieldType: 'dropdown', fieldOptions: 'Sim\nNão' }] });
   });
 
   it('No Operation e Execution Data', () => {

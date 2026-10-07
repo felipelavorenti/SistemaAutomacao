@@ -6,6 +6,8 @@ import { converters as transformConverters } from './convert-transform.js';
 import { converters as formatConverters } from './convert-formats.js';
 import { converters as fileConvertConverters } from './convert-files-convert.js';
 import { converters as fileDiskConverters } from './convert-files-disk.js';
+import { converters as listenConverters } from './convert-triggers-listen.js';
+import { converters as webhookConverters } from './convert-triggers-webhook.js';
 
 /** Conversores dos nós da Fase 1, cada grupo no seu arquivo; valem antes dos de baixo. */
 const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({
@@ -14,6 +16,8 @@ const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({
   ...formatConverters,
   ...fileConvertConverters,
   ...fileDiskConverters,
+  ...listenConverters,
+  ...webhookConverters,
 });
 
 /**
@@ -41,6 +45,8 @@ export interface N8nNode {
   onError?: string;
   alwaysOutputData?: boolean;
   executeOnce?: boolean;
+  /** ID do webhook no n8n; entra no endereço dos webhooks e formulários. */
+  webhookId?: string;
 }
 
 interface N8nTarget {
@@ -55,7 +61,7 @@ export interface N8nWorkflow {
   active?: boolean;
   nodes: N8nNode[];
   connections?: Record<string, { main?: (N8nTarget[] | null)[] }>;
-  settings?: { timezone?: string };
+  settings?: { timezone?: string; errorWorkflow?: string };
 }
 
 export interface ImportWarning {
@@ -139,7 +145,7 @@ export function convertN8nWorkflow(workflow: N8nWorkflow, options: ConvertOption
     }
     if (!converted) {
       converted = unsupported(node, shortType);
-      warn(/trigger$/i.test(shortType) || shortType === 'webhook' ? `o gatilho "${shortType}" do n8n não existe aqui; use o manual ou o agendamento` : `o nó "${shortType}" do n8n não tem equivalente aqui; substitua-o`);
+      warn(/trigger$/i.test(shortType) ? `o gatilho "${shortType}" do n8n não existe aqui; troque por outro gatilho` : `o nó "${shortType}" do n8n não tem equivalente aqui; substitua-o`);
     }
 
     const settings: NodeSettings = { ...converted.settings };
@@ -197,11 +203,19 @@ export function convertN8nWorkflow(workflow: N8nWorkflow, options: ConvertOption
   }
   if (notes) warnings.push({ message: `${notes} nota(s) do canvas do n8n não foram importadas` });
 
+  const definition: WorkflowDefinition = { nodes, connections };
+  const errorWorkflow = workflow.settings?.errorWorkflow;
+  if (errorWorkflow) {
+    const mapped = options.workflowId?.(String(errorWorkflow));
+    if (mapped) definition.settings = { errorWorkflowId: mapped };
+    else warnings.push({ message: `o fluxo de erro (ID ${errorWorkflow} no n8n) ainda não foi importado; importe-o e escolha em Configurações do fluxo` });
+  }
+
   return {
     n8nId: workflow.id === undefined || workflow.id === null ? null : String(workflow.id),
     name: workflow.name?.trim() || 'Fluxo importado do n8n',
     wasActive: workflow.active === true,
-    definition: { nodes, connections },
+    definition,
     warnings,
   };
 }
