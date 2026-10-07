@@ -4,9 +4,17 @@ import type { Connection, JsonObject, JsonValue, NodeInstance, NodeSettings, Wor
 import { converters as flowExtraConverters } from './convert-flow-extra.js';
 import { converters as transformConverters } from './convert-transform.js';
 import { converters as formatConverters } from './convert-formats.js';
+import { converters as fileConvertConverters } from './convert-files-convert.js';
+import { converters as fileDiskConverters } from './convert-files-disk.js';
 
 /** Conversores dos nós da Fase 1, cada grupo no seu arquivo; valem antes dos de baixo. */
-const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({ ...flowExtraConverters, ...transformConverters, ...formatConverters });
+const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({
+  ...flowExtraConverters,
+  ...transformConverters,
+  ...formatConverters,
+  ...fileConvertConverters,
+  ...fileDiskConverters,
+});
 
 /**
  * Converte fluxos exportados do n8n para o formato da plataforma.

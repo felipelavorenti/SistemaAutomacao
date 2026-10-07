@@ -236,6 +236,42 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M12 8v4l2 2" />
     </>
   ),
+  convertToFile: (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5M12 11v6M9 14l3 3 3-3" />
+    </>
+  ),
+  extractFromFile: (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5M12 17v-6M9 14l3-3 3 3" />
+    </>
+  ),
+  iCal: (
+    <>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4M8 14h3v3H8z" />
+    </>
+  ),
+  compression: (
+    <>
+      <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
+    </>
+  ),
+  editImage: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="M21 15l-5-5L5 21" />
+    </>
+  ),
+  readWriteFile: (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M12 10v6M9 13h6" />
+    </>
+  ),
   unknown: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -280,6 +316,12 @@ export const NODE_COLOR: Record<string, string> = {
   markdown: '#555555',
   xml: '#333377',
   totp: '#2b6cb0',
+  convertToFile: '#7a5af8',
+  extractFromFile: '#7a5af8',
+  iCal: '#d14836',
+  compression: '#8a6d3b',
+  editImage: '#c2185b',
+  readWriteFile: '#5c6bc0',
 };
 
 export function Icon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {

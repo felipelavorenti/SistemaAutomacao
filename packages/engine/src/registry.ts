@@ -13,6 +13,8 @@ import { code, executeWorkflow, executeWorkflowTrigger, loop, stopAndError } fro
 import { flowExtraNodes } from './nodes/flow-extra.js';
 import { transformNodes } from './nodes/transform.js';
 import { formatNodes } from './nodes/formats.js';
+import { fileConvertNodes } from './nodes/files-convert.js';
+import { fileDiskNodes } from './nodes/files-disk.js';
 
 export class NodeRegistry {
   private types = new Map<string, NodeType>();
@@ -55,5 +57,7 @@ export const defaultRegistry = new NodeRegistry([
   ...flowExtraNodes,
   ...transformNodes,
   ...formatNodes,
+  ...fileConvertNodes,
+  ...fileDiskNodes,
   n8nUnsupported,
 ]);
