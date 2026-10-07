@@ -575,7 +575,7 @@ function executeWorkflow({ params, warn, options }: Ctx): Converted {
   return { type: 'executeWorkflow', parameters: { workflowId, mode: params.mode === 'each' ? 'each' : 'once' } };
 }
 
-function splitOut({ params, warn }: Ctx): Converted {
+export function splitOut({ params, warn }: Ctx): Converted {
   const fields = String(params.fieldToSplitOut ?? '')
     .split(',')
     .map((f) => f.trim())
@@ -590,7 +590,7 @@ function splitOut({ params, warn }: Ctx): Converted {
   };
 }
 
-function aggregate({ params }: Ctx): Converted {
+export function aggregate({ params }: Ctx): Converted {
   if (params.aggregate === 'aggregateAllItemData') {
     return { type: 'aggregate', parameters: { mode: 'all', destination: String(params.destinationFieldName ?? 'data') } };
   }
