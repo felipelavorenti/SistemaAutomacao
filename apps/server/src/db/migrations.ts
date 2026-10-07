@@ -252,4 +252,20 @@ ALTER TABLE executions ADD COLUMN custom_data jsonb;
 CREATE INDEX executions_custom_data_idx ON executions USING gin (custom_data jsonb_path_ops);
 `,
   },
+  {
+    id: '007_arquivos_execucao',
+    sql: `
+-- Arquivos (dados binários) das execuções manuais, para baixar na tela. Os das execuções
+-- agendadas não são guardados; apagar a execução apaga os arquivos dela.
+CREATE TABLE execution_files (
+  execution_id uuid NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+  ref text NOT NULL,
+  file_name text,
+  mime_type text NOT NULL,
+  size int NOT NULL,
+  content bytea NOT NULL,
+  PRIMARY KEY (execution_id, ref)
+);
+`,
+  },
 ];

@@ -134,6 +134,29 @@ export const executionRoutes =
       return { ...rest, runs: decodeData(data)?.runs ?? null, children };
     });
 
+    // Arquivo gerado numa execução manual (dados binários de um item), para baixar ou ver na tela.
+    app.get('/executions/:id/files/:ref', async (request, reply) => {
+      const user = currentUser(request);
+      requireCap(user, 'execution:view');
+      const { id, ref } = z.object({ id: z.string().uuid(), ref: z.string().regex(/^[0-9a-f]{64}$/) }).parse(request.params);
+      const { download } = z.object({ download: z.enum(['true', 'false']).optional() }).parse(request.query);
+      await load(user, id);
+      const file = await one<{ file_name: string | null; mime_type: string; content: Buffer }>(
+        db,
+        'SELECT file_name, mime_type, content FROM execution_files WHERE execution_id = $1 AND ref = $2',
+        [id, ref],
+      );
+      if (!file) throw notFound('Arquivo');
+      const name = file.file_name || 'arquivo';
+      // Abrir na aba só tipos seguros; o resto (inclusive HTML e SVG) sempre baixa.
+      const inline = download !== 'true' && /^(image\/(png|jpeg|gif|webp|bmp)|application\/pdf|text\/plain|text\/csv|application\/json)$/.test(file.mime_type);
+      reply.header('content-type', file.mime_type);
+      reply.header('content-disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(name)}`);
+      reply.header('x-content-type-options', 'nosniff');
+      reply.header('content-security-policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+      return reply.send(file.content);
+    });
+
     app.post('/executions/:id/cancel', async (request) => {
       const user = currentUser(request);
       requireCap(user, 'workflow:execute');

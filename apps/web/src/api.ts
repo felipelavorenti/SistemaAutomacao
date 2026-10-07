@@ -2,8 +2,23 @@
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
+/** Arquivo de um item. Na execução gravada vem sem o conteúdo: ref aponta para o download, omitted diz que não foi guardado. */
+export interface BinaryData {
+  data?: string;
+  mimeType: string;
+  fileName?: string;
+  fileExtension?: string;
+  fileSize?: string;
+  bytes?: number;
+  fileType?: string;
+  directory?: string;
+  omitted?: boolean;
+  ref?: string;
+}
+
 export interface Item {
   json: JsonObject;
+  binary?: Record<string, BinaryData>;
 }
 
 export interface NodeSettings {

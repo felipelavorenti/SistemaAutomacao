@@ -903,6 +903,16 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
       createdByName: 'Ana Lima',
     },
   },
+  'GET /executions/{id}/files/{ref}': {
+    path: '/executions/4b31556c-2e1d-48da-9043-d1a708320b46/files/3f1c9a0e5b7d2c4e8f6a1b3d5c7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e?download=true',
+    saveAs: 'pedidos.xlsx',
+    response: {
+      status: 200,
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-disposition': "attachment; filename*=UTF-8''pedidos.xlsx",
+    },
+    note: 'O corpo é o arquivo; o exemplo mostra o status e os cabeçalhos. O curl grava o arquivo com -o.',
+  },
   'GET /files/{id}/content': {
     path: '/files/9b2e4c61-3f0a-4d7e-8b15-6a0c2d9e7f43/content',
     saveAs: 'boleto-setembro.pdf',

@@ -1424,3 +1424,11 @@ textarea.code-editor {
 .check-row .check {
   margin-bottom: 0;
 }
+
+/* Arquivos dos itens (dados binários) */
+.binary-files { margin-top: 8px; }
+.binary-files ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.binary-files li { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.binary-key { font-family: monospace; font-size: 12px; color: var(--muted); }
+.binary-links { margin-left: 8px; }
+.binary-links a + a { margin-left: 8px; }

@@ -436,6 +436,20 @@ const GROUPS: ApiGroup[] = [
         errors: ['404: não existe ou é de um fluxo numa pasta sem acesso'],
       },
       {
+        method: 'GET',
+        path: '/executions/{id}/files/{ref}',
+        profile: 'any',
+        summary: 'Baixa um arquivo (dado binário) que um nó gerou numa execução manual ou repetida.',
+        params: [
+          id('da execução'),
+          { name: 'ref', type: 'texto', required: true, description: 'O campo ref do arquivo no item, em runs[].output (hash SHA-256 do conteúdo, 64 caracteres)' },
+        ],
+        query: [{ name: 'download', type: 'texto', description: 'true força o download mesmo para PDF, imagem e texto, que por padrão abrem no navegador' }],
+        response:
+          'O corpo é o próprio arquivo, com o tipo e o nome que o nó deu. Nos itens de runs, cada arquivo aparece em binary sem o conteúdo: ref aponta para esta rota; omitted: true quer dizer que o conteúdo não foi guardado (execução agendada ou de subfluxo, ou passou de 64 MB de arquivos na execução).',
+        errors: ['404: a execução não existe, é de uma pasta sem acesso ou o arquivo não foi guardado'],
+      },
+      {
         method: 'POST',
         path: '/executions/{id}/cancel',
         profile: 'operator',

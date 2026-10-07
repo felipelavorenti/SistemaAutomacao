@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { errorMessage, formatDate, formatDuration, get, MODE_LABEL, post, type ExecutionDetail, type NodeRun } from '../api';
 import { useMe } from '../App';
-import { ErrorBox, JsonView, PageHeader, RunMeta, StatusBadge, useLoad } from '../components/ui';
+import { BinaryFiles, ErrorBox, JsonView, PageHeader, RunMeta, StatusBadge, useLoad } from '../components/ui';
 
 export function ExecutionPage() {
   const { id } = useParams();
@@ -194,10 +194,12 @@ export function ExecutionPage() {
                 <div>
                   <h4>Entrada</h4>
                   <JsonView value={run.input.map((list) => list.map((i) => i.json))} />
+                  <BinaryFiles items={run.input.flat()} executionId={ex.id} />
                 </div>
                 <div>
                   <h4>Saída</h4>
                   <JsonView value={run.output.map((list) => list.map((i) => i.json))} />
+                  <BinaryFiles items={run.output.flat()} executionId={ex.id} />
                 </div>
               </div>
             </>

@@ -1668,6 +1668,46 @@ runs traz um item por nó executado, na ordem em que rodaram; input e output sã
 
 - 404: não existe ou é de um fluxo numa pasta sem acesso
 
+### GET /api/executions/{id}/files/{ref}
+
+Baixa um arquivo (dado binário) que um nó gerou numa execução manual ou repetida.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID da execução |
+| `ref` | caminho | texto | sim | O campo ref do arquivo no item, em runs[].output (hash SHA-256 do conteúdo, 64 caracteres) |
+| `download` | URL | texto | não | true força o download mesmo para PDF, imagem e texto, que por padrão abrem no navegador |
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/executions/4b31556c-2e1d-48da-9043-d1a708320b46/files/3f1c9a0e5b7d2c4e8f6a1b3d5c7e9f0a2b4c6d8e0f1a3b5c7d9e1f3a5b7c9d1e?download=true" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o "pedidos.xlsx"
+```
+
+**Exemplo de resposta**
+
+O corpo é o próprio arquivo, com o tipo e o nome que o nó deu. Nos itens de runs, cada arquivo aparece em binary sem o conteúdo: ref aponta para esta rota; omitted: true quer dizer que o conteúdo não foi guardado (execução agendada ou de subfluxo, ou passou de 64 MB de arquivos na execução).
+
+```json
+{
+  "status": 200,
+  "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "content-disposition": "attachment; filename*=UTF-8''pedidos.xlsx"
+}
+```
+
+_O corpo é o arquivo; o exemplo mostra o status e os cabeçalhos. O curl grava o arquivo com -o._
+
+**Erros próprios**
+
+- 404: a execução não existe, é de uma pasta sem acesso ou o arquivo não foi guardado
+
 ### POST /api/executions/{id}/cancel
 
 Cancela uma execução na fila ou em andamento.

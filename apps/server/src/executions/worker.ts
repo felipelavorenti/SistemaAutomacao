@@ -109,6 +109,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       onDatabaseCommand,
       databases: pools,
       getApiEndpoint: (erpClientId: string, endpointId: string) => loadApiEndpoint(db, config.encryptionKey, erpClientId, endpointId),
+      filesDirs: config.filesDirs,
       getFile: async (id: string): Promise<FileData> => {
         const row = await one<{ id: string; name: string; mime_type: string; content: Buffer }>(db, 'SELECT id, name, mime_type, content FROM files WHERE id = $1', [id]);
         if (!row) throw new Error(`O arquivo ${id} não existe mais; escolha o arquivo de novo no nó`);
@@ -166,7 +167,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         });
         // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
         const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
-        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData));
+        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepAs === 'manual' || keepAs === 'retry');
         return { executionId: id, status: result.status, output: result.lastOutput, error: result.error };
       } catch (err) {
         await failExecution(db, id, err instanceof Error ? err.message : String(err));
@@ -199,7 +200,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         executeSubworkflow: subworkflowRunner(executionId, claimed.mode, 1, claimed.triggered_by),
         ...executionDeps(executionId, claimed.workflow_id, claimed.triggered_by),
       });
-      await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData));
+      await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), claimed.mode === 'manual' || claimed.mode === 'retry');
     } catch (err) {
       await failExecution(db, executionId, err instanceof Error ? err.message : String(err));
     } finally {

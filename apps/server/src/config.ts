@@ -30,6 +30,8 @@ export interface Config {
   /** Endereço do Info8n que o navegador usa (ex.: https://info8n.empresa.com.br), para o login com Google. */
   publicUrl?: string;
   webDistDir?: string;
+  /** Pastas do servidor que os nós Read/Write Files from Disk podem usar. */
+  filesDirs: string[];
   admin?: { email: string; password: string; name: string };
 }
 
@@ -53,6 +55,10 @@ export function loadConfig(): Config {
     secureCookies: process.env.SECURE_COOKIES === 'true',
     publicUrl: process.env.PUBLIC_URL?.replace(/\/+$/, '') || undefined,
     webDistDir: process.env.WEB_DIST_DIR,
+    filesDirs: (process.env.FILES_DIRS ?? '')
+      .split(/[;,]/)
+      .map((s) => s.trim())
+      .filter(Boolean),
     admin: process.env.ADMIN_EMAIL
       ? { email: process.env.ADMIN_EMAIL, password: required('ADMIN_PASSWORD'), name: process.env.ADMIN_NAME ?? 'Administrador' }
       : undefined,

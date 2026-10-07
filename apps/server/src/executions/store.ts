@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { ExecutionResult, Item, JsonObject, JsonValue, NodeRun, WorkflowDefinition } from '@sa/engine';
+import type { BinaryData, ExecutionResult, Item, JsonObject, JsonValue, NodeRun, WorkflowDefinition } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
 
 export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry';
@@ -9,6 +10,8 @@ const MAX_RUN_BYTES = 256 * 1024;
 const MAX_ERROR_DETAILS_BYTES = 64 * 1024;
 /** Limite do total guardado por execução (antes de compactar); loops longos param de guardar dados depois disso. */
 const MAX_EXECUTION_BYTES = 16 * 1024 * 1024;
+/** Limite do total de arquivos guardados por execução manual, para baixar na tela. */
+const MAX_EXECUTION_FILE_BYTES = 64 * 1024 * 1024;
 
 /** Resumo por nó; um nó que rodou várias vezes (loop) vira uma linha só. */
 export interface NodeRunSummary {
@@ -120,8 +123,58 @@ function trimDetails(details: JsonValue | undefined): JsonValue | undefined {
   return text.length > MAX_ERROR_DETAILS_BYTES ? { _truncado: true, inicio: text.slice(0, MAX_ERROR_DETAILS_BYTES) } : details;
 }
 
-export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean): Promise<void> {
-  const data = keepData ? gzipSync(JSON.stringify({ runs: trimRuns(result.runs) })) : null;
+/** Arquivo tirado dos itens para ser guardado à parte. */
+export interface ExecutionFile {
+  ref: string;
+  fileName: string | null;
+  mimeType: string;
+  content: Buffer;
+}
+
+/**
+ * Tira o conteúdo dos arquivos dos itens antes de gravar a execução. Com `keepFiles`, cada arquivo
+ * diferente (pelo hash) vai para a lista devolvida, até o limite da execução, e o item guarda só a
+ * referência; sem, ou passado o limite, o item fica só com os dados do arquivo (`omitted`).
+ */
+export function stripBinaries(runs: NodeRun[], keepFiles: boolean): { runs: NodeRun[]; files: ExecutionFile[] } {
+  const files = new Map<string, ExecutionFile>();
+  let total = 0;
+  const stripFile = (file: BinaryData): BinaryData => {
+    const { data, ...meta } = file;
+    if (typeof data !== 'string' || file.omitted || file.ref) return file;
+    if (keepFiles) {
+      const content = Buffer.from(data, 'base64');
+      const ref = createHash('sha256').update(content).digest('hex');
+      if (files.has(ref)) return { ...meta, data: '', ref };
+      if (total + content.length <= MAX_EXECUTION_FILE_BYTES) {
+        total += content.length;
+        files.set(ref, { ref, fileName: file.fileName ?? null, mimeType: file.mimeType, content });
+        return { ...meta, data: '', ref };
+      }
+    }
+    return { ...meta, data: '', omitted: true };
+  };
+  const stripItems = (lists: Item[][]): Item[][] =>
+    lists.map((list) =>
+      list.map((item) => (item.binary ? { json: item.json, binary: Object.fromEntries(Object.entries(item.binary).map(([k, f]) => [k, stripFile(f)])) } : item)),
+    );
+  const stripped = runs.map((run) => {
+    const hasFiles = (lists: Item[][]) => lists.some((list) => list.some((item) => item.binary));
+    return hasFiles(run.input) || hasFiles(run.output) ? { ...run, input: stripItems(run.input), output: stripItems(run.output) } : run;
+  });
+  return { runs: stripped, files: [...files.values()] };
+}
+
+export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false): Promise<void> {
+  const stripped = stripBinaries(result.runs, keepData && keepFiles);
+  const data = keepData ? gzipSync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
+  for (const file of stripped.files) {
+    await db.query(
+      `INSERT INTO execution_files (execution_id, ref, file_name, mime_type, size, content) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (execution_id, ref) DO NOTHING`,
+      [id, file.ref, file.fileName, file.mimeType, file.content.length, file.content],
+    );
+  }
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
   await db.query(
     `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,

@@ -425,6 +425,7 @@ function Editor() {
             node={selected}
             description={describe(selected.type)}
             run={runsByNode.get(selected.id)}
+            executionId={execution?.id}
             previewOutputs={previewOutputs}
             connections={connections}
             workflows={workflows}

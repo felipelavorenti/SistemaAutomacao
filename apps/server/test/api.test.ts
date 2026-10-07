@@ -9,6 +9,7 @@ import { parseKey, type Config } from '../src/config.js';
 import { createDb, migrate, type Db } from '../src/db/db.js';
 import { createRedis, ExecutionQueue } from '../src/executions/queue.js';
 import { startWorker, type WorkerHandle } from '../src/executions/worker.js';
+import { stripBinaries } from '../src/executions/store.js';
 import { ensureAdmin } from '../src/lib/auth.js';
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://postgres@127.0.0.1:5432/automacao_test';
@@ -44,6 +45,7 @@ describe.skipIf(!available)('API', () => {
     sessionTtlHours: 1,
     executionRetentionDays: 0,
     keepSuccessData: false,
+    filesDirs: [],
     workerConcurrency: 2,
     runWorkerInProcess: true,
     secureCookies: false,
@@ -638,6 +640,55 @@ describe.skipIf(!available)('API', () => {
     const byValue = await call(viewer, 'GET', `/api/executions?dataKey=pedido&dataValue=2077`);
     expect(byValue.body.map((e: { id: string; custom_data: unknown }) => [e.id, e.custom_data])).toEqual([[ids[1], { pedido: '2077' }]]);
     expect((await call(viewer, 'GET', `/api/executions?dataKey=outra`)).body).toEqual([]);
+  });
+
+  it('guarda os arquivos dos itens nas execuções manuais e deixa baixar', async () => {
+    const wf = await call(editor, 'POST', '/api/workflows', { name: 'Gera arquivo', folderId: folderA });
+    const definition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        {
+          id: 'c',
+          name: 'Arquivo',
+          type: 'code',
+          position: { x: 0, y: 0 },
+          parameters: {
+            mode: 'all',
+            jsCode: "return [{ json: { ok: true }, binary: { data: { data: 'b2zDoQ==', mimeType: 'text/plain', fileName: 'oi.txt' } } }];",
+          },
+        },
+      ],
+      connections: [{ from: 't', fromOutput: 0, to: 'c', toInput: 0 }],
+    };
+    const run = await call(editor, 'POST', `/api/workflows/${wf.body.id}/run`, { definition });
+    const execution = await waitExecution(editor, run.body.executionId);
+    expect(execution.status, JSON.stringify(execution.error)).toBe('success');
+    const file = execution.runs.at(-1).output[0][0].binary.data;
+    expect(file).toMatchObject({ data: '', mimeType: 'text/plain', fileName: 'oi.txt', ref: expect.stringMatching(/^[0-9a-f]{64}$/) });
+
+    const url = `/api/executions/${run.body.executionId}/files/${file.ref}`;
+    const content = await app.inject({ method: 'GET', url, headers: { cookie: viewer } });
+    expect(content.statusCode).toBe(200);
+    expect(content.headers['content-type']).toBe('text/plain');
+    expect(content.headers['content-disposition']).toBe("inline; filename*=UTF-8''oi.txt");
+    expect(content.rawPayload.toString('utf8')).toBe('olá');
+    const download = await app.inject({ method: 'GET', url: `${url}?download=true`, headers: { cookie: viewer } });
+    expect(download.headers['content-disposition']).toBe("attachment; filename*=UTF-8''oi.txt");
+    const missing = await app.inject({ method: 'GET', url: `/api/executions/${run.body.executionId}/files/${'0'.repeat(64)}`, headers: { cookie: viewer } });
+    expect(missing.statusCode).toBe(404);
+  });
+
+  it('não guarda o conteúdo dos arquivos fora das execuções manuais', () => {
+    const file = { data: 'b2zDoQ==', mimeType: 'text/plain', fileName: 'oi.txt' };
+    const run = { nodeId: 'c', nodeName: 'C', nodeType: 'code', status: 'success' as const, startedAt: '', finishedAt: '', durationMs: 0, tries: 1, input: [[]], output: [[{ json: {}, binary: { data: file } }]] };
+    const kept = stripBinaries([run], true);
+    expect(kept.files).toHaveLength(1);
+    expect(kept.files[0].content.toString('utf8')).toBe('olá');
+    const dropped = stripBinaries([run], false);
+    expect(dropped.files).toEqual([]);
+    expect(dropped.runs[0].output[0][0].binary?.data).toEqual({ data: '', mimeType: 'text/plain', fileName: 'oi.txt', omitted: true });
+    // O item original não é alterado.
+    expect(run.output[0][0].binary.data.data).toBe('b2zDoQ==');
   });
 
   it('guarda arquivos enviados pela tela e devolve o conteúdo', async () => {

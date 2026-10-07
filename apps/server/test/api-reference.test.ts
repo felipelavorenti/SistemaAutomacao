@@ -14,6 +14,7 @@ const config: Config = {
   sessionTtlHours: 1,
   executionRetentionDays: 0,
   keepSuccessData: false,
+  filesDirs: [],
   workerConcurrency: 1,
   runWorkerInProcess: false,
   secureCookies: false,

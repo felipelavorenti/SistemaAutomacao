@@ -6,6 +6,10 @@ services:
     environment:
       DATABASE_URL: postgres://automacao:${POSTGRES_PASSWORD}@postgres:5432/automacao
       REDIS_URL: redis://redis:6379
+      FILES_DIRS: ${FILES_DIRS:-/files}
+    volumes:
+      # Pasta para os nós Read/Write Files from Disk (dentro do Info8n ela é /files).
+      - ./arquivos:/files
     ports:
       - "3000:3000"
     depends_on:
