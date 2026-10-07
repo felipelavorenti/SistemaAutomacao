@@ -13,12 +13,13 @@ export function ExecutionPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const dbCommands = useLoad(() => get<unknown[]>(`/db-commands?executionId=${id}&limit=1`), [id, ex?.status]);
 
-  const inProgress = ex?.status === 'queued' || ex?.status === 'running';
+  const inProgress = ex?.status === 'queued' || ex?.status === 'running' || ex?.status === 'waiting';
+  const waiting = ex?.status === 'waiting';
   useEffect(() => {
     if (!inProgress) return;
-    const t = setInterval(() => void reload(), 1500);
+    const t = setInterval(() => void reload(), waiting ? 5000 : 1500);
     return () => clearInterval(t);
-  }, [inProgress, reload]);
+  }, [inProgress, waiting, reload]);
 
   if (!ex) return <ErrorBox message={error} />;
 
@@ -68,6 +69,13 @@ export function ExecutionPage() {
           <span className="muted">Status</span>
           <StatusBadge status={ex.status} />
         </div>
+        {ex.status === 'waiting' && ex.wait_info && (
+          <div>
+            <span className="muted">Esperando</span>
+            {ex.wait_info.kind === 'form' ? 'o formulário' : ex.wait_info.kind === 'webhook' ? 'a chamada do webhook' : 'o tempo passar'} em "{ex.wait_info.nodeName}"
+            {ex.wait_till ? `, até ${formatDate(ex.wait_till)}` : ', sem prazo'}
+          </div>
+        )}
         <div>
           <span className="muted">Tipo</span>
           {MODE_LABEL[ex.mode] ?? ex.mode}
@@ -86,7 +94,7 @@ export function ExecutionPage() {
         </div>
         <div>
           <span className="muted">Disparada por</span>
-          {ex.triggered_by_name ?? 'Agendamento'}
+          {ex.triggered_by_name ?? (ex.mode === 'schedule' ? 'Agendamento' : (MODE_LABEL[ex.mode] ?? ex.mode))}
         </div>
         <div>
           <span className="muted">Início</span>

@@ -176,6 +176,24 @@ export const connectionTypes: ConnectionTypeDescription[] = [
     ],
   },
   {
+    type: 'imap',
+    displayName: 'IMAP (caixa de e-mail)',
+    fields: [
+      { name: 'host', displayName: 'Servidor', secret: false, required: true, placeholder: 'imap.gmail.com' },
+      { name: 'port', displayName: 'Porta', secret: false, required: false, default: '993', hint: '993 com SSL/TLS; 143 sem.' },
+      { name: 'user', displayName: 'Usuário', secret: false, required: true, placeholder: 'contato@empresa.com.br' },
+      {
+        name: 'password',
+        displayName: 'Senha',
+        secret: true,
+        required: true,
+        hint: 'No Gmail e no Outlook com verificação em duas etapas, use uma senha de app.',
+      },
+      { name: 'secure', displayName: 'SSL/TLS', secret: false, required: false, default: 'true', options: yesNo },
+      { name: 'allowUnauthorizedCerts', displayName: 'Aceitar certificado inválido', secret: false, required: false, default: 'false', options: yesNo },
+    ],
+  },
+  {
     type: 'totp',
     displayName: 'TOTP (código de dois fatores)',
     fields: [

@@ -221,7 +221,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxos das pastas que o usuário enxerga.',
         response:
-          'scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).',
+          'scheduled diz se o fluxo tem gatilho de agendamento; activatable, se tem algum gatilho que o faz rodar sozinho quando ativo (agendamento, Webhook, Form Trigger, n8n Trigger, IMAP, RSS, pasta ou SSE); callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).',
       },
       {
         method: 'GET',
@@ -307,9 +307,40 @@ const GROUPS: ApiGroup[] = [
             description: 'Itens que entram no primeiro gatilho do fluxo (o Gatilho manual): [{"json": {...}}]. Sem input, o gatilho solta um item vazio',
           },
           { name: 'definition', type: 'objeto', description: 'Usado pelo editor da tela para rodar um fluxo ainda não salvo. Exige o perfil Editor' },
+          {
+            name: 'startNodeId',
+            type: 'texto',
+            description: 'ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o Gatilho manual ou, sem ele, o primeiro gatilho do fluxo',
+          },
         ],
         response: 'Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o resultado.',
         errors: ['404: o fluxo não existe ou está numa pasta sem acesso'],
+      },
+      {
+        method: 'POST',
+        path: '/workflows/{id}/listen',
+        profile: 'operator',
+        summary:
+          'Abre a escuta de teste por 2 minutos, como o botão "Escutar" do editor: as URLs /webhook-test/... e /form-test/... passam a responder, e os gatilhos que escutam (e-mail IMAP, pasta, SSE) ficam ligados. O RSS consulta uma vez na hora. O primeiro evento vira uma execução manual e a escuta fecha.',
+        params: [id('do fluxo')],
+        body: [{ name: 'definition', type: 'objeto', description: 'Definição ainda não salva, enviada pelo editor. Exige o perfil Editor. Sem ela, vale a versão salva' }],
+        response: 'expiresAt é quando a escuta fecha sozinha; webhooks lista os caminhos de teste abertos (kind webhook ou form). Acompanhe com GET /workflows/{id}/listen.',
+        errors: ['400: o fluxo não tem gatilho para escutar, ou um gatilho não conseguiu ligar (o motivo vem na mensagem)', '404: o fluxo não existe ou está numa pasta sem acesso'],
+      },
+      {
+        method: 'GET',
+        path: '/workflows/{id}/listen',
+        profile: 'any',
+        summary: 'Situação da escuta de teste: se ainda está escutando e, quando o evento chegou, o ID da execução criada.',
+        params: [id('do fluxo')],
+        response: 'listening fica false quando a escuta fecha (chegou o evento ou passaram os 2 minutos); executionId vem preenchido quando chegou um evento.',
+      },
+      {
+        method: 'DELETE',
+        path: '/workflows/{id}/listen',
+        profile: 'any',
+        summary: 'Fecha a escuta de teste antes dos 2 minutos.',
+        params: [id('do fluxo')],
       },
       {
         method: 'GET',
@@ -372,7 +403,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Tipos de nó disponíveis no editor, com os parâmetros de cada um.',
         response:
-          'Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer.',
+          'Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer. activatable: true marca os gatilhos que fazem o fluxo rodar sozinho quando ele está ativo.',
       },
       {
         method: 'POST',
@@ -404,8 +435,8 @@ const GROUPS: ApiGroup[] = [
         summary: 'Execuções dos fluxos que o usuário enxerga, mais novas primeiro.',
         query: [
           { name: 'workflowId', type: 'uuid', description: 'Só de um fluxo' },
-          { name: 'status', type: 'texto', description: 'queued, running, success, error ou canceled' },
-          { name: 'mode', type: 'texto', description: 'manual, schedule, subworkflow ou retry' },
+          { name: 'status', type: 'texto', description: 'queued, running, waiting (pausada num Wait ou Form), success, error ou canceled' },
+          { name: 'mode', type: 'texto', description: 'manual, schedule, subworkflow, retry, webhook (webhook e formulário), trigger (gatilhos que escutam, como e-mail e RSS) ou error (fluxo de erro)' },
           { name: 'parentId', type: 'uuid', description: 'Só os subfluxos chamados por esta execução' },
           from,
           to,
@@ -416,7 +447,7 @@ const GROUPS: ApiGroup[] = [
           limit,
         ],
         response:
-          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).',
+          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).',
       },
       {
         method: 'GET',
@@ -429,10 +460,10 @@ const GROUPS: ApiGroup[] = [
         method: 'GET',
         path: '/executions/{id}',
         profile: 'any',
-        summary: 'Execução completa, com os dados de cada nó. Consulte até status sair de queued ou running.',
+        summary: 'Execução completa, com os dados de cada nó. Consulte até status sair de queued, running ou waiting.',
         params: [id('da execução')],
         response:
-          'runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.',
+          'runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Pausada (status waiting), wait_info diz o que ela espera: kind time, webhook ou form, o nó (nodeName) e until; start_node_id é o gatilho de onde começou. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.',
         errors: ['404: não existe ou é de um fluxo numa pasta sem acesso'],
       },
       {
@@ -453,7 +484,7 @@ const GROUPS: ApiGroup[] = [
         method: 'POST',
         path: '/executions/{id}/cancel',
         profile: 'operator',
-        summary: 'Cancela uma execução na fila ou em andamento.',
+        summary: 'Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).',
         params: [id('da execução')],
         errors: ['400: a execução já terminou'],
         audited: true,

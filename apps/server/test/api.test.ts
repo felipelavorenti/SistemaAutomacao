@@ -449,7 +449,7 @@ describe.skipIf(!available)('API', () => {
       nodes: [
         { name: 'Início', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, position: [0, 0], parameters: {} },
         { name: 'Chama', type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.1, position: [200, 0], parameters: { workflowId: { __rl: true, value: 'n8n-sub' } } },
-        { name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 200], parameters: { path: 'x' } },
+        { name: 'Slack', type: 'n8n-nodes-base.slackTrigger', typeVersion: 1, position: [0, 200], parameters: {} },
       ],
       connections: { Início: { main: [[{ node: 'Chama', type: 'main', index: 0 }]] } },
     };
@@ -462,15 +462,15 @@ describe.skipIf(!available)('API', () => {
     ]);
     const [pai, filho] = first.body;
     expect(pai.wasActive).toBe(true);
-    expect(pai.warnings.map((w: { node?: string }) => w.node)).toContain('Webhook');
+    expect(pai.warnings.map((w: { node?: string }) => w.node)).toContain('Slack');
 
     const imported = await call(editor, 'GET', `/api/workflows/${pai.id}`);
     expect(imported.body.active).toBe(false);
     expect(imported.body.definition.nodes.find((n: { name: string }) => n.name === 'Chama').parameters.workflowId).toBe(filho.id);
-    expect(imported.body.issues.map((i: { message: string }) => i.message)).toContain('"Webhook" veio do n8n sem equivalente; substitua-o por outros nós');
+    expect(imported.body.issues.map((i: { message: string }) => i.message)).toContain('"Slack" veio do n8n sem equivalente; substitua-o por outros nós');
 
     // Sem o nó não convertido, o fluxo importado roda chamando o subfluxo importado.
-    const definition = { ...imported.body.definition, nodes: imported.body.definition.nodes.filter((n: { name: string }) => n.name !== 'Webhook') };
+    const definition = { ...imported.body.definition, nodes: imported.body.definition.nodes.filter((n: { name: string }) => n.name !== 'Slack') };
     const run = await call(editor, 'POST', `/api/workflows/${pai.id}/run`, { definition, input: [{ json: { sku: 'A' } }] });
     const execution = await waitExecution(editor, run.body.executionId);
     expect(execution.status, JSON.stringify(execution.error)).toBe('success');

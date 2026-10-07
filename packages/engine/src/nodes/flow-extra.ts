@@ -3,6 +3,7 @@ import type { NodeType, PropertyDescription } from '../node-types.js';
 import { NodeOperationError, resolveOutputs } from '../node-types.js';
 import { parseLocalDateTime, ScheduleError } from '../schedule.js';
 import type { Item, JsonObject, JsonValue } from '../types.js';
+import { formFieldsProperty, formToJson, readFormFields } from '../forms.js';
 import { evaluateCondition, ifNode } from './if.js';
 import { getPath, isPlainObject, splitPath, withoutPath } from './paths.js';
 
@@ -554,11 +555,51 @@ function parseWaitDateTime(raw: JsonValue, timezone: string): number {
   }
 }
 
+/** Esperas curtas ficam no worker, como no n8n (abaixo de 65 s a execução não é pausada). */
+const IN_PROCESS_WAIT_MS = 65_000;
+
+const WAIT_UNIT_OPTIONS = [
+  { name: 'Segundos', value: 'seconds' },
+  { name: 'Minutos', value: 'minutes' },
+  { name: 'Horas', value: 'hours' },
+  { name: 'Dias', value: 'days' },
+];
+
+function waitAmountMs(raw: JsonValue, unit: string): number {
+  if (!UNIT_MS[unit]) throw new NodeOperationError(`Unidade de espera inválida: ${unit}; use segundos, minutos, horas ou dias`);
+  const amount = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
+    throw new NodeOperationError(`Tempo de espera inválido: ${JSON.stringify(raw)}; informe um número maior ou igual a 0`);
+  }
+  return amount * UNIT_MS[unit]!;
+}
+
+/** Campos do webhook de retomada que o servidor usa (já com as expressões resolvidas). */
+const WAIT_WEBHOOK_FIELDS = [
+  'httpMethod',
+  'authentication',
+  'basicAuthConnection',
+  'headerAuthConnection',
+  'responseMode',
+  'responseCode',
+  'responseData',
+  'responseBinaryPropertyName',
+  'responsePropertyName',
+  'responseContentType',
+  'responseHeaders',
+  'noResponseBody',
+  'binaryPropertyName',
+  'rawBody',
+  'ipWhitelist',
+  'ignoreBots',
+  'webhookSuffix',
+];
+
 export const wait: NodeType = {
   description: {
     type: 'wait',
     displayName: 'Wait',
-    description: 'Espera um tempo ou até uma data e hora e depois segue com os mesmos itens.',
+    description: 'Pausa a execução por um tempo, até uma data, até uma chamada de webhook ou até um formulário ser enviado.',
     group: 'logic',
     inputs: 1,
     outputs: 1,
@@ -572,22 +613,12 @@ export const wait: NodeType = {
         options: [
           { name: 'Depois de um intervalo', value: 'timeInterval' },
           { name: 'Numa data e hora', value: 'specificTime' },
+          { name: 'Quando a URL de retomada for chamada (webhook)', value: 'webhook' },
+          { name: 'Quando um formulário for enviado', value: 'form' },
         ],
       },
       { name: 'amount', displayName: 'Esperar', type: 'number', default: 5, showWhen: { resume: ['timeInterval'] } },
-      {
-        name: 'unit',
-        displayName: 'Unidade',
-        type: 'options',
-        default: 'seconds',
-        showWhen: { resume: ['timeInterval'] },
-        options: [
-          { name: 'Segundos', value: 'seconds' },
-          { name: 'Minutos', value: 'minutes' },
-          { name: 'Horas', value: 'hours' },
-          { name: 'Dias', value: 'days' },
-        ],
-      },
+      { name: 'unit', displayName: 'Unidade', type: 'options', default: 'seconds', showWhen: { resume: ['timeInterval'] }, options: WAIT_UNIT_OPTIONS },
       {
         name: 'dateTime',
         displayName: 'Data e hora',
@@ -598,28 +629,136 @@ export const wait: NodeType = {
         description: 'Se o momento já passou, o fluxo segue na hora.',
       },
       { name: 'timezone', displayName: 'Fuso horário', type: 'string', default: 'America/Sao_Paulo', showWhen: { resume: ['specificTime'] } },
+      // Webhook de retomada: a URL é {{ $execution.resumeUrl }} (mande-a para quem vai chamar).
+      { name: 'httpMethod', displayName: 'Método HTTP', type: 'options', default: 'GET', showWhen: { resume: ['webhook'] }, options: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map((m) => ({ name: m, value: m })) },
+      {
+        name: 'webhookSuffix',
+        displayName: 'Final da URL',
+        type: 'string',
+        default: '',
+        description: 'Opcional: a URL de retomada passa a ser {{ $execution.resumeUrl }}/<final>.',
+        showWhen: { resume: ['webhook'] },
+      },
+      {
+        name: 'authentication',
+        displayName: 'Autenticação',
+        type: 'options',
+        default: 'none',
+        showWhen: { resume: ['webhook'] },
+        options: [
+          { name: 'Nenhuma', value: 'none' },
+          { name: 'Usuário e senha (Basic)', value: 'basicAuth' },
+          { name: 'Header com chave', value: 'headerAuth' },
+        ],
+      },
+      { name: 'basicAuthConnection', displayName: 'Conexão (usuário e senha)', type: 'connection', default: '', connectionTypes: ['httpBasicAuth'], showWhen: { resume: ['webhook'], authentication: ['basicAuth'] } },
+      { name: 'headerAuthConnection', displayName: 'Conexão (header)', type: 'connection', default: '', connectionTypes: ['httpHeaderAuth'], showWhen: { resume: ['webhook'], authentication: ['headerAuth'] } },
+      {
+        name: 'responseMode',
+        displayName: 'Responder',
+        type: 'options',
+        default: 'onReceived',
+        showWhen: { resume: ['webhook'] },
+        options: [
+          { name: 'Logo que receber', value: 'onReceived' },
+          { name: 'Quando o último nó terminar', value: 'lastNode' },
+          { name: 'Pelo nó Respond to Webhook', value: 'responseNode' },
+        ],
+      },
+      { name: 'responseCode', displayName: 'Código da resposta', type: 'number', default: 200, showWhen: { resume: ['webhook'], responseMode: ['onReceived', 'lastNode'] } },
+      {
+        name: 'responseData',
+        displayName: 'Dados da resposta',
+        type: 'options',
+        default: 'firstEntryJson',
+        showWhen: { resume: ['webhook'], responseMode: ['lastNode'] },
+        options: [
+          { name: 'JSON do primeiro item', value: 'firstEntryJson' },
+          { name: 'Todos os itens (lista de JSON)', value: 'allEntries' },
+          { name: 'Arquivo do primeiro item', value: 'firstEntryBinary' },
+          { name: 'Sem corpo', value: 'noData' },
+        ],
+      },
+      { name: 'binaryPropertyName', displayName: 'Nome do arquivo recebido', type: 'string', default: 'data', showWhen: { resume: ['webhook'] } },
+      { name: 'ipWhitelist', displayName: 'IPs permitidos', type: 'string', default: '', showWhen: { resume: ['webhook'] } },
+      { name: 'ignoreBots', displayName: 'Ignorar robôs', type: 'boolean', default: false, showWhen: { resume: ['webhook', 'form'] } },
+      // Formulário de retomada: a URL é {{ $execution.resumeFormUrl }}.
+      { name: 'formTitle', displayName: 'Título do formulário', type: 'string', default: '', showWhen: { resume: ['form'] } },
+      { name: 'formDescription', displayName: 'Descrição', type: 'string', default: '', multiline: true, showWhen: { resume: ['form'] } },
+      formFieldsProperty({ resume: ['form'] }),
+      { name: 'buttonLabel', displayName: 'Texto do botão', type: 'string', default: 'Enviar', showWhen: { resume: ['form'] } },
+      { name: 'customCss', displayName: 'CSS próprio', type: 'string', default: '', multiline: true, showWhen: { resume: ['form'] } },
+      { name: 'limitWaitTime', displayName: 'Limitar o tempo de espera', type: 'boolean', default: false, showWhen: { resume: ['webhook', 'form'] } },
+      {
+        name: 'limitType',
+        displayName: 'Limite',
+        type: 'options',
+        default: 'afterTimeInterval',
+        showWhen: { resume: ['webhook', 'form'], limitWaitTime: [true] },
+        options: [
+          { name: 'Depois de um intervalo', value: 'afterTimeInterval' },
+          { name: 'Numa data e hora', value: 'atSpecifiedTime' },
+        ],
+      },
+      { name: 'resumeAmount', displayName: 'Esperar no máximo', type: 'number', default: 1, showWhen: { resume: ['webhook', 'form'], limitWaitTime: [true], limitType: ['afterTimeInterval'] } },
+      { name: 'resumeUnit', displayName: 'Unidade', type: 'options', default: 'hours', options: WAIT_UNIT_OPTIONS, showWhen: { resume: ['webhook', 'form'], limitWaitTime: [true], limitType: ['afterTimeInterval'] } },
+      { name: 'maxDateAndTime', displayName: 'Até', type: 'dateTime', default: '', showWhen: { resume: ['webhook', 'form'], limitWaitTime: [true], limitType: ['atSpecifiedTime'] } },
     ],
   },
   async execute(ctx) {
     const input = ctx.inputs[0] ?? [];
+    const resume = String((await ctx.getParam('resume', 0)) ?? 'timeInterval');
+
+    // Retomada: pelo webhook ou formulário seguem os dados que chegaram; pelo tempo, os mesmos itens.
+    if (ctx.resumeData) {
+      if ((ctx.resumeData.kind === 'webhook' || ctx.resumeData.kind === 'form') && ctx.resumeData.items) return [ctx.resumeData.items];
+      return [input];
+    }
+
+    if (resume === 'webhook' || resume === 'form') {
+      let until: number | undefined;
+      if ((await ctx.getParam('limitWaitTime', 0)) === true) {
+        if ((await ctx.getParam('limitType', 0)) === 'atSpecifiedTime') {
+          until = parseWaitDateTime(await ctx.getParam('maxDateAndTime', 0), 'America/Sao_Paulo');
+        } else {
+          until = Date.now() + waitAmountMs(await ctx.getParam('resumeAmount', 0), String(await ctx.getParam('resumeUnit', 0)));
+        }
+      }
+      const config: JsonObject = {};
+      if (resume === 'webhook') {
+        for (const name of WAIT_WEBHOOK_FIELDS) config[name] = await ctx.getParam(name, 0);
+      } else {
+        config.form = formToJson({
+          title: String((await ctx.getParam('formTitle', 0)) ?? ''),
+          description: String((await ctx.getParam('formDescription', 0)) ?? '') || undefined,
+          fields: readFormFields(await ctx.getParam('formFields', 0)),
+          buttonLabel: String((await ctx.getParam('buttonLabel', 0)) ?? '') || undefined,
+          customCss: String((await ctx.getParam('customCss', 0)) ?? '') || undefined,
+        });
+        config.ignoreBots = await ctx.getParam('ignoreBots', 0);
+      }
+      ctx.meta.resumeUrl = resume === 'webhook' ? ctx.resumeUrl : ctx.resumeFormUrl;
+      if (!ctx.putToWait({ kind: resume, until, config })) {
+        throw new NodeOperationError('Esperar um webhook ou formulário não funciona dentro de um subfluxo; ponha o Wait no fluxo principal');
+      }
+      return [input];
+    }
+
     let ms: number;
-    if ((await ctx.getParam('resume', 0)) === 'specificTime') {
+    let at: number;
+    if (resume === 'specificTime') {
       const timezone = String((await ctx.getParam('timezone', 0)) || 'America/Sao_Paulo');
-      const at = parseWaitDateTime(await ctx.getParam('dateTime', 0), timezone);
+      at = parseWaitDateTime(await ctx.getParam('dateTime', 0), timezone);
       ms = at - Date.now();
       ctx.meta.waitUntil = new Date(at).toISOString();
     } else {
-      const unit = String(await ctx.getParam('unit', 0));
-      if (!UNIT_MS[unit]) throw new NodeOperationError(`Unidade de espera inválida: ${unit}; use segundos, minutos, horas ou dias`);
-      const raw = await ctx.getParam('amount', 0);
-      const amount = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
-      if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
-        throw new NodeOperationError(`Tempo de espera inválido: ${JSON.stringify(raw)}; informe um número maior ou igual a 0`);
-      }
-      ms = amount * UNIT_MS[unit]!;
+      ms = waitAmountMs(await ctx.getParam('amount', 0), String(await ctx.getParam('unit', 0)));
+      at = Date.now() + ms;
     }
+    // Espera longa: a execução pausa e libera a vaga; volta sozinha na hora marcada.
+    if (ms >= IN_PROCESS_WAIT_MS && ctx.putToWait({ kind: 'time', until: at })) return [input];
     if (ms > WAIT_TIMEOUT_MS) {
-      throw new NodeOperationError(`A espera máxima é de ${Math.floor(WAIT_TIMEOUT_MS / 86_400_000)} dias; o valor pedido dá ${(ms / 86_400_000).toFixed(1)} dias`);
+      throw new NodeOperationError(`A espera máxima dentro de um subfluxo é de ${Math.floor(WAIT_TIMEOUT_MS / 86_400_000)} dias; o valor pedido dá ${(ms / 86_400_000).toFixed(1)} dias`);
     }
     if (ms > 0) await waitFor(ms, ctx.signal);
     return [input];

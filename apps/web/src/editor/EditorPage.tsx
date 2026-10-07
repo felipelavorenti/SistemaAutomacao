@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  del,
   errorMessage,
   formatDate,
   get,
@@ -31,9 +32,10 @@ import {
   type Workflow,
   type WorkflowDefinition,
   type WorkflowListItem,
+  type WorkflowSettings,
 } from '../api';
 import { useMe } from '../App';
-import { ErrorBox, Modal, StatusBadge } from '../components/ui';
+import { ErrorBox, Field, Modal, StatusBadge } from '../components/ui';
 import { FlowNode, type FlowNodeType } from './FlowNode';
 import { NodePanel } from './NodePanel';
 import { Icon, NODE_COLOR } from '../components/icons';
@@ -78,6 +80,12 @@ function Editor() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showVersions, setShowVersions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // Escuta de teste dos gatilhos (webhook, formulário, e-mail…), como o "Listen for test event" do n8n.
+  const [listening, setListening] = useState<{ expiresAt: string; webhooks: { kind: string; method: string; path: string; nodeName: string }[] } | null>(null);
+  // Muda a cada novo acompanhamento; o laço antigo vê a mudança e para.
+  const watch = useRef(0);
+  useEffect(() => () => void (watch.current += 1), []);
 
   useEffect(() => {
     (async () => {
@@ -269,17 +277,70 @@ function Editor() {
       setRunning(true);
       const body = readOnly ? { input } : { definition, input };
       const { executionId } = await post<{ executionId: string }>(`/workflows/${workflow.id}/run`, body);
-      for (;;) {
-        const ex = await get<ExecutionDetail>(`/executions/${executionId}`);
-        setExecution(ex);
-        if (ex.status !== 'queued' && ex.status !== 'running') break;
-        await new Promise((r) => setTimeout(r, 700));
-      }
+      await follow(executionId);
     } catch (err) {
       setError(errorMessage(err));
-    } finally {
       setRunning(false);
     }
+  };
+
+  /** Acompanha a execução até terminar. Em espera, continua olhando até o usuário parar. */
+  const follow = async (executionId: string) => {
+    const token = ++watch.current;
+    for (;;) {
+      const ex = await get<ExecutionDetail>(`/executions/${executionId}`);
+      if (token !== watch.current) return;
+      setExecution(ex);
+      setRunning(ex.status === 'queued' || ex.status === 'running');
+      if (ex.status !== 'queued' && ex.status !== 'running' && ex.status !== 'waiting') return;
+      await new Promise((r) => setTimeout(r, ex.status === 'waiting' ? 2000 : 700));
+      if (token !== watch.current) return;
+    }
+  };
+
+  const stopFollowing = () => {
+    watch.current += 1;
+    setRunning(false);
+  };
+
+  const listen = async () => {
+    if (!workflow) return;
+    try {
+      setError(null);
+      const started = await post<{ expiresAt: string; webhooks: { kind: string; method: string; path: string; nodeName: string }[] }>(
+        `/workflows/${workflow.id}/listen`,
+        readOnly ? {} : { definition },
+      );
+      setListening(started);
+      const token = ++watch.current;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (token !== watch.current) return;
+        const status = await get<{ listening: boolean; executionId: string | null }>(`/workflows/${workflow.id}/listen`);
+        if (token !== watch.current) return;
+        if (status.executionId) {
+          setListening(null);
+          setRunning(true);
+          await follow(status.executionId);
+          return;
+        }
+        if (!status.listening) {
+          setListening(null);
+          setNotice('Nenhum evento chegou em 2 minutos');
+          setTimeout(() => setNotice(null), 4000);
+          return;
+        }
+      }
+    } catch (err) {
+      setListening(null);
+      setError(errorMessage(err));
+    }
+  };
+
+  const stopListening = async () => {
+    watch.current += 1;
+    setListening(null);
+    if (workflow) await del(`/workflows/${workflow.id}/listen`).catch(() => undefined);
   };
 
   const setActive = async (active: boolean) => {
@@ -308,7 +369,9 @@ function Editor() {
   }
 
   const selected = definition.nodes.find((n) => n.id === openId);
-  const hasSchedule = definition.nodes.some((n) => n.type === 'scheduleTrigger');
+  const activatable = definition.nodes.some((n) => !n.disabled && describe(n.type)?.activatable);
+  // Gatilhos que esperam um evento de fora; o agendamento e o n8n Trigger não têm o que escutar.
+  const canListen = definition.nodes.some((n) => !n.disabled && describe(n.type)?.activatable && n.type !== 'scheduleTrigger' && n.type !== 'n8nTrigger');
   const query = paletteQuery.trim().toLowerCase();
   const matches = (d: NodeTypeDescription) => !query || `${d.displayName} ${d.description}`.toLowerCase().includes(query);
   const groups = ['trigger', 'action', 'logic', 'data']
@@ -335,13 +398,19 @@ function Editor() {
         </span>
         <div className="spacer" />
         {notice && <span className="ok-text">{notice}</span>}
-        {hasSchedule && (
-          <label className="check switch" title="Fluxos ativos rodam sozinhos no agendamento">
+        {(activatable || workflow.active) && (
+          <label className="check switch" title="Fluxos ativos rodam sozinhos pelos gatilhos (agendamento, webhook, formulário, e-mail…)">
             <input type="checkbox" checked={workflow.active} disabled={readOnly} onChange={(e) => setActive(e.target.checked)} /> Ativo
           </label>
         )}
+        <button onClick={() => setShowSettings(true)}>Configurações</button>
         <button onClick={() => setShowVersions(true)}>Versões</button>
         <button onClick={exportJson}>Exportar</button>
+        {me.permissions.executeWorkflows && canListen && (
+          <button onClick={listening ? stopListening : listen} title="Espera um evento de teste chegar nos gatilhos por 2 minutos">
+            {listening ? 'Parar de escutar' : 'Escutar'}
+          </button>
+        )}
         {me.permissions.executeWorkflows && (
           <button className="run-button" onClick={execute} disabled={running}>
             <Icon name="play" size={14} />
@@ -362,9 +431,31 @@ function Editor() {
           ))}
         </div>
       )}
+      {listening && (
+        <div className="execution-bar listen-bar">
+          Escutando até {formatDate(listening.expiresAt)}.
+          {listening.webhooks.map((w) => (
+            <code key={`${w.kind}${w.method}${w.path}`}>
+              {w.kind === 'form' ? `${window.location.origin}/form-test/${w.path}` : `${w.method} ${window.location.origin}/webhook-test/${w.path}`}
+            </code>
+          ))}
+          {!listening.webhooks.length && <span>Os gatilhos de e-mail, RSS, pasta e SSE disparam quando chegar algo novo.</span>}
+        </div>
+      )}
       {execution && (
         <div className="execution-bar">
           Última execução: <StatusBadge status={execution.status} /> {formatDate(execution.started_at ?? execution.created_at)}
+          {execution.status === 'waiting' && execution.wait_info && (
+            <span>
+              {' '}
+              · parada em {execution.wait_info.nodeName}
+              {execution.wait_info.kind === 'form' ? ' esperando o formulário' : execution.wait_info.kind === 'webhook' ? ' esperando o webhook' : ''}
+              {execution.wait_till && ` até ${formatDate(execution.wait_till)}`}{' '}
+              <button className="link" onClick={stopFollowing}>
+                Parar de acompanhar
+              </button>
+            </span>
+          )}
           {execution.error && <span className="error-text"> · {execution.error.nodeName ? `${execution.error.nodeName}: ` : ''}{execution.error.message}</span>}{' '}
           <button className="link" onClick={() => navigate(`/execucoes/${execution.id}`)}>
             Ver log completo
@@ -441,6 +532,18 @@ function Editor() {
           />
         )}
       </div>
+      {showSettings && (
+        <SettingsModal
+          settings={definition.settings ?? {}}
+          workflows={workflows}
+          readOnly={readOnly}
+          onClose={() => setShowSettings(false)}
+          onSave={(settings) => {
+            update((d) => ({ ...d, settings }));
+            setShowSettings(false);
+          }}
+        />
+      )}
       {showVersions && (
         <VersionsModal
           workflowId={workflow.id}
@@ -500,6 +603,47 @@ function VersionsModal({
           ))}
         </tbody>
       </table>
+    </Modal>
+  );
+}
+
+function SettingsModal({
+  settings,
+  workflows,
+  readOnly,
+  onClose,
+  onSave,
+}: {
+  settings: WorkflowSettings;
+  workflows: WorkflowListItem[];
+  readOnly: boolean;
+  onClose: () => void;
+  onSave: (settings: WorkflowSettings) => void;
+}) {
+  const [errorWorkflowId, setErrorWorkflowId] = useState(settings.errorWorkflowId ?? '');
+  return (
+    <Modal title="Configurações do fluxo" onClose={onClose}>
+      <Field
+        label="Fluxo de erro"
+        hint="Roda quando uma execução automática deste fluxo (agendada, por webhook ou por gatilho) falha. O outro fluxo precisa começar pelo nó Error Trigger."
+      >
+        <select value={errorWorkflowId} disabled={readOnly} onChange={(e) => setErrorWorkflowId(e.target.value)}>
+          <option value="">Nenhum</option>
+          {workflows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.folder_name} / {w.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {!readOnly && (
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancelar</button>
+          <button className="primary" onClick={() => onSave({ ...settings, errorWorkflowId: errorWorkflowId || undefined })}>
+            Aplicar
+          </button>
+        </div>
+      )}
     </Modal>
   );
 }

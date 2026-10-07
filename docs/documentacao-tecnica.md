@@ -45,7 +45,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 **packages/engine/src**
 
 - `executor.ts`: executa um fluxo nó a nó, com itens, tentativas, tempo limite e limite de execuções de nós.
-- `nodes/`: um arquivo por grupo de nós, registrados em `registry.ts`. Exemplos: `http-request.ts`, `database.ts`, `flow.ts` (Loop, Stop and Error, Code, Chamado por outro fluxo, Execute Workflow), `data.ts` (Split Out, Aggregate, Merge), `edit-fields.ts`, `metabase.ts`, `clickup.ts`, `gmail.ts` (com o login do Google em `google.ts`), `triggers.ts`.
+- `nodes/`: um arquivo por grupo de nós, registrados em `registry.ts`. Os gatilhos de eventos ficam em `webhook.ts` e `triggers-listen.ts`, e os formulários em `forms.ts`. Exemplos: `http-request.ts`, `database.ts`, `flow.ts` (Loop, Stop and Error, Code, Chamado por outro fluxo, Execute Workflow), `data.ts` (Split Out, Aggregate, Merge), `edit-fields.ts`, `metabase.ts`, `clickup.ts`, `gmail.ts` (com o login do Google em `google.ts`), `triggers.ts`.
 - `expressions/`: `template.ts` separa texto e `{{ }}`; `sandbox.ts` avalia no isolate V8.
 - `python/runner.ts`: pool de processos com Pyodide para o nó Code em Python.
 - `database/`: drivers de SQL Server, Oracle e Postgres, e parâmetros nomeados.
@@ -58,8 +58,9 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 - `index.ts`: sobe a API e, por padrão, o worker no mesmo processo. `worker-main.ts` roda só o worker.
 - `config.ts`: lê as variáveis de ambiente.
 - `api-reference.ts` e `api-examples.ts`: a referência da API e um exemplo de chamada e de resposta de cada rota. `api-markdown.ts` monta com eles a parte das rotas de `docs/api.md` (`npm run docs:api -w @sa/server`).
-- `routes/`: `auth`, `workflows`, `executions`, `connections`, `oauth` (login com Google das conexões do Gmail), `files` (arquivos escolhidos na tela, como anexos), `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
-- `executions/`: `queue.ts` (fila e agendamentos no BullMQ), `worker.ts` (roda as execuções), `store.ts` (grava resultado e dados comprimidos).
+- `triggers/manager.ts`: liga os gatilhos dos fluxos ativos (webhooks, formulários, IMAP, RSS, pasta, SSE, n8n Trigger) e a escuta de teste.
+- `routes/`: `webhooks` (rotas públicas `/webhook*` e `/form*`), `auth`, `workflows`, `executions`, `connections`, `oauth` (login com Google das conexões do Gmail), `files` (arquivos escolhidos na tela, como anexos), `catalog` (ERPs e clientes), `db-commands`, `admin` (usuários, pastas, clientes, auditoria).
+- `executions/`: `queue.ts` (fila, agendamentos e retomadas no BullMQ), `worker.ts` (roda as execuções e o fluxo de erro), `store.ts` (grava resultado, dados comprimidos e o estado das pausas), `events.ts` (eventos de uma execução pelo Redis, para os webhooks responderem).
 - `lib/`: `auth.ts` (senha, sessão, bloqueio), `permissions.ts` (perfis), `crypto.ts` (AES-256-GCM), `audit.ts`, `connection-types.ts`.
 - `db/migrations.ts`: cria e atualiza as tabelas ao subir.
 
@@ -73,7 +74,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 
 ## Motor de execução
 
-Toda execução passa pela fila: a API grava a execução como "na fila", e um worker a pega, roda o motor e grava o resultado. Isso vale para execuções manuais, agendadas, reexecuções e subfluxos.
+Toda execução passa pela fila: a API grava a execução como "na fila", e um worker a pega, roda o motor e grava o resultado. Isso vale para execuções manuais, agendadas, por webhook, por gatilho, de fluxo de erro, reexecuções, subfluxos e retomadas de execuções em espera.
 
 **Fila e worker**
 
@@ -137,8 +138,8 @@ Nenhuma biblioteca nova. A igualdade profunda do Compare Datasets usa isDeepStri
 - Filter tem uma saída, como o Filter v2 do n8n (a saída de descartados do n8n não é usada).
 - Switch: as saídas vêm de description.dynamicOutputs (modo rules: uma por regra, nome em outputKey, mais "Outros" quando fallbackOutput = extra; modo expression: numberOutputs, até 64). O execute devolve exatamente resolveOutputs(...).count listas, calculado com ctx.node.parameters. Como um campo options não lista as regras dinamicamente, "mandar para a saída de uma regra" é fallbackOutput = 'output' mais o número em fallbackIndex; o execute também aceita fallbackOutput numérico. Índice inválido (fallback ou expressão) gera erro com a faixa válida. Cada regra tem uma condição só (campo list não tem lista dentro de lista).
 - Compare Datasets segue a versão 2.3 do n8n: itens com JSON vazio são ignorados; item de A sem algum campo de casamento vai para "só em A"; um item de B pode casar com vários de A; preferInput2 com comparação tolerante manda a versão de B para "iguais"; includeBoth gera keys/same/different/skipped como o n8n (campos ausentes viram null; campos ignorados com ponto, como end.cep, vão para skipped dentro do objeto pai). Nomes com ponto sempre são lidos como caminho (não há a opção Disable Dot Notation). A comparação tolerante reproduz o fuzzyCompare do n8n (versão 2): nulo, 0 e "0"; vazio, nulo e lista vazia; número e texto; objeto e JSON em texto; booleano e "true"/"1"/"false"/"0".
-- Wait: espera com setTimeout em partes de até 2^31-1 ms, escutando ctx.signal; ao abortar limpa o timer e rejeita com o motivo do sinal, e o executor transforma em execução cancelada (o teste confirma status 'canceled'). Data passada não espera. A data aceita aaaa-mm-ddThh:mm:ss(.mmm) no fuso do nó (parseLocalDateTime de schedule.ts) ou ISO com Z/±hh:mm. Grava meta.waitUntil no modo data e hora.
-- Limite de tempo do Wait: o executor usa AbortSignal.timeout(timeoutMs), e o Node não aceita mais que 2^31-1 ms (uns 24,8 dias). Por isso defaultTimeoutMs = 2.147.483.647 ms, o executor limita o tempo limite de qualquer nó a esse valor e o Wait recusa esperas maiores que 24 dias com erro claro. Esperas mais longas, liberando o worker, ficam para a pausa de verdade, junto com os gatilhos novos.
+- Wait (pausa e retomada estão em Gatilhos, webhooks e pausa de execuções): esperas curtas e esperas dentro de subfluxos usam setTimeout em partes de até 2^31-1 ms, escutando ctx.signal; ao abortar limpa o timer e rejeita com o motivo do sinal, e o executor transforma em execução cancelada (o teste confirma status 'canceled'). Data passada não espera. A data aceita aaaa-mm-ddThh:mm:ss(.mmm) no fuso do nó (parseLocalDateTime de schedule.ts) ou ISO com Z/±hh:mm. Grava meta.waitUntil no modo data e hora.
+- Limite de tempo do Wait: o executor usa AbortSignal.timeout(timeoutMs), e o Node não aceita mais que 2^31-1 ms (uns 24,8 dias). Por isso defaultTimeoutMs = 2.147.483.647 ms, o executor limita o tempo limite de qualquer nó a esse valor e o Wait recusa esperas maiores que 24 dias com erro claro. Fora de subfluxos, esperas de 65 s ou mais pausam a execução e não têm esse limite.
 - Execution Data segue o customData do n8n: chave só com A-Z, a-z, 0-9 e _ (senão erro), cortada em 50; valor convertido em texto e cortado em 512; no máximo 10 chaves distintas (a 11ª dá erro); chave vazia é ignorada; com vários itens, o último vence. O resultado vai em ctx.meta.executionData só quando há alguma chave.
 
 **Como o importador converte**
@@ -147,14 +148,14 @@ Nenhuma biblioteca nova. A igualdade profunda do Compare Datasets usa isDeepStri
 - switch v3 (typeVersion ≥ 3 ou rules.values): cada regra passa pelo ifNode; regra com várias condições fica só com a primeira e gera aviso dizendo quantas eram e se eram E ou OU (não há como representar várias condições por regra). outputKey vira o nome da saída. options.fallbackOutput: 'extra' vira extra (renameFallbackOutput gera aviso, porque aqui o nome é "Outros"), número vira 'output' + fallbackIndex. allMatchingOutputs e ignoreCase são copiados. Modo expression copia numberOutputs e output.
 - switch v1/v2 (rules.rules com value1, dataType, operation, value2): cada regra vira left = value1. Operações mapeadas: equal, notEqual, contains, notContains, startsWith, endsWith, regex, larger, largerEqual, smaller, smallerEqual, after, before. notStartsWith e notEndsWith com valor fixo viram regex com lookahead negativo; com expressão, e notRegex, viram "é igual a" com aviso. dataType dateTime gera aviso de que as datas são comparadas como texto. v2: cada regra já é a saída de mesmo número; fallbackOutput ≥ 0 vira 'output'. v1: as 4 saídas fixas viram uma saída por regra, com outputMap ligando cada saída do n8n à primeira regra que ia para ela (aviso quando várias regras dividiam uma saída); fallback para uma saída usada por regra vira 'output', senão vira a saída extra e o mapa liga essa saída do n8n a "Outros". Modo expression: outputsAmount (v2) ou 4 (v1).
 - compareDatasets: mergeByFields.values, resolve (padrão preferInput2 até a v2 e includeBoth depois), fuzzyCompare (nas opções na v1), preferWhenMix e exceptWhenMix, options.skipFields e options.multipleMatches. Avisa sobre Disable Dot Notation e sobre versões anteriores à 2.2 (que davam erro quando o campo de casamento faltava).
-- wait: timeInterval com os padrões de cada versão (v1: 1 hora; v1.1: 5 segundos). specificTime: data com Z/offset é reescrita na hora local do fuso do fluxo; sem fuso, só troca o espaço por T; expressão é mantida com aviso sobre o formato. webhook e form devolvem null (vira nó não convertido) com aviso de que retomar por webhook ou formulário ainda não existe; os limites de espera desses modos não são convertidos.
+- wait: timeInterval com os padrões de cada versão (v1: 1 hora; v1.1: 5 segundos). specificTime: data com Z/offset é reescrita na hora local do fuso do fluxo; sem fuso, só troca o espaço por T; expressão é mantida com aviso sobre o formato. webhook e form são convertidos por convert-triggers-webhook.ts (veja Gatilhos, webhooks e pausa de execuções).
 - noOp: vira noOp.
 - executionData: dataToSave.values vira a lista key/value; mais de 10 pares geram aviso.
 
 **Limites**
 
 - Uma condição por regra no Switch.
-- Wait de no máximo 24 dias e sem retomada por webhook ou formulário; a execução fica ocupando o worker durante a espera.
+- Wait dentro de subfluxo: no máximo 24 dias, ocupando o worker, sem webhook nem formulário.
 - Compare Datasets sem a opção Disable Dot Notation.
 
 ### Limit, Sort, Remove Duplicates, Rename Keys e Summarize
@@ -421,9 +422,112 @@ Os nós salvos não guardam os padrões dos campos (o editor só grava o que foi
 - Detecção do automático por Content-Type apenas (não olha os bytes). Servidor que responde PDF como `text/plain` dá texto; use Formato **Arquivo**.
 - Gmail: não há opção para escolher quais anexos baixar; todos os anexos (inclusive imagens inline com nome) viram arquivos.
 
+## Gatilhos, webhooks e pausa de execuções (vindos do n8n)
+
+Fase 3 do pedido de ter os nós de Core e Flow do n8n: Webhook, Respond to Webhook, Form Trigger, Form, Error Trigger, n8n Trigger, RSS Feed Trigger, Email Trigger (IMAP), Local File Trigger, SSE Trigger e o Wait que pausa de verdade e retoma por tempo, webhook ou formulário.
+
+**Arquivos**
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| `packages/engine/src/nodes/webhook.ts` | Nós `webhook`, `respondToWebhook`, `formTrigger`, `form`, `errorTrigger`, `n8nTrigger` (lista `webhookNodes`), o item do webhook (`webhookItem`), as respostas (`immediateResponse`, `lastNodeResponse`) e `N8N_TRIGGER_EVENTS` |
+| `packages/engine/src/forms.ts` | Campos de formulário (`formFieldsProperty`, `readFormFields`), página HTML (`renderFormPage`, `renderMessagePage`), item do envio (`formSubmissionItem`) e `sanitizeHtml` |
+| `packages/engine/src/nodes/triggers-listen.ts` | `rssFeedReadTrigger`, `emailReadImap`, `localFileTrigger`, `sseTrigger` (lista `listenTriggerNodes`) e `pollTimesToCrons` |
+| `packages/engine/src/nodes/flow-extra.ts` | Wait com os quatro modos de retomada |
+| `packages/engine/src/executor.ts` | Pausa (`status: 'waiting'`, `resumeState`) e retomada (`resume`) |
+| `packages/engine/src/n8n/convert-triggers-webhook.ts`, `convert-triggers-listen.ts` | Conversores do importador |
+| `apps/server/src/triggers/manager.ts` | `TriggerManager`: registro dos webhooks e formulários, ouvintes, consultas periódicas, n8n Trigger e escuta de teste |
+| `apps/server/src/routes/webhooks.ts` | Rotas públicas `/webhook*` e `/form*` |
+| `apps/server/src/executions/events.ts` | `ExecutionEvents`: espera eventos de uma execução pelo Redis |
+| `apps/server/test/triggers.test.ts`, `packages/engine/test/triggers-listen.test.ts`, `n8n-triggers-webhook.test.ts`, `flow-extra.test.ts` | Testes |
+
+Bibliotecas novas no motor: `rss-parser` (RSS, a mesma do n8n), `imapflow` (IMAP com IDLE; o n8n usa `imap-simple`, sem manutenção), `mailparser` e `libmime` (e-mail), `chokidar` 5 e `picomatch` (pasta e padrões Ignorar). O SSE usa `fetch` com um leitor próprio.
+
+**Pausa e retomada**
+
+- O nó pede a pausa com `ctx.putToWait({ kind, until?, config? })`. Quando o executor roda com `canWait: false` (subfluxos), a função devolve `false` e o nó espera rodando (Wait por tempo, até 24 dias) ou dá erro (webhook e formulário).
+- Depois do nó, o executor devolve `status: 'waiting'`, `wait` (`{ kind, nodeId, nodeName, until?, config? }`) e `resumeState`: os nós já rodados, as saídas, as filas de nós prontos e esperando entrada, o estado dos nós (Loop), o contador e o nó pausado com as entradas dele. O nó pausado não entra na lista de nós rodados.
+- Na retomada (`resume: { state, data }`), o executor restaura o estado e roda de novo o nó pausado com `ctx.resumeData` (`{ kind, items? }`). Sem `items` (o tempo acabou), o Wait devolve os itens de entrada; com `items`, devolve os itens recebidos.
+- Waits menores que 65 s ficam rodando no worker, como no n8n.
+- No servidor, `saveResult` grava `status = 'waiting'`, `wait_till`, `wait_info` e `resume_state` (JSON com gzip). A espera por tempo vira um job atrasado `resume-<id>` no BullMQ. O webhook e o formulário de retomada fazem `UPDATE ... SET status = 'queued', resume_data = ... WHERE status = 'waiting'` (só uma chamada ganha; a outra recebe 409), cancelam o job de tempo e enfileiram com um jobId novo (`<id>-<timestamp>`), porque o BullMQ ignora um job com o mesmo ID de um que já rodou.
+- `$execution.resumeUrl` e `$execution.resumeFormUrl` são `PUBLIC_URL` + `/webhook-waiting/<id>` e `/form-waiting/<id>`. Sem `PUBLIC_URL`, `http://localhost:<PORT>`.
+- Cancelar uma execução em espera muda o status para `canceled` e apaga o job de tempo.
+
+**Rotas públicas**
+
+São registradas fora de `/api`, sem login, com os caminhos do n8n. Têm um leitor de corpo próprio (buffer de até 16 MB): JSON, `application/x-www-form-urlencoded`, `multipart/form-data` (lido com `Response.formData()`), texto e binário.
+
+| Rota | Faz |
+| --- | --- |
+| `GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS /webhook/*` | Webhook de produção (fluxo ativo). OPTIONS responde o preflight de CORS |
+| `.../webhook-test/*` | Webhook de teste, enquanto o editor escuta |
+| `/webhook-waiting/:id` e `/webhook-waiting/:id/*` | Retoma um Wait por webhook |
+| `GET/POST /form/*` e `/form-test/*` | GET mostra o formulário; POST valida e cria a execução |
+| `GET/POST /form-waiting/:id` | Página de um Form ou Wait por formulário que está esperando |
+
+- O webhook confere IP (`BlockList` do Node, com faixas CIDR), robôs (user-agent) e autenticação (Basic com `WWW-Authenticate`, ou header, pelas conexões `httpBasicAuth` e `httpHeaderAuth`) antes de criar a execução.
+- A execução nasce com `mode = 'webhook'` (ou `manual` no teste), `start_node_id` = o nó do gatilho e o item como entrada.
+- Respostas: Logo que receber responde na hora; Quando o último nó terminar e Pelo Respond to Webhook assinam o canal Redis `sa:exec:<id>` antes de enfileirar e esperam `response`, `waiting` ou `finished`, por até 10 minutos (depois, 504 com o ID da execução). O worker só publica quando há alguém assinando (`PUBSUB NUMSUB`).
+- HTML escrito pelo usuário (Respond to Webhook em texto HTML, Tela final em HTML) vai com `Content-Security-Policy: sandbox`, para não rodar script no domínio do Info8n.
+- Um formulário com Form depois do Form Trigger: o POST da primeira página espera o evento `waiting` e redireciona para `/form-waiting/<id>`. Cada página seguinte faz o mesmo até a Tela final.
+
+**TriggerManager**
+
+Roda no processo da API (`index.ts` chama `triggers.start()` depois do `listen` e `close()` ao desligar). Com vários processos de API, cada um teria os próprios ouvintes: rode uma API só.
+
+- `start()` lê os fluxos ativos e chama `sync` para cada um. `sync(fluxo, { strict })` registra os webhooks e formulários em memória e liga os ouvintes. Ativar usa `strict: true`: se um ouvinte não inicia (senha IMAP errada, pasta fora de FILES_DIRS), a ativação volta atrás com 400 "O gatilho não iniciou: ...". Salvar um fluxo ativo chama `sync` de novo; desativar e excluir chamam `remove`.
+- `conflicts()` recusa dois fluxos ativos com o mesmo método e caminho (ou o mesmo caminho de formulário). Caminho vazio vale o ID do nó.
+- Nós com `listen(ctx)` (IMAP, pasta, SSE) recebem um `TriggerContext` com `emit(items)`, `emitError`, `signal`, os parâmetros resolvidos, `getConnection`, `filesDirs` e `staticData`, e devolvem a função que fecha. Nós com `poll(ctx)` (RSS) rodam nos crons de `pollTimesToCrons(parameters.pollTimes)` e devolvem `Item[]` ou `null`.
+- `staticData` fica na tabela `workflow_static_data` (por fluxo e nó): último e-mail do IMAP, data do último item do RSS.
+- Cada disparo cria uma execução `mode = 'trigger'` com `start_node_id` e os itens como entrada.
+- n8n Trigger: `fireEvent(fluxo, 'activate' | 'update' | 'init')`, chamado ao ativar, ao salvar ativo e no `start()`.
+- Escuta de teste (`POST /api/workflows/{id}/listen`): registra os webhooks e formulários de teste e liga os ouvintes com a definição enviada, por 120 s, com `ctx.testing = true`. O primeiro evento cria uma execução `manual` com todos os dados, guarda o ID (lido por `GET .../listen`) e fecha a escuta.
+
+**Fluxo de erro**
+
+`definition.settings.errorWorkflowId` aponta para um fluxo que começa pelo Error Trigger (conferido ao salvar). Quando uma execução `schedule`, `webhook` ou `trigger` termina com erro, o worker cria uma execução `mode = 'error'` desse fluxo, começando pelo Error Trigger, com o item `{ execution: { id, url, retryOf?, error: { message, details? }, lastNodeExecuted, mode }, workflow: { id, name } }`, como o n8n. O `url` é `PUBLIC_URL` + `/execucoes/<id>`.
+
+**Vários gatilhos por fluxo**
+
+A regra de um gatilho por fluxo saiu do `validate.ts`. `executions.start_node_id` diz de onde começar; sem ele (botão Executar), o executor começa pelo gatilho manual ou, sem ele, pelo primeiro gatilho. Agendamentos gravam o `scheduleTrigger` como início.
+
+**Gatilhos que escutam e consultam**
+
+- RSS: igual ao n8n. Guarda `lastItemDate`; na primeira consulta só guarda a data; depois devolve os itens com `isoDate` maior, na ordem do feed. Pelo botão Executar, devolve o item mais recente sem mexer no estado. Campo extra `ignoreSSL`. Os horários (`pollTimes`) viram crons de 6 campos com segundo 0: `everyMinute` `0 * * * * *`, `everyHour` `0 {minuto} * * * *`, `everyDay`, `everyWeek`, `everyMonth`, `everyX` (`*/N` minutos ou horas) e `custom`.
+- IMAP: conexão `imap` (`host`, `port`, `user`, `password`, `secure`, `allowUnauthorizedCerts`). Conecta, abre a caixa, busca os e-mails dos critérios e fica em IDLE; cada `exists` busca de novo, em fila. Com `trackLastMessageId`, busca `uid > último` e guarda também o `uidValidity` (caixa recriada zera o último). Os critérios no formato do node-imap viram o `SearchObject` do imapflow (flags, `!`, FROM/TO/SUBJECT..., datas, LARGER/SMALLER, HEADER, OR). Marcar como lido é um `STORE +FLAGS \Seen` depois de baixar. Formatos simples, completo (`simpleParser`) e bruto (`raw` é o e-mail inteiro em base64; no n8n, só o corpo). Reconexão com espera de 2 s a 60 s; `forceReconnect` reconecta no intervalo.
+- Pasta: `resolveAllowedPath` de `files-disk.ts` limita a FILES_DIRS. Chokidar com `awaitWriteFinish`, `followSymlinks`, `depth`, `ignoreInitial`, `usePolling`; Ignorar é um glob do picomatch testado contra o caminho completo. Saída `{ event, path }`, uma execução por evento.
+- SSE: `fetch` com `Accept: text/event-stream` e um leitor que segue a especificação (linhas cortadas entre pedaços, `data` de várias linhas, `id`, `retry`, comentários). Só eventos `message` disparam; JSON objeto vira o item, o resto vai em `data`. Reconecta com `Last-Event-ID` e espera crescente até 60 s; HTTP 204 para de vez.
+
+**Importador do n8n**
+
+| n8n | Info8n |
+| --- | --- |
+| `webhook` (`httpMethod`, `path`, `authentication`, `responseMode`, `responseCode`, `responseData`, `options.*`) | `webhook` com as opções em primeiro nível. Caminho com `:param` vira `<webhookId>/<caminho>`, como o endereço do n8n; caminho vazio vira o `webhookId`. Vários métodos ficam com o primeiro e avisam. Basic e Header viram conexões a recriar; JWT avisa |
+| `respondToWebhook` | Mesmos modos; texto vem de `responseBody`; JWT vira JSON com aviso |
+| `formTrigger`, `form` | `formFields.values[]` vira a lista de campos; `fieldOptions.values[].option` vira uma opção por linha; HTML vai para Valor; formulário definido por JSON avisa |
+| `wait` (webhook, form) | Mesmos campos; `options.webhookSuffix`, `incomingAuthentication` e os limites de espera são convertidos. Avisa para configurar `PUBLIC_URL` |
+| `errorTrigger`, `n8nTrigger` | Iguais |
+| `rssFeedReadTrigger`, `emailReadImap`, `localFileTrigger`, `sseTrigger` | Mesmos nomes em primeiro nível; IMAP pede a conexão; Local File avisa sobre FILES_DIRS e polling; `ignoreMode: contain` vira `**/*texto*{,/**}` |
+| `settings.errorWorkflow` do fluxo | `settings.errorWorkflowId`, quando o fluxo de erro é importado junto ou já foi importado; senão, aviso |
+
+**Tela**
+
+- A chave Ativo aparece quando o fluxo tem um gatilho com `activatable: true` (vem de `GET /api/node-types`; `GET /api/workflows` traz `activatable` por fluxo).
+- A janela do Webhook e do Form Trigger mostra os endereços de teste e de produção, montados com `window.location.origin`.
+- Escutar chama `POST /api/workflows/{id}/listen` com a definição da tela e consulta `GET .../listen` a cada segundo até aparecer `executionId`; depois acompanha a execução como o botão Executar. Execuções em espera continuam sendo acompanhadas (a cada 2 s) até terminarem ou o usuário parar.
+- Configurações do fluxo grava `definition.settings.errorWorkflowId`.
+- No modo de desenvolvimento, o Vite repassa `/webhook*` e `/form*` para a porta 3000.
+
+**Limites**
+
+- Corpo de webhook e formulário: 16 MB. Resposta síncrona: 10 minutos. Escuta de teste: 2 minutos.
+- Os ouvintes e o registro de webhooks vivem num processo de API; não rode mais de uma API.
+- IMAP sem OAuth2; SSE sem cabeçalhos nem autenticação; RSS sem proxy e sem cancelamento além do tempo limite de 60 s.
+- Wait dentro de subfluxo não pausa (espera rodando, até 24 dias) e não aceita webhook nem formulário.
+
 ## Banco de dados
 
-A plataforma usa um Postgres próprio, com 16 tabelas criadas e atualizadas automaticamente ao subir (`db/migrations.ts`). Não há passo manual de migração.
+A plataforma usa um Postgres próprio, com 17 tabelas criadas e atualizadas automaticamente ao subir (`db/migrations.ts`). Não há passo manual de migração.
 
 | Tabela | Guarda |
 | --- | --- |
@@ -435,7 +539,8 @@ A plataforma usa um Postgres próprio, com 16 tabelas criadas e atualizadas auto
 | `connections` | Conexões, com os segredos criptografados |
 | `workflows` | Fluxos: definição em JSON, pasta, ativo, versão e ID de origem no n8n |
 | `workflow_versions` | Uma versão por salvamento |
-| `executions` | Execuções: modo, status, erro, resumo, dados comprimidos e execução pai |
+| `executions` | Execuções: modo, status, erro, resumo, dados comprimidos, execução pai, nó de início e, nas que estão esperando, até quando, o que esperam e o estado para retomar |
+| `workflow_static_data` | Estado dos gatilhos por fluxo e nó (último e-mail lido, data do último item do RSS) |
 | `db_commands` | Cada comando SQL executado nos bancos dos clientes |
 | `audit_log` | Quem fez o quê, com antes e depois |
 | `erps`, `erp_endpoints`, `erp_clients` | Catálogo de APIs por ERP e cadastro do cliente em cada ERP |
@@ -561,10 +666,10 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 | `EXECUTION_RETENTION_DAYS` | Não | 0 (guarda sempre) | Dias que execuções e comandos SQL ficam guardados |
 | `KEEP_SUCCESS_DATA` | Não | false | Guarda dados também das agendadas com sucesso |
 | `WORKER_CONCURRENCY` | Não | 5 | Execuções em paralelo por worker |
-| `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk podem usar, separadas por vírgula |
+| `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk e Local File Trigger podem usar, separadas por vírgula. No Docker Desktop (Windows ou Mac), o Local File Trigger precisa de Verificar por consulta (polling) |
 | `RUN_WORKER_IN_PROCESS` | Não | true | false = worker em processo separado |
 | `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS |
-| `PUBLIC_URL` | Não | endereço aberto na tela | Endereço pelo qual o Info8n é acessado (ex.: `http://info8n.empresa.local:3000`). Define o endereço de retorno do login com Google; precisa ser localhost ou um domínio, não IP |
+| `PUBLIC_URL` | Não | endereço aberto na tela; nos endereços de retomada, `http://localhost:<PORT>` | Endereço pelo qual o Info8n é acessado (ex.: `http://info8n.empresa.local:3000`). Define o endereço de retorno do login com Google (precisa ser localhost ou um domínio, não IP), `$execution.resumeUrl`, `$execution.resumeFormUrl`, o `webhookUrl` dos webhooks e o link da execução no fluxo de erro. Configure sempre que usar Wait por webhook ou formulário |
 
 `DATABASE_URL` e `REDIS_URL` são montadas pelo `docker-compose.yml`. Só precisam ser definidas quando a plataforma roda fora do Docker.
 

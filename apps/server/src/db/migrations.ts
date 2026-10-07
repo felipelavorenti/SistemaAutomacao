@@ -268,4 +268,34 @@ CREATE TABLE execution_files (
 );
 `,
   },
+  {
+    id: '008_gatilhos_e_pausa',
+    sql: `
+-- Execuções iniciadas por webhook, formulário e gatilhos que escutam (trigger), e as do fluxo de erro.
+ALTER TABLE executions DROP CONSTRAINT IF EXISTS executions_mode_check;
+ALTER TABLE executions ADD CONSTRAINT executions_mode_check
+  CHECK (mode IN ('manual', 'schedule', 'subworkflow', 'retry', 'webhook', 'trigger', 'error'));
+-- Execução pausada (Wait, Form): espera o tempo, o webhook ou o formulário para continuar.
+ALTER TABLE executions DROP CONSTRAINT IF EXISTS executions_status_check;
+ALTER TABLE executions ADD CONSTRAINT executions_status_check
+  CHECK (status IN ('queued', 'running', 'success', 'error', 'canceled', 'waiting'));
+-- Gatilho de onde a execução começa (fluxos com mais de um gatilho).
+ALTER TABLE executions ADD COLUMN start_node_id text;
+ALTER TABLE executions ADD COLUMN wait_till timestamptz;
+ALTER TABLE executions ADD COLUMN wait_info jsonb;
+-- Estado para continuar (gzip) e os dados que chegaram na retomada (gzip); apagados quando termina.
+ALTER TABLE executions ADD COLUMN resume_state bytea;
+ALTER TABLE executions ADD COLUMN resume_data bytea;
+CREATE INDEX executions_waiting_idx ON executions(wait_till) WHERE status = 'waiting';
+
+-- O que os gatilhos guardam entre disparos (ex.: a data do último item do RSS, o último e-mail lido).
+CREATE TABLE workflow_static_data (
+  workflow_id uuid NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+  node_id text NOT NULL,
+  data jsonb NOT NULL DEFAULT '{}',
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workflow_id, node_id)
+);
+`,
+  },
 ];

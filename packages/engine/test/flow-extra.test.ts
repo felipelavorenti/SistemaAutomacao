@@ -11,7 +11,7 @@ import type { Item, JsonObject, JsonValue, WorkflowDefinition } from '../src/typ
 const registry = new NodeRegistry([manualTrigger, filter, switchNode, compareDatasets, wait, noOp, executionData]);
 
 /** Roda Início → nó, com os itens informados. */
-async function run(type: string, parameters: JsonObject, items: JsonObject[], options: { signal?: AbortSignal } = {}) {
+async function run(type: string, parameters: JsonObject, items: JsonObject[], options: { signal?: AbortSignal; canWait?: boolean } = {}) {
   const workflow: WorkflowDefinition = {
     nodes: [
       { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
@@ -19,7 +19,7 @@ async function run(type: string, parameters: JsonObject, items: JsonObject[], op
     ],
     connections: [{ from: 't', fromOutput: 0, to: 'n', toInput: 0 }],
   };
-  const result = await executeWorkflow({ workflow, executionId: 'x', mode: 'manual', triggerItems: items.map((json) => ({ json })), registry, signal: options.signal });
+  const result = await executeWorkflow({ workflow, executionId: 'x', mode: 'manual', triggerItems: items.map((json) => ({ json })), registry, signal: options.signal, canWait: options.canWait });
   const nodeRun = result.runs.find((r) => r.nodeId === 'n');
   return { result, nodeRun, output: (nodeRun?.output ?? []).map((items) => items.map((i) => i.json)) };
 }
@@ -44,6 +44,14 @@ function fakeCtx(type: NodeType, parameters: JsonObject, inputs: Item[][], signa
     state: {},
     meta: {},
     signal,
+    filesDirs: [],
+    mode: 'manual',
+    resumeUrl: 'http://localhost:3000/webhook-waiting/x',
+    resumeFormUrl: 'http://localhost:3000/form-waiting/x',
+    publicUrl: 'http://localhost:3000',
+    // Como num subfluxo: não pode pausar, então espera no próprio worker.
+    putToWait: () => false,
+    sendResponse: () => undefined,
   };
 }
 
@@ -231,7 +239,7 @@ describe('Wait', () => {
 
   it('tem tempo limite padrão de uns 24 dias e recusa esperas maiores', async () => {
     expect(wait.description.defaultTimeoutMs).toBe(2_147_483_647);
-    await expect(wait.execute(fakeCtx(wait, { amount: 30, unit: 'days' }, [[]]))).rejects.toThrow(/espera máxima é de 24 dias/);
+    await expect(wait.execute(fakeCtx(wait, { amount: 30, unit: 'days' }, [[]]))).rejects.toThrow(/espera máxima dentro de um subfluxo é de 24 dias/);
   });
 
   it('data passada não espera; data com fuso é aceita', async () => {
@@ -251,11 +259,81 @@ describe('Wait', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(250);
   });
 
+  it('espera longa pausa a execução e a retomada segue do Wait com os mesmos itens', async () => {
+    const workflow: WorkflowDefinition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        { id: 'w', name: 'Espera', type: 'wait', position: { x: 0, y: 0 }, parameters: { resume: 'timeInterval', amount: 2, unit: 'hours' } },
+        { id: 'n', name: 'Depois', type: 'noOp', position: { x: 0, y: 0 }, parameters: {} },
+      ],
+      connections: [
+        { from: 't', fromOutput: 0, to: 'w', toInput: 0 },
+        { from: 'w', fromOutput: 0, to: 'n', toInput: 0 },
+      ],
+    };
+    const started = Date.now();
+    const paused = await executeWorkflow({ workflow, executionId: 'x', mode: 'manual', triggerItems: [{ json: { a: 1 } }], registry });
+    expect(paused.status).toBe('waiting');
+    expect(paused.wait).toMatchObject({ kind: 'time', nodeName: 'Espera' });
+    expect(Date.parse(paused.wait!.until!) - started).toBeGreaterThanOrEqual(2 * 3_600_000 - 1000);
+    expect(paused.runs.map((r) => r.nodeName)).toEqual(['Início']);
+    // O estado vai para o banco como JSON.
+    const state = JSON.parse(JSON.stringify(paused.resumeState));
+    const resumed = await executeWorkflow({ workflow, executionId: 'x', mode: 'manual', registry, resume: { state } });
+    expect(resumed.status).toBe('success');
+    expect(resumed.runs.map((r) => r.nodeName)).toEqual(['Início', 'Espera', 'Depois']);
+    expect(resumed.lastOutput).toEqual([{ json: { a: 1 } }]);
+    expect(resumed.startedAt).toBe(paused.startedAt);
+  });
+
+  it('pausa esperando webhook e segue com os dados que chegaram', async () => {
+    const workflow: WorkflowDefinition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        { id: 'w', name: 'Espera', type: 'wait', position: { x: 0, y: 0 }, parameters: { resume: 'webhook', httpMethod: 'POST' } },
+        { id: 'n', name: 'Depois', type: 'noOp', position: { x: 0, y: 0 }, parameters: {} },
+      ],
+      connections: [
+        { from: 't', fromOutput: 0, to: 'w', toInput: 0 },
+        { from: 'w', fromOutput: 0, to: 'n', toInput: 0 },
+      ],
+    };
+    const paused = await executeWorkflow({ workflow, executionId: 'abc', mode: 'manual', triggerItems: [{ json: { a: 1 } }], registry, publicUrl: 'https://info8n.local/' });
+    expect(paused.status).toBe('waiting');
+    expect(paused.wait).toMatchObject({ kind: 'webhook', config: { httpMethod: 'POST' } });
+    expect(paused.wait!.until).toBeUndefined();
+    const resumed = await executeWorkflow({
+      workflow,
+      executionId: 'abc',
+      mode: 'manual',
+      registry,
+      resume: { state: paused.resumeState!, data: { kind: 'webhook', items: [{ json: { body: { ok: true } } }] } },
+    });
+    expect(resumed.lastOutput).toEqual([{ json: { body: { ok: true } } }]);
+    // Sem webhook (o limite de tempo acabou), seguem os itens de antes.
+    const timeout = await executeWorkflow({ workflow, executionId: 'abc', mode: 'manual', registry, resume: { state: paused.resumeState! } });
+    expect(timeout.lastOutput).toEqual([{ json: { a: 1 } }]);
+  });
+
+  it('$execution.resumeUrl usa o endereço público', async () => {
+    const { output } = await run('noOp', {}, [{}]);
+    expect(output).toEqual([[{}]]);
+    const workflow: WorkflowDefinition = {
+      nodes: [
+        { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+        { id: 'n', name: 'Nó', type: 'executionData', position: { x: 0, y: 0 }, parameters: { dataToSave: [{ key: 'url', value: '={{ $execution.resumeUrl }}' }] } },
+      ],
+      connections: [{ from: 't', fromOutput: 0, to: 'n', toInput: 0 }],
+    };
+    const result = await executeWorkflow({ workflow, executionId: 'e1', mode: 'manual', registry, publicUrl: 'https://info8n.local/' });
+    expect(result.runs[1]!.meta).toEqual({ executionData: { url: 'https://info8n.local/webhook-waiting/e1' } });
+  });
+
   it('cancelar a execução interrompe a espera', async () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 100);
     const started = Date.now();
-    const { result } = await run('wait', { resume: 'timeInterval', amount: 1, unit: 'hours' }, [{ a: 1 }], { signal: controller.signal });
+    const { result } = await run('wait', { resume: 'timeInterval', amount: 1, unit: 'hours' }, [{ a: 1 }], { signal: controller.signal, canWait: false });
     expect(result.status).toBe('canceled');
     expect(Date.now() - started).toBeLessThan(2000);
   });
@@ -482,11 +560,11 @@ describe('conversores do n8n', () => {
     const expr = convert('wait', { resume: 'specificTime', dateTime: '={{ $json.quando }}' }, 1.1);
     expect(expr.converted?.parameters.dateTime).toBe('={{ $json.quando }}');
     expect(expr.warnings).toEqual([expect.stringMatching(/expressão/)]);
-    for (const resume of ['webhook', 'form']) {
-      const r = convert('wait', { resume }, 1.1);
-      expect(r.converted).toBeNull();
-      expect(r.warnings).toEqual([expect.stringMatching(/ainda não existe aqui/)]);
-    }
+    const hook = convert('wait', { resume: 'webhook', httpMethod: 'POST', options: { webhookSuffix: 'ok' }, limitWaitTime: true, resumeAmount: 2, resumeUnit: 'days' }, 1.1);
+    expect(hook.converted?.parameters).toMatchObject({ resume: 'webhook', httpMethod: 'POST', webhookSuffix: 'ok', limitWaitTime: true, resumeAmount: 2, resumeUnit: 'days' });
+    expect(hook.warnings).toEqual([expect.stringMatching(/resumeUrl/)]);
+    const form = convert('wait', { resume: 'form', formTitle: 'Aprovar', formFields: { values: [{ fieldLabel: 'Ok?', fieldType: 'dropdown', fieldOptions: { values: [{ option: 'Sim' }, { option: 'Não' }] } }] } }, 1.1);
+    expect(form.converted?.parameters).toMatchObject({ resume: 'form', formTitle: 'Aprovar', formFields: [{ fieldLabel: 'Ok?', fieldType: 'dropdown', fieldOptions: 'Sim\nNão' }] });
   });
 
   it('No Operation e Execution Data', () => {

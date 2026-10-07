@@ -48,7 +48,7 @@ Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...
 
 ## Fluxos
 
-A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execução (nos fluxos com agendamento; inativo ou sem próximo disparo, aparece Sem próxima execução; na execução única com milissegundos, eles aparecem depois dos segundos), a última execução e a situação: **Ativo** (roda sozinho no agendamento), **Inativo** (tem agendamento, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
+A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execução (nos fluxos com agendamento; inativo ou sem próximo disparo, aparece Sem próxima execução; na execução única com milissegundos, eles aparecem depois dos segundos), a última execução e a situação: **Ativo** (roda sozinho pelos gatilhos: agendamento, webhook, formulário, e-mail etc.), **Inativo** (tem um desses gatilhos, mas está desligado) ou **Manual** (só roda pelo botão ou chamado por outro fluxo). O campo de busca filtra pelo nome.
 
 **Criar, duplicar e excluir**
 
@@ -64,11 +64,25 @@ A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execuç
 4. **Excluir:** selecione o nó ou a ligação e aperte Delete.
 5. **Salvar:** botão Salvar ou Ctrl+S. Se alguém salvou o mesmo fluxo enquanto você editava, o sistema avisa e pede para recarregar, para ninguém sobrescrever o trabalho do outro.
 
-Ao salvar, o sistema confere o fluxo e mostra as pendências numa faixa amarela: falta de gatilho, mais de um gatilho, nó solto, campo obrigatório vazio, nome repetido ou nó do n8n sem equivalente. O fluxo salva mesmo com pendências, mas não pode ser ativado até corrigi-las.
+Ao salvar, o sistema confere o fluxo e mostra as pendências numa faixa amarela: falta de gatilho, nó solto, campo obrigatório vazio, nome repetido ou nó do n8n sem equivalente. O fluxo salva mesmo com pendências, mas não pode ser ativado até corrigi-las.
 
 **Executar no editor**
 
 O botão Executar roda o fluxo como está na tela, mesmo sem salvar. Cada nó ganha um ✓ verde ou um ! vermelho e a quantidade de itens que devolveu. A faixa acima do desenho mostra o resultado e o link Ver log completo. Nos gatilhos Manual e Chamado por outro fluxo há um campo JSON de entrada para testes: o que você escrever ali entra como itens do gatilho. Esse JSON não é salvo no fluxo.
+
+Quando o fluxo para num Wait ou num Form (veja abaixo), a faixa mostra Esperando, em qual nó e até quando, e o editor continua acompanhando até a execução terminar; Parar de acompanhar solta o editor sem cancelar a execução.
+
+**Escutar (testar gatilhos de eventos)**
+
+Nos fluxos com Webhook, Form Trigger, Email Trigger, Local File Trigger ou SSE Trigger, o botão **Escutar** espera um evento de verdade por 2 minutos, como o "Listen for test event" do n8n. Ele usa o fluxo como está na tela, mesmo sem salvar. A faixa mostra os endereços de teste (`/webhook-test/...` e `/form-test/...`); chame o endereço, envie o formulário, mande o e-mail ou salve o arquivo, e a execução aparece no editor como se fosse pelo botão Executar (tipo Manual, com todos os dados guardados). Parar de escutar desliga antes do tempo. Se nada chegar em 2 minutos, o editor avisa.
+
+**Um fluxo, vários gatilhos**
+
+Um fluxo pode ter mais de um gatilho, como no n8n: por exemplo, um Agendamento e um Webhook que fazem a mesma coisa. Cada execução começa pelo gatilho que disparou. O botão Executar começa pelo gatilho Manual ou, sem ele, pelo primeiro gatilho do fluxo.
+
+**Configurações do fluxo**
+
+O botão Configurações, na barra do editor, tem o **Fluxo de erro**: o fluxo que roda quando uma execução automática deste falha (veja o Error Trigger). A mudança vale depois de salvar.
 
 **Versões**
 
@@ -80,9 +94,9 @@ Cada vez que você salva, o Info8n guarda uma versão nova com a data e o autor.
 - **Importar JSON** (na lista) cria um fluxo a partir de um arquivo exportado do Info8n.
 - **Importar do n8n** aceita um ou vários arquivos exportados do n8n. Subfluxos importados juntos, ou antes, ficam ligados ao fluxo que os chama. Ao final, uma lista mostra, fluxo por fluxo, o que precisa de ajuste. Credenciais não vêm do n8n: cadastre-as em Conexões e escolha a conexão em cada nó. Veja também a seção Diferenças para o n8n.
 
-**Ativar o agendamento**
+**Ativar o fluxo**
 
-Só fluxos que começam pelo gatilho Agendamento precisam ser ativados. Salve as alterações e ligue a chave Ativo na barra do editor. O sistema recusa a ativação se o fluxo tiver pendências. Para parar de rodar, desligue a chave. Ativar e desativar ficam registrados na Auditoria.
+Fluxos com um gatilho que dispara sozinho (Agendamento, Webhook, Form Trigger, n8n Trigger, RSS Feed Trigger, Email Trigger, Local File Trigger ou SSE Trigger) precisam estar ativos para rodar. Salve as alterações e ligue a chave Ativo na barra do editor. O sistema recusa a ativação se o fluxo tiver pendências, se outro fluxo ativo já usar o mesmo endereço de webhook ou formulário, ou se o gatilho não conseguir iniciar (por exemplo, a caixa de e-mail recusou a senha); a mensagem diz o motivo. Salvar um fluxo ativo aplica as mudanças nos gatilhos na hora. Para parar de rodar, desligue a chave. Ativar e desativar ficam registrados na Auditoria.
 
 ## Campos Fixo e Expressão
 
@@ -134,13 +148,21 @@ Os dados andam entre os nós como uma lista de **itens**; cada item é um objeto
 
 ### Gatilhos
 
-Todo fluxo começa por exatamente um gatilho.
+Todo fluxo começa por pelo menos um gatilho.
 
 | Nó | Quando dispara | Configuração |
 | --- | --- | --- |
 | Gatilho manual | Pelo botão Executar | JSON de entrada para testes, opcional |
 | Agendamento | Sozinho, quando o fluxo está Ativo | Todo dia, toda semana, todo mês, a cada intervalo, uma vez numa data e hora, ou expressão cron (veja abaixo) |
 | Chamado por outro fluxo | Quando outro fluxo o chama pelo Execute Workflow | Recebe os itens que o outro fluxo mandou |
+| Webhook | Quando outro sistema chama o endereço do nó (fluxo Ativo) | Método, caminho, autenticação e como responder |
+| Form Trigger | Quando alguém envia o formulário do nó (fluxo Ativo) | Título, campos e o que mostrar depois do envio |
+| Error Trigger | Quando outro fluxo, que o escolheu como fluxo de erro, falha | Nenhuma |
+| n8n Trigger | Quando o próprio fluxo é ativado ou salvo, ou quando o servidor inicia (fluxo Ativo) | Os eventos |
+| RSS Feed Trigger | Quando aparece um item novo no feed (fluxo Ativo) | Endereço do feed e horários de consulta |
+| Email Trigger (IMAP) | Quando chega um e-mail que bate com os critérios (fluxo Ativo) | Conexão IMAP, caixa, critérios e formato |
+| Local File Trigger | Quando um arquivo ou pasta do servidor muda (fluxo Ativo) | Caminho, eventos e o que ignorar |
+| SSE Trigger | A cada mensagem de um endereço de eventos em tempo real (fluxo Ativo) | Endereço |
 
 **Tipos de agendamento.** Os horários seguem o Fuso horário do nó (padrão America/Sao\_Paulo).
 
@@ -150,6 +172,101 @@ Todo fluxo começa por exatamente um gatilho.
 - **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico.
 - **Uma vez, numa data e hora:** roda uma única vez no momento escolhido, com dia, hora, minuto, segundo e milissegundo (ex.: 05/10/2026 14:30:00,250), e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
 - **Expressão cron:** para casos que as opções acima não cobrem. São 5 campos (minuto, hora, dia do mês, mês, dia da semana), ou 6 com os segundos no começo. `*` é qualquer valor, `*/15` é a cada 15, `1-5` é um intervalo e `8,12,18` é uma lista; no dia da semana, 0 é domingo. Exemplos: `0 8 * * *` todo dia às 8h; `*/15 * * * *` a cada 15 minutos; `0 8-18 * * 1-5` de hora em hora das 8h às 18h, de segunda a sexta; `*/30 * * * * *` a cada 30 segundos.
+
+#### Webhooks e formulários
+
+Os endereços abaixo são os mesmos do n8n, trocando o servidor. Cada nó Webhook e Form Trigger mostra, na janela do nó, o endereço de **Teste** e o de **Produção**, com o botão Copiar.
+
+| Endereço | Quando funciona |
+| --- | --- |
+| `/webhook/<caminho>` e `/form/<caminho>` | Enquanto o fluxo estiver salvo e Ativo |
+| `/webhook-test/<caminho>` e `/form-test/<caminho>` | Por 2 minutos depois de clicar em Escutar no editor, com o fluxo como está na tela, mesmo sem salvar |
+| `/webhook-waiting/<id da execução>` e `/form-waiting/<id da execução>` | Enquanto uma execução estiver parada num Wait por webhook ou por formulário (veja o Wait) |
+
+Dois fluxos ativos não podem usar o mesmo método e caminho; o sistema recusa a ativação e diz qual fluxo já usa. Com o Caminho vazio, vale o ID do nó.
+
+**Webhook.** Recebe uma chamada HTTP de outro sistema e inicia o fluxo com um item:
+
+```json
+{
+  "headers": { "content-type": "application/json", "user-agent": "curl/8.0" },
+  "params": { "id": "42" },
+  "query": { "origem": "erp" },
+  "body": { "pedido": 10, "valor": 99.9 },
+  "webhookUrl": "http://info8n.empresa.local:3000/webhook/pedidos/:id",
+  "executionMode": "production"
+}
+```
+
+- **Método HTTP e Caminho:** o caminho aceita partes variáveis com dois pontos, como `pedidos/:id`; o valor chega em `params`.
+- **Autenticação:** Nenhuma, Usuário e senha (Basic, com uma conexão Usuário e senha) ou Header com chave (com uma conexão Header com chave). Quem chama sem as credenciais recebe 401 (ou 403 no header) e o fluxo não roda.
+- **Quando responder:** Logo que receber (responde `{"message":"Workflow was started"}` e o fluxo segue sozinho), Quando o último nó terminar (responde com o que o último nó devolveu: o JSON do primeiro item, todos os itens, o arquivo do primeiro item ou sem corpo) ou Pelo nó Respond to Webhook. Nos dois últimos, quem chamou espera o fluxo; se ele demorar mais de 10 minutos, recebe 504 e o fluxo continua.
+- **Código, Content-Type e Headers da resposta**, **Responder sem corpo** e **Campo da resposta** (responde só um campo do JSON, ex.: `resultado.total`).
+- **Arquivos recebidos:** um corpo binário (PDF, imagem) vira o arquivo `data` do item (o nome muda em Nome do arquivo recebido). Num envio multipart (form-data), os campos de texto vão para `body` e cada arquivo fica no item com o nome do campo. **Guardar também o corpo cru** guarda o corpo original como arquivo, além do JSON.
+- **IPs permitidos** (IPs ou faixas como 192.168.1.0/24, separados por vírgula), **Ignorar robôs** (recusa prévias de links e buscadores) e **Origens permitidas (CORS)** para chamadas feitas de páginas web.
+- O corpo pode ter até 16 MB.
+
+Exemplo: o ERP chama `POST /webhook/pedido-aprovado` com o pedido no corpo; o fluxo grava no banco do cliente e um Respond to Webhook devolve `{"ok": true}`.
+
+**Respond to Webhook.** Define a resposta de um Webhook (ou Form Trigger, ou Wait por webhook) configurado para responder Pelo nó Respond to Webhook. Responde uma vez só, com: o primeiro item que chegou, todos os itens, um JSON que você escreve (aceita expressões), um texto, o arquivo de um campo do item, um redirecionamento para outro endereço ou sem corpo. Tem Código da resposta, Headers e, para primeiro item e todos os itens, Colocar a resposta no campo (ex.: `dados`). Os itens seguem para os próximos nós sem mudança. Se o fluxo terminar sem passar por ele, quem chamou recebe `{"message":"Workflow executed successfully"}` (ou 500 com o erro). Executado pelo botão Executar, ele não tem para quem responder e só repassa os itens.
+
+**Form Trigger.** Publica um formulário web no endereço `/form/<caminho>` e inicia o fluxo quando alguém envia. Você define Título, Descrição, o Texto do botão e os **Campos do formulário**, um por linha:
+
+| Tipo | Como chega no item |
+| --- | --- |
+| Texto, E-mail, Senha, Texto longo, Data | Texto (a data como aaaa-mm-dd) |
+| Número | Número |
+| Lista (dropdown) | Texto; com Várias escolhas na lista, uma lista |
+| Caixas de seleção | Lista com as opções marcadas |
+| Escolha única (radio) | Texto |
+| Arquivo | Os arquivos ficam no item, com o nome do rótulo (ex.: "Nota fiscal" vira `Nota_fiscal`), e o JSON leva o nome, o tipo e o tamanho |
+| Campo oculto | O Valor, com a chave do Nome; não aparece na tela |
+| Bloco de texto (HTML) | Não chega no item; mostra o HTML do Valor no meio do formulário |
+
+As opções das listas vão uma por linha. O item usa o rótulo de cada campo como chave e leva também `submittedAt` (data e hora do envio, no fuso escolhido) e `formMode` (test ou production). Depois do envio, a pessoa vê a Mensagem (padrão "Sua resposta foi registrada") ou vai para um endereço. Com Quando o último nó terminar, a mensagem só aparece depois do fluxo; com Pelo nó Respond to Webhook, o Respond to Webhook decide a página. O formulário pode pedir usuário e senha (Basic) e aceita CSS próprio. Campos obrigatórios vazios voltam com a mensagem de erro, sem rodar o fluxo.
+
+**Form.** Continua um formulário iniciado pelo Form Trigger. Na operação **Próxima página do formulário**, a pessoa que enviou a primeira página vê outra página com os campos deste nó, e o fluxo fica Esperando até ela enviar; os valores chegam como itens deste nó. Na operação **Tela final**, define o que a pessoa vê no fim: Título e mensagem, Ir para um endereço, uma Página HTML ou o Arquivo do item (download). Sem Tela final, ela vê a mensagem do Form Trigger. Exemplo: Form Trigger pede o CPF, um nó consulta o cliente no ERP, um Form mostra a segunda página com os dados para confirmar, e a Tela final agradece.
+
+**Error Trigger.** Começo do **fluxo de erro**: um fluxo que roda quando outro falha. No fluxo que pode falhar, abra Configurações (na barra do editor) e escolha o Fluxo de erro. Quando uma execução agendada, por webhook ou por gatilho desse fluxo termina com erro, o fluxo de erro roda com um item como no n8n:
+
+```json
+{
+  "execution": {
+    "id": "5c1f...",
+    "url": "http://info8n.empresa.local:3000/execucoes/5c1f...",
+    "error": { "message": "A API respondeu com status 500" },
+    "lastNodeExecuted": "Consultar pedido",
+    "mode": "schedule"
+  },
+  "workflow": { "id": "a1b2...", "name": "Sincronizar pedidos" }
+}
+```
+
+Execuções manuais não chamam o fluxo de erro. Pelo botão Executar, o Error Trigger devolve um item de exemplo como esse. Exemplo: um único fluxo de erro manda um e-mail para a equipe com `{{ $json.workflow.name }}`, a mensagem e o link da execução, e todos os fluxos agendados apontam para ele.
+
+**n8n Trigger.** Roda o fluxo quando ele próprio é ativado (Fluxo ativado), quando é salvo estando ativo (Fluxo salvo) ou quando o servidor do Info8n inicia (Servidor iniciado). O item traz `event`, `timestamp` e `workflow_id`. Exemplo: avisar no ClickUp sempre que alguém altera um fluxo de produção.
+
+#### Gatilhos que escutam e consultam
+
+Quatro gatilhos iniciam o fluxo quando algo acontece fora do Info8n. Todos só funcionam com o fluxo Ativo. Para testar no editor, clique em Escutar e provoque o evento (mande um e-mail, salve um arquivo na pasta); no RSS Feed Trigger, Executar já traz o item mais recente do feed.
+
+**RSS Feed Trigger.** Consulta um feed RSS ou Atom (blogs, notícias, portais de licitação, Diário Oficial) nos **Horários de consulta** e dispara com os itens novos. Cada linha de horário é um modo: A cada minuto (o padrão), A cada hora (no minuto escolhido), Todo dia, Toda semana, Todo mês, A cada X minutos ou horas, ou Personalizado (expressão cron); só valem os campos do modo escolhido. Na primeira consulta depois de ativar, ele só anota a data do item mais recente e não dispara; depois, dispara uma vez com todos os itens publicados depois dessa data. Itens sem data nunca disparam, e um item antigo republicado com data nova dispara de novo. **Ignorar erros de certificado** aceita sites com certificado vencido ou próprio. O item traz `title`, `link`, `pubDate`, `isoDate`, `content`, `contentSnippet`, `guid`, `creator` e `categories`, conforme o feed. A maioria dos feeds muda poucas vezes por dia: A cada X com 15 minutos economiza recursos e evita bloqueio. Feeds com login não funcionam.
+
+**Email Trigger (IMAP).** Fica conectado a uma caixa de e-mail (Gmail, Outlook, Locaweb, servidor próprio) e dispara quando chega um e-mail que bate com os critérios. Crie antes uma conexão do tipo **IMAP (caixa de e-mail)** com Servidor (ex.: imap.gmail.com, outlook.office365.com), Porta (993 com SSL/TLS, 143 sem), Usuário, Senha (no Gmail e no Outlook com verificação em duas etapas, uma senha de app; no Gmail o IMAP precisa estar ligado) e Aceitar certificado inválido (só para servidores internos). No nó:
+
+- **Caixa de e-mail:** a pasta vigiada; INBOX é a caixa de entrada, subpastas costumam ser INBOX/Notas ou INBOX.Notas.
+- **Depois de ler:** Marcar como lido (padrão) ou Não fazer nada.
+- **Formato:** Simples (from, to, cc, subject, date, textPlain, textHtml, os outros cabeçalhos em metadata e attributes.uid), Completo (o e-mail interpretado: from.value[0].address, text, html, messageId, date ISO, headers, anexos sempre como arquivos) ou Bruto (`raw` com o e-mail inteiro em base64, para guardar o .eml).
+- **Baixar anexos** (no Simples) e **Prefixo dos anexos:** os anexos ficam no item como attachment\_0, attachment\_1...
+- **Critérios de busca:** quais e-mails disparam, no formato do n8n. Padrão `["UNSEEN"]` (não lidos). Exemplos: `["UNSEEN", ["FROM", "nfe@fornecedor.com"]]`, `["UNSEEN", ["SUBJECT", "Pedido"]]`, `["UNSEEN", ["SINCE", "May 20, 2024"]]`, `[["OR", ["FROM", "a@x.com"], ["FROM", "b@x.com"]]]`, `["UNSEEN", "!FLAGGED"]` (o ! nega). Também valem SEEN, ANSWERED, FLAGGED, TO, CC, BCC, BODY, TEXT, BEFORE, ON, LARGER, SMALLER, HEADER e X-GM-RAW (busca do Gmail).
+- **Lembrar o último e-mail:** ligado (padrão), nunca repete um e-mail, mesmo que ele continue não lido.
+- **Reconectar a cada (minutos):** para servidores que param de avisar e-mails novos depois de um tempo; 0 reconecta só quando a conexão cai.
+
+Vários e-mails de uma vez viram uma execução com um item por e-mail. E-mails que chegaram com o fluxo desativado e ainda batem com os critérios disparam ao ativar. Contas Microsoft 365 que só aceitam OAuth não funcionam por senha. Exemplo: uma regra do e-mail move as notas fiscais para INBOX/Notas; o gatilho vigia essa pasta com Baixar anexos, e um Read/Write Files from Disk grava `attachment_0` em /files/notas.
+
+**Local File Trigger.** Vigia um arquivo ou uma pasta do servidor e dispara quando algo muda. Só funciona nas pastas liberadas em FILES_DIRS (no Docker, /files). Em **Disparar quando**, escolha Um arquivo mudar ou Algo mudar numa pasta; na pasta, marque os **Eventos**: Arquivo adicionado, alterado ou apagado, Pasta adicionada ou apagada. Outras opções: **Esperar o arquivo terminar de ser gravado** (ligue para arquivos grandes, senão o fluxo pode ler pela metade), Incluir arquivos ligados (links), **Ignorar** (padrões como `**/*.tmp` ou `**/~$*`, os temporários do Office), Ignorar o que já existe (padrão ligado: ao ativar, não dispara para o que já está na pasta), Profundidade máxima de subpastas e **Verificar por consulta (polling)**. Ligue o polling com Docker Desktop no Windows ou Mac e em pastas de rede: nesses casos o aviso de mudança não chega ao container e o gatilho fica mudo. Cada mudança é uma execução com `{ "event": "add", "path": "/files/entrada/pedido-123.xlsx" }` (event é add, change, unlink, addDir ou unlinkDir). Para ler o arquivo, use depois um Read/Write Files from Disk com o caminho `{{ $json.path }}`. Mudanças feitas com o fluxo desativado não disparam.
+
+**SSE Trigger.** Conecta a um endereço que envia eventos em tempo real (Server-Sent Events, `text/event-stream`) e dispara a cada mensagem. Mensagem com JSON vira o item; texto comum chega em `{ "data": "..." }`. Mensagens com nome de evento próprio (como `event: ping`) são ignoradas, como no n8n. Se a conexão cair, ele reconecta sozinho e pede só as mensagens que faltaram (quando o servidor suporta). Não há campos de cabeçalho nem de login: o endereço precisa abrir sem autenticação, ou com o token na própria URL.
 
 ### Ações
 
@@ -214,7 +331,16 @@ Todo fluxo começa por exatamente um gatilho.
 
 **Compare Datasets.** Recebe duas entradas, A e B, e casa os itens pelos campos de Campos para casar os itens (campo em A e campo em B; aceita caminho com ponto, como cliente.id). Os itens saem por quatro saídas: só em A (sem par em B), iguais (o par tem todos os campos iguais), diferentes e só em B. Em Quando houver diferenças, escolha usar a versão de A, a de B, misturar as versões (prefira uma e diga em Exceto nos campos quais campos vêm da outra) ou incluir as duas versões, que gera um item com keys (os campos de casamento), same (os campos iguais), different (cada campo diferente com inputA e inputB) e, quando houver, skipped. Comparação tolerante faz o número 3 e o texto "3" contarem como iguais, assim como vazio, nulo e lista vazia. Campos que não entram na comparação são separados por vírgula (ex.: atualizado_em). Em Vários pares para o mesmo item, escolha usar só o primeiro par de B ou todos. Itens vazios são ignorados. Exemplo: A com os produtos do ERP, B com os da loja, casando id com sku; a saída diferentes lista o que precisa ser atualizado.
 
-**Wait.** Espera e depois segue com os mesmos itens, sem alterá-los. Em Continuar, escolha Depois de um intervalo (Esperar e Unidade: segundos, minutos, horas ou dias) ou Numa data e hora (Data e hora no formato aaaa-mm-dd hh:mm:ss e Fuso horário, como no Agendamento; uma expressão também pode devolver uma data ISO com fuso, como 2026-11-01T12:00:00Z). Se a data já passou, o fluxo segue na hora. A espera máxima é de 24 dias. Cancelar a execução interrompe a espera na hora. Durante a espera a execução ocupa uma das vagas de execuções simultâneas, e se o Info8n for reiniciado no meio dela, a execução termina com erro; pausar de verdade, liberando a vaga, vem junto com os gatilhos novos. Retomar por chamada de webhook ou por formulário, que existe no n8n, ainda não existe aqui. Exemplo: esperar 10 minutos entre enviar um pedido ao ERP e consultar o status dele.
+**Wait.** Para o fluxo e depois continua. Em Continuar, escolha:
+
+- **Depois de um intervalo:** Esperar e Unidade (segundos, minutos, horas ou dias). Segue com os mesmos itens.
+- **Numa data e hora:** Data e hora no formato aaaa-mm-dd hh:mm:ss e Fuso horário, como no Agendamento; uma expressão também pode devolver uma data ISO com fuso, como 2026-11-01T12:00:00Z. Se a data já passou, segue na hora. Segue com os mesmos itens.
+- **Quando a URL de retomada for chamada (webhook):** o fluxo fica parado até alguém chamar `{{ $execution.resumeUrl }}` (o endereço `/webhook-waiting/<id da execução>`, mais o Sufixo do caminho, se houver). Mande esse endereço antes, num HTTP Request, num e-mail ou numa mensagem. A chamada vira o item de saída, com headers, query e body, como no Webhook, e tem as mesmas opções de método, autenticação, IPs, robôs e resposta. Chamar de novo depois de retomado dá 409.
+- **Quando um formulário for enviado:** o fluxo fica parado até alguém enviar o formulário do endereço `{{ $execution.resumeFormUrl }}`; os campos e a saída são como no Form Trigger. Bom para aprovações: o fluxo manda um e-mail com o link, o gestor aprova ou recusa, e o fluxo segue com a resposta.
+
+Nos dois últimos, **Limitar o tempo de espera** faz o fluxo seguir sozinho depois de um intervalo ou numa data, com os itens que chegaram no Wait.
+
+Esperas de mais de 1 minuto **pausam a execução de verdade**: ela fica Esperando em Execuções, não ocupa vaga de execução simultânea, não tem limite de prazo e continua mesmo se o Info8n for reiniciado. Esperas mais curtas acontecem com a execução rodando. Cancelar uma execução Esperando a encerra na hora. Dentro de um subfluxo (chamado pelo Execute Workflow), o Wait não pausa: espera rodando, até 24 dias, e não aceita webhook nem formulário. Os endereços de retomada usam o PUBLIC_URL do .env; sem ele, apontam para localhost e só funcionam no próprio servidor (peça ao administrador para configurar). Exemplo: esperar 10 minutos entre enviar um pedido ao ERP e consultar o status dele.
 
 **No Operation.** Não faz nada: repassa os itens como chegaram. Serve para organizar o desenho do fluxo ou marcar um ponto de junção.
 
@@ -399,6 +525,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 | --- | --- |
 | Na fila | Aguardando vaga para rodar |
 | Executando | Em andamento |
+| Esperando | Parada num Wait ou num Form; a tela da execução diz em qual nó, o que espera e até quando |
 | Sucesso | Terminou sem erro |
 | Erro | Parou num nó; a coluna Erro diz qual e por quê |
 | Cancelada | Alguém cancelou |
@@ -409,11 +536,14 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 | Agendada | Gatilho Agendamento de um fluxo ativo |
 | Subfluxo | Chamada por outro fluxo pelo Execute Workflow |
 | Reexecução | Botão Executar de novo |
+| Webhook | Chamada no endereço de produção de um Webhook ou Form Trigger |
+| Gatilho | RSS Feed Trigger, Email Trigger, Local File Trigger, SSE Trigger ou n8n Trigger |
+| Fluxo de erro | Disparada pelo Error Trigger porque outro fluxo falhou |
 
 **A tela da execução** mostra quem disparou, quando começou, quanto durou e a versão do fluxo que rodou. Se houve erro, o painel vermelho diz em qual nó, a mensagem e os detalhes (por exemplo, a resposta da API ou o código do erro do banco). Abaixo, a lista Nós executados traz cada nó na ordem em que rodou, com a quantidade de itens e o tempo. Clique num nó para ver a entrada e a saída dele, as tentativas, os logs do código e os links para os subfluxos que ele chamou. Um nó dentro de um Loop aparece uma vez por volta.
 
 - **Executar de novo:** roda outra vez a mesma versão do fluxo, com a mesma entrada. A nova execução aponta para a original.
-- **Cancelar:** interrompe uma execução na fila ou em andamento.
+- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando.
 - **Abrir fluxo** e **ver quem chamou** (em subfluxos) levam ao fluxo e à execução de origem.
 
 **O que fica guardado.** Para os logs ocuparem pouco espaço:
@@ -465,7 +595,8 @@ Uma forma simples de organizar é uma pasta por área ou por cliente, e marcar e
 
 | No n8n | No Info8n |
 | --- | --- |
-| Webhook e dezenas de gatilhos | Três gatilhos: manual, agendamento e chamado por outro fluxo |
+| Webhook, Form Trigger, Respond to Webhook, Form, Error Trigger, n8n Trigger, RSS, IMAP, Local File e SSE Trigger | Existem, com os mesmos endereços (/webhook, /webhook-test, /form...). Os outros gatilhos do n8n (de aplicativos como Slack ou Typeform) não existem |
+| Fluxo de erro (Error Workflow nas configurações) | Configurações do fluxo, no editor. Vem na importação quando o fluxo de erro é importado junto ou antes |
 | Credenciais | Conexões. Elas não vêm na importação: cadastre em Conexões e escolha em cada nó |
 | $now, $today, DateTime (Luxon) | Não existem nas expressões. Use new Date() e os métodos comuns do JavaScript, ou o nó Date & Time |
 | Métodos extras como .isEmpty(), .toFormat(), .toISO() de datas do Luxon | Não existem. Reescreva em JavaScript comum. .toJsonString() funciona |
@@ -475,7 +606,9 @@ Uma forma simples de organizar é uma pasta por área ou por cliente, e marcar e
 | Item Lists | Cada operação vira o nó próprio: Split Out, Aggregate, Limit, Sort, Remove Duplicates ou Summarize |
 | HTML Extract | Vira o HTML com a operação Extrair conteúdo |
 | Switch | Cada regra do Info8n tem uma condição; regras do n8n com várias condições ficam com a primeira e a importação avisa |
-| Wait por webhook ou formulário | Ainda não existe; o nó vira não convertido. Wait por tempo ou data funciona, até 24 dias |
+| Wait por webhook ou formulário | Funciona, com $execution.resumeUrl e $execution.resumeFormUrl. Configure o PUBLIC_URL para os endereços saírem certos |
+| Webhook com vários métodos | Um método por nó; duplique o nó para os outros. A importação avisa |
+| Credencial do Webhook (Basic, Header) e do IMAP | Recrie como conexão Usuário e senha, Header com chave ou IMAP e escolha no nó |
 | Remove Duplicates entre execuções | Ainda não existe; só remove repetidos dentro da mesma execução |
 | Dados binários | Funcionam como no n8n: arquivos nos itens, com HTTP Request, Gmail, HTML, Crypto e os nós de arquivos. Read/Write Files from Disk só usa as pastas liberadas em FILES_DIRS |
 | Spreadsheet File, Read PDF, Move Binary Data, Read/Write Binary File(s) | Viram Convert to File, Extract from File e Read/Write Files from Disk |
@@ -501,7 +634,13 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | Erro na expressão com "is not a function" ou "is not defined" | Recurso do n8n que não existe aqui | Reescreva em JavaScript comum (veja a tabela acima) |
 | A API respondeu com status 401 ou 403 | Token vencido, errado ou não enviado | Confira o nó de login e a variável token, ou a conexão de autenticação |
 | O nó passou do tempo limite | A API, o banco ou o código demorou mais que o permitido | Aumente o Tempo limite do nó em Configurações |
-| Não consigo ativar o fluxo | O fluxo tem pendências, não foi salvo ou não começa por Agendamento | Salve, corrija a faixa amarela e tente de novo |
+| Não consigo ativar o fluxo | O fluxo tem pendências, não foi salvo ou não tem gatilho que dispara sozinho | Salve, corrija a faixa amarela e tente de novo |
+| O webhook responde 404 "não existe ou o fluxo não está ativo" | Fluxo inativo, caminho ou método diferente | Ative o fluxo e confira o endereço de Produção na janela do nó |
+| O webhook de teste responde 404 "não está escutando" | Faltou clicar em Escutar, ou passaram os 2 minutos | Clique em Escutar e chame o endereço de teste logo em seguida |
+| O gatilho não iniciou ao ativar | O gatilho não conseguiu conectar (senha do e-mail, endereço SSE fora do ar, pasta fora de FILES_DIRS) | Corrija o que a mensagem diz e ative de novo |
+| O link do Wait ou do formulário aponta para localhost | PUBLIC_URL não está configurado no .env | Peça ao administrador para preencher PUBLIC_URL com o endereço do Info8n |
+| A execução fica Esperando para sempre | O Wait espera um webhook ou formulário que ninguém chamou | Chame o endereço de retomada, ligue Limitar o tempo de espera ou cancele a execução |
+| O Local File Trigger não dispara no Docker Desktop | O aviso de mudança do Windows não chega ao container | Ligue Verificar por consulta (polling) no nó |
 | A data e hora da execução única já passou | O tipo Uma vez está com uma data no passado | Escolha uma data futura, salve e ative |
 | O fluxo de execução única ficou desativado | É o esperado: depois de rodar, ele se desativa | Para rodar de novo, escolha outra data e ative |
 | Conexão sem acesso ou excluída | A conexão é de um cliente fora do seu cadastro, ou foi apagada | Peça acesso ao cliente para o administrador, ou escolha outra conexão |

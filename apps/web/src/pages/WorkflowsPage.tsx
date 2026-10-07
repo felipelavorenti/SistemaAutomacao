@@ -71,7 +71,7 @@ export function WorkflowsPage() {
                     )}
                   </div>
                 </div>
-                {w.scheduled ? (
+                {w.activatable || w.active ? (
                   <span className={`state ${w.active ? 'on' : ''}`}>{w.active ? 'Ativo' : 'Inativo'}</span>
                 ) : (
                   <span className="state manual">Manual</span>

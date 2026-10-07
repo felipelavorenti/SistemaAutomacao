@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from '../types.js';
 import { type Converted, type Ctx, ifNode, isObject, jsonish, type Params } from './import.js';
+import { waitResume } from './convert-triggers-webhook.js';
 
 /**
  * Conversores do importador do n8n para os nós de fluxo de flow-extra.ts:
@@ -210,13 +211,11 @@ function toLocalDateTime(value: string, timezone: string): string | null {
   }
 }
 
-function wait({ params, warn, node, timezone }: Ctx): Converted | null {
+function wait(ctx: Ctx): Converted | null {
+  const { params, warn, node, timezone } = ctx;
   const version = node.typeVersion ?? 1;
   const resume = str(params.resume || 'timeInterval');
-  if (resume === 'webhook' || resume === 'form') {
-    warn(`o Wait do n8n esperava ${resume === 'webhook' ? 'uma chamada de webhook' : 'o envio de um formulário'}; retomar por webhook ou formulário ainda não existe aqui`);
-    return null;
-  }
+  if (resume === 'webhook' || resume === 'form') return waitResume(ctx, resume);
   if (resume === 'specificTime') {
     const raw = params.dateTime;
     let dateTime: JsonValue = jsonish(raw ?? '');

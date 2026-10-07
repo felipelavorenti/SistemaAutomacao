@@ -6,7 +6,7 @@ import { isExpression, parseTemplate } from './template.js';
 export interface ExpressionData {
   /** Saída (primeira saída) de cada nó já executado, pelo nome do nó. */
   nodeOutputs: Record<string, Item[]>;
-  execution: { id: string; mode: string };
+  execution: { id: string; mode: string; resumeUrl?: string; resumeFormUrl?: string };
   vars: JsonObject;
 }
 

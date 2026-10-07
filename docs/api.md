@@ -82,7 +82,7 @@ Todo erro devolve um JSON com `error`, a mensagem em português, e às vezes `de
 
 ## Guia rápido: disparar um fluxo e pegar o resultado
 
-O uso mais comum da API tem três passos. O fluxo não precisa estar ativo, porque ativar só liga o agendamento, e o usuário do token precisa ser Operador ou acima.
+O uso mais comum da API tem três passos. O fluxo não precisa estar ativo, porque ativar só liga os gatilhos automáticos (agendamento, webhooks, e-mail...), e o usuário do token precisa ser Operador ou acima. Para outro sistema disparar um fluxo sem token, use um Webhook (veja Webhooks e formulários).
 
 1. **Pegue o ID do fluxo.** Ele aparece no endereço do editor (`/fluxos/<id>`) e em `GET /api/workflows`.
 2. **Dispare o fluxo** com `POST /api/workflows/{id}/run`. Os itens de `input` entram no Gatilho manual do fluxo. A resposta volta na hora, antes de o fluxo terminar, com o ID da execução.
@@ -93,6 +93,7 @@ O `status` final diz o que aconteceu:
 - `success`: o resultado é a saída do último nó que rodou, `runs[-1].output[0]`, uma lista de itens `{"json": {...}}`.
 - `error`: `error_message` diz o que houve, `error_node` diz em qual nó, e `error.details` traz o resto, como a resposta da API que falhou.
 - `canceled`: alguém cancelou a execução.
+- `waiting`: o fluxo parou num Wait ou num Form e continua depois; `wait_info` diz em qual nó e o que espera, e `wait_till` até quando. O script abaixo para de esperar nesse caso também.
 
 O script abaixo faz os três passos e usa o `jq` para ler o JSON. Ele foi rodado num Info8n de teste com o fluxo Consultar preço, que busca o produto no banco do cliente.
 
@@ -107,7 +108,7 @@ EXECUCAO=$(curl -s -X POST "$INFO8N/api/workflows/$FLUXO/run" \
 while true; do
   RESPOSTA=$(curl -s "$INFO8N/api/executions/$EXECUCAO" -H "Authorization: Bearer $TOKEN")
   STATUS=$(echo "$RESPOSTA" | jq -r .status)
-  if [ "$STATUS" != "queued" ] && [ "$STATUS" != "running" ]; then break; fi
+  if [ "$STATUS" != "queued" ] && [ "$STATUS" != "running" ]; then break; fi  # waiting também sai
   sleep 2
 done
 
@@ -139,7 +140,100 @@ Saída:
 
 - **Tamanho do corpo:** até 10 MB por chamada, e até 50 MB na importação do n8n. Acima disso, a resposta é 413 `Request body is too large`.
 - **Chamadas por minuto:** não há limite. O que limita é quantos fluxos rodam ao mesmo tempo (5 por padrão, em `WORKER_CONCURRENCY`); os disparos a mais esperam na fila.
-- **Webhook:** não existe URL pública de webhook como no n8n. Toda chamada leva o token.
+- **Webhooks e formulários:** os endereços públicos (`/webhook/...`, `/form/...`) aceitam corpo de até 16 MB e não pedem token; a segurança é a do nó (usuário e senha, header, IPs permitidos).
+
+## Webhooks e formulários
+
+Além da API com token, o Info8n tem os endereços públicos do n8n, criados pelos nós Webhook, Form Trigger, Form e Wait. Eles ficam fora de `/api`, não pedem token e não aparecem na lista de rotas abaixo, porque cada fluxo define os seus.
+
+| Endereço | Métodos | Funciona quando |
+| --- | --- | --- |
+| `/webhook/<caminho>` | O do nó (GET, POST, PUT, PATCH, DELETE ou HEAD), mais OPTIONS para CORS | O fluxo está ativo |
+| `/webhook-test/<caminho>` | Os mesmos | Até 2 minutos depois de `POST /api/workflows/{id}/listen` (botão Escutar) |
+| `/webhook-waiting/<id da execução>[/<sufixo>]` | O do Wait | A execução está parada num Wait por webhook |
+| `/form/<caminho>` e `/form-test/<caminho>` | GET (página) e POST (envio) | Fluxo ativo, ou escutando |
+| `/form-waiting/<id da execução>` | GET e POST | A execução está parada num Form ou Wait por formulário |
+
+Caminho vazio no nó vale o ID do nó. Partes com dois pontos (`pedidos/:id`) aceitam qualquer valor, que chega em `params`.
+
+**Corpo aceito:** JSON, `application/x-www-form-urlencoded`, `multipart/form-data` (campos em `body`, arquivos no item com o nome do campo), texto e binário (o arquivo vai para `data`, ou o nome escolhido no nó). Até 16 MB.
+
+**Exemplo: disparar um fluxo por webhook.** Nó Webhook com método POST, caminho `pedidos/:id` e Quando responder = Quando o último nó terminar:
+
+```bash
+curl -s -X POST "$INFO8N/webhook/pedidos/42?origem=erp" \
+  -H "Content-Type: application/json" \
+  -d '{"valor": 99.9}'
+```
+
+O fluxo recebe um item:
+
+```json
+{
+  "headers": { "content-type": "application/json", "host": "localhost:3000", "user-agent": "curl/8.5.0" },
+  "params": { "id": "42" },
+  "query": { "origem": "erp" },
+  "body": { "valor": 99.9 },
+  "webhookUrl": "http://localhost:3000/webhook/pedidos/:id",
+  "executionMode": "production"
+}
+```
+
+E quem chamou recebe o JSON do primeiro item que o último nó devolveu, por exemplo:
+
+```json
+{ "pedido": "42", "aprovado": true }
+```
+
+**Respostas por modo do nó**
+
+| Quando responder | Resposta |
+| --- | --- |
+| Logo que receber | Na hora: `{"message":"Workflow was started"}`, com o código escolhido no nó (padrão 200) |
+| Quando o último nó terminar | O JSON do primeiro item, a lista de todos os itens, o arquivo do primeiro item ou sem corpo, do último nó que rodou. Se o fluxo falhar: 500 `{"message":"Error in workflow"}` |
+| Pelo nó Respond to Webhook | O que o Respond to Webhook definir (JSON, texto, arquivo, redirecionamento, código e headers). Se o fluxo terminar sem passar por ele: 200 `{"message":"Workflow executed successfully"}`, ou 500 com o erro |
+
+Nos dois últimos modos, se o fluxo parar num Wait, a resposta é a imediata (`Workflow was started`). Se o fluxo demorar mais de 10 minutos, a resposta é 504 `{"message":"O fluxo não respondeu a tempo; ele continua rodando","executionId":"..."}`.
+
+**Erros dos endereços públicos**
+
+| Código | Quando |
+| --- | --- |
+| 400 | Corpo inválido (JSON quebrado, multipart malformado) |
+| 401 | Usuário e senha (Basic) ausentes ou errados; vem com `WWW-Authenticate` |
+| 403 | Header de autenticação ausente ou errado, IP fora da lista do nó ou robô recusado |
+| 404 | Caminho não existe, fluxo inativo, ou ninguém está escutando o endereço de teste |
+| 405 | O caminho existe com outro método |
+| 409 | A execução não está esperando, ou já foi retomada (endereços `-waiting`) |
+| 413 | Corpo maior que 16 MB |
+| 504 | O fluxo passou de 10 minutos sem responder |
+| 500 | O nó pede autenticação, mas a conexão não foi escolhida ou foi excluída; ou o fluxo falhou (modos que esperam o fluxo) |
+
+**Exemplo: retomar um Wait por webhook.** O fluxo manda o endereço `{{ $execution.resumeUrl }}` para outro sistema (num HTTP Request ou e-mail) e para no Wait. Quando o sistema chama:
+
+```bash
+curl -s -X POST "$INFO8N/webhook-waiting/0b8f3c52-6a7e-4f0e-9f3d-1c2b3a4d5e6f" \
+  -H "Content-Type: application/json" \
+  -d '{"aprovado": true}'
+```
+
+a execução sai de `waiting`, o Wait devolve o item da chamada (mesmo formato do Webhook) e o fluxo continua. A resposta segue o modo configurado no Wait. Uma segunda chamada recebe 409 `{"message":"A execução ... não está esperando um webhook"}`. Os endereços de retomada usam `PUBLIC_URL` do `.env`.
+
+**Formulários.** `GET /form/<caminho>` devolve a página HTML. O envio é um POST `multipart/form-data` com os campos `field-0`, `field-1`... na ordem dos campos do nó. Dá para enviar por script também:
+
+```bash
+curl -s -X POST "$INFO8N/form/contato" -F "field-0=Maria" -F "field-1=Suporte"
+```
+
+O fluxo recebe um item com o rótulo de cada campo como chave, mais `submittedAt` e `formMode`:
+
+```json
+{ "Nome": "Maria", "Assunto": "Suporte", "submittedAt": "2026-10-07T15:20:11.120-03:00", "formMode": "production" }
+```
+
+A resposta é a página com a mensagem do nó, um redirecionamento, ou, quando há um Form depois, um redirecionamento (303) para `/form-waiting/<id da execução>` com a próxima página. Campo obrigatório vazio devolve a página de novo com a mensagem de erro e não cria execução.
+
+**Escutar pela API.** `POST /api/workflows/{id}/listen` liga os endereços de teste por 2 minutos; `GET /api/workflows/{id}/listen` diz se ainda escuta e, depois do primeiro evento, o `executionId`. Os detalhes estão nas rotas abaixo.
 
 <!-- rotas:inicio -->
 
@@ -436,7 +530,7 @@ curl "$INFO8N/api/workflows" \
 
 **Exemplo de resposta**
 
-scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).
+scheduled diz se o fluxo tem gatilho de agendamento; activatable, se tem algum gatilho que o faz rodar sozinho quando ativo (agendamento, Webhook, Form Trigger, n8n Trigger, IMAP, RSS, pasta ou SSE); callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).
 
 ```json
 [
@@ -452,6 +546,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     "last_execution": null,
     "scheduled": true,
     "callable": false,
+    "activatable": true,
     "next_run": "2026-10-01T11:00:00.000Z"
   },
   {
@@ -470,6 +565,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     },
     "scheduled": false,
     "callable": true,
+    "activatable": false,
     "next_run": null
   },
   {
@@ -488,6 +584,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     },
     "scheduled": false,
     "callable": false,
+    "activatable": false,
     "next_run": null
   }
 ]
@@ -904,6 +1001,7 @@ Põe o fluxo na fila e responde na hora, sem esperar ele terminar. Acompanhe o r
 | `id` | caminho | uuid | sim | ID do fluxo |
 | `input` | corpo | lista | não | Itens que entram no primeiro gatilho do fluxo (o Gatilho manual): [{"json": {...}}]. Sem input, o gatilho solta um item vazio |
 | `definition` | corpo | objeto | não | Usado pelo editor da tela para rodar um fluxo ainda não salvo. Exige o perfil Editor |
+| `startNodeId` | corpo | texto | não | ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o Gatilho manual ou, sem ele, o primeiro gatilho do fluxo |
 
 **Exemplo de chamada**
 
@@ -925,6 +1023,102 @@ Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o
 **Erros próprios**
 
 - 404: o fluxo não existe ou está numa pasta sem acesso
+
+### POST /api/workflows/{id}/listen
+
+Abre a escuta de teste por 2 minutos, como o botão "Escutar" do editor: as URLs /webhook-test/... e /form-test/... passam a responder, e os gatilhos que escutam (e-mail IMAP, pasta, SSE) ficam ligados. O RSS consulta uma vez na hora. O primeiro evento vira uma execução manual e a escuta fecha.
+
+**Perfil:** Operador ou acima
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID do fluxo |
+| `definition` | corpo | objeto | não | Definição ainda não salva, enviada pelo editor. Exige o perfil Editor. Sem ela, vale a versão salva |
+
+**Exemplo de chamada**
+
+```bash
+curl -X POST "$INFO8N/api/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+**Exemplo de resposta**
+
+expiresAt é quando a escuta fecha sozinha; webhooks lista os caminhos de teste abertos (kind webhook ou form). Acompanhe com GET /workflows/{id}/listen.
+
+```json
+{
+  "expiresAt": "2026-10-07T18:52:10.120Z",
+  "webhooks": [
+    {"kind": "webhook", "method": "POST", "path": "pedidos/novo", "nodeName": "Webhook"}
+  ]
+}
+```
+
+**Erros próprios**
+
+- 400: o fluxo não tem gatilho para escutar, ou um gatilho não conseguiu ligar (o motivo vem na mensagem)
+- 404: o fluxo não existe ou está numa pasta sem acesso
+
+### GET /api/workflows/{id}/listen
+
+Situação da escuta de teste: se ainda está escutando e, quando o evento chegou, o ID da execução criada.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID do fluxo |
+
+**Exemplo de chamada**
+
+```bash
+curl "$INFO8N/api/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Exemplo de resposta**
+
+listening fica false quando a escuta fecha (chegou o evento ou passaram os 2 minutos); executionId vem preenchido quando chegou um evento.
+
+```json
+{
+  "listening": false,
+  "executionId": "4b31556c-2e1d-48da-9043-d1a708320b46",
+  "expiresAt": "2026-10-07T18:51:02.004Z"
+}
+```
+
+### DELETE /api/workflows/{id}/listen
+
+Fecha a escuta de teste antes dos 2 minutos.
+
+**Perfil:** Qualquer perfil
+
+**Parâmetros**
+
+| Campo | Onde | Tipo | Obrigatório | Descrição |
+| --- | --- | --- | --- | --- |
+| `id` | caminho | uuid | sim | ID do fluxo |
+
+**Exemplo de chamada**
+
+```bash
+curl -X DELETE "$INFO8N/api/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Exemplo de resposta**
+
+```json
+{"ok": true}
+```
 
 ### GET /api/workflows/{id}/callers
 
@@ -1280,7 +1474,7 @@ curl "$INFO8N/api/node-types" \
 
 **Exemplo de resposta**
 
-Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer.
+Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer. activatable: true marca os gatilhos que fazem o fluxo rodar sozinho quando ele está ativo.
 
 ```json
 [
@@ -1438,8 +1632,8 @@ Execuções dos fluxos que o usuário enxerga, mais novas primeiro.
 | Campo | Onde | Tipo | Obrigatório | Descrição |
 | --- | --- | --- | --- | --- |
 | `workflowId` | URL | uuid | não | Só de um fluxo |
-| `status` | URL | texto | não | queued, running, success, error ou canceled |
-| `mode` | URL | texto | não | manual, schedule, subworkflow ou retry |
+| `status` | URL | texto | não | queued, running, waiting (pausada num Wait ou Form), success, error ou canceled |
+| `mode` | URL | texto | não | manual, schedule, subworkflow, retry, webhook (webhook e formulário), trigger (gatilhos que escutam, como e-mail e RSS) ou error (fluxo de erro) |
 | `parentId` | URL | uuid | não | Só os subfluxos chamados por esta execução |
 | `from` | URL | data e hora | não | A partir de quando, com fuso (ex.: 2026-09-30T00:00:00-03:00) |
 | `to` | URL | data e hora | não | Até quando, com fuso |
@@ -1458,7 +1652,7 @@ curl "$INFO8N/api/executions?status=error&limit=2" \
 
 **Exemplo de resposta**
 
-duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).
+duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).
 
 ```json
 [
@@ -1530,7 +1724,7 @@ dueAt é quando o fluxo devia ter começado. A lista vem vazia quando nenhum flu
 
 ### GET /api/executions/{id}
 
-Execução completa, com os dados de cada nó. Consulte até status sair de queued ou running.
+Execução completa, com os dados de cada nó. Consulte até status sair de queued, running ou waiting.
 
 **Perfil:** Qualquer perfil
 
@@ -1549,7 +1743,7 @@ curl "$INFO8N/api/executions/4b31556c-2e1d-48da-9043-d1a708320b46" \
 
 **Exemplo de resposta**
 
-runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.
+runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Pausada (status waiting), wait_info diz o que ela espera: kind time, webhook ou form, o nó (nodeName) e until; start_node_id é o gatilho de onde começou. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.
 
 ```json
 {
@@ -1710,7 +1904,7 @@ _O corpo é o arquivo; o exemplo mostra o status e os cabeçalhos. O curl grava 
 
 ### POST /api/executions/{id}/cancel
 
-Cancela uma execução na fila ou em andamento.
+Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).
 
 **Perfil:** Operador ou acima · registra na auditoria
 

@@ -5,7 +5,9 @@ import { ZodError } from 'zod';
 import { API_REFERENCE } from './api-reference.js';
 import type { Config } from './config.js';
 import type { Db } from './db/db.js';
-import type { ExecutionQueue } from './executions/queue.js';
+import { ExecutionEvents } from './executions/events.js';
+import { createRedis, type ExecutionQueue } from './executions/queue.js';
+import { TriggerManager } from './triggers/manager.js';
 import { authenticate, SESSION_COOKIE } from './lib/auth.js';
 import { HttpError, type CurrentUser } from './lib/permissions.js';
 import { adminRoutes } from './routes/admin.js';
@@ -16,13 +18,19 @@ import { connectionRoutes } from './routes/connections.js';
 import { executionRoutes } from './routes/executions.js';
 import { fileRoutes } from './routes/files.js';
 import { OAUTH_CALLBACK_PATH, oauthRoutes } from './routes/oauth.js';
+import { webhookRoutes } from './routes/webhooks.js';
 import { workflowRoutes } from './routes/workflows.js';
 
 export interface AppDeps {
   db: Db;
   config: Config;
   queue: ExecutionQueue;
+  /** Webhooks, formulários e gatilhos que escutam; sem ele, a API cria um (sem subir os gatilhos ativos). */
+  triggers?: TriggerManager;
 }
+
+/** Dependências já completas, como as rotas recebem. */
+export type RouteDeps = AppDeps & { triggers: TriggerManager };
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -42,7 +50,8 @@ export function currentUser(request: FastifyRequest): CurrentUser {
   return request.user;
 }
 
-export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
+export async function buildApp(appDeps: AppDeps): Promise<FastifyInstance> {
+  const deps: RouteDeps = { ...appDeps, triggers: appDeps.triggers ?? new TriggerManager(appDeps) };
   const app = Fastify({
     logger: process.env.NODE_ENV === 'test' ? false : { level: process.env.LOG_LEVEL ?? 'info' },
     bodyLimit: 10 * 1024 * 1024,
@@ -95,6 +104,26 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   await app.register(dbCommandRoutes(deps), { prefix: '/api' });
   await app.register(oauthRoutes(deps), { prefix: '/api' });
   await app.register(fileRoutes(deps), { prefix: '/api' });
+
+  // Avisos das execuções para os webhooks e formulários: conexão Redis criada no primeiro uso.
+  let events: ExecutionEvents | null = null;
+  let subscriber: ReturnType<typeof createRedis> | null = null;
+  await app.register(
+    webhookRoutes({
+      ...deps,
+      events: () => {
+        if (!events) {
+          subscriber = createRedis(deps.config.redisUrl);
+          events = new ExecutionEvents(subscriber);
+        }
+        return events;
+      },
+    }),
+  );
+  app.addHook('onClose', async () => {
+    subscriber?.disconnect();
+    if (!appDeps.triggers) await deps.triggers.close();
+  });
 
   if (deps.config.webDistDir) {
     await app.register(fastifyStatic, { root: deps.config.webDistDir });
