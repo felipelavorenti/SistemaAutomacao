@@ -7,6 +7,7 @@ import { AuditPage } from './pages/AuditPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { ClientsPage } from './pages/ClientsPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { DataTablePage, DataTablesPage } from './pages/DataTablesPage';
 import { DbCommandsPage } from './pages/DbCommandsPage';
 import { ErpPage, ErpsPage } from './pages/ErpsPage';
 import { ExecutionPage } from './pages/ExecutionPage';
@@ -70,6 +71,8 @@ export function App() {
                 <Route path="/erps" element={<ErpsPage />} />
                 <Route path="/erps/:id" element={<ErpPage />} />
                 <Route path="/comandos-sql" element={<DbCommandsPage />} />
+                <Route path="/tabelas-de-dados" element={<DataTablesPage />} />
+                <Route path="/tabelas-de-dados/:id" element={<DataTablePage />} />
                 <Route path="/clientes" element={<ClientsPage />} />
                 <Route path="/pastas" element={<FoldersPage />} />
                 <Route path="/usuarios" element={<UsersPage />} />
@@ -106,6 +109,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           <NavItem to="/conexoes" icon="connections" label="Conexões" />
           <NavItem to="/erps" icon="erp" label="APIs dos ERPs" />
           <NavItem to="/comandos-sql" icon="sql" label="Comandos SQL" />
+          <NavItem to="/tabelas-de-dados" icon="dataTable" label="Tabelas de dados" />
           <NavItem to="/clientes" icon="clients" label="Clientes" />
           <NavItem to="/referencia-api" icon="code" label="Referência da API" />
           {me.permissions.admin && (

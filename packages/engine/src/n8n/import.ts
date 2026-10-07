@@ -8,6 +8,7 @@ import { converters as fileConvertConverters } from './convert-files-convert.js'
 import { converters as fileDiskConverters } from './convert-files-disk.js';
 import { converters as listenConverters } from './convert-triggers-listen.js';
 import { converters as webhookConverters } from './convert-triggers-webhook.js';
+import { converters as serverConverters } from './convert-server.js';
 
 /** Conversores dos nós da Fase 1, cada grupo no seu arquivo; valem antes dos de baixo. */
 const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({
@@ -18,6 +19,7 @@ const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({
   ...fileDiskConverters,
   ...listenConverters,
   ...webhookConverters,
+  ...serverConverters,
 });
 
 /**

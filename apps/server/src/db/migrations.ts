@@ -298,4 +298,28 @@ CREATE TABLE workflow_static_data (
 );
 `,
   },
+  {
+    id: '009_tabelas_de_dados',
+    sql: `
+-- Tabelas de dados (nó Data Table e tela Tabelas de dados). As colunas ficam em "columns"
+-- ([{ name, type }]) e cada linha guarda os valores num jsonb; o id da linha é sequencial por tabela.
+CREATE TABLE data_tables (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  columns jsonb NOT NULL DEFAULT '[]',
+  next_row_id bigint NOT NULL DEFAULT 1,
+  created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE data_table_rows (
+  table_id uuid NOT NULL REFERENCES data_tables(id) ON DELETE CASCADE,
+  id bigint NOT NULL,
+  data jsonb NOT NULL DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (table_id, id)
+);
+`,
+  },
 ];

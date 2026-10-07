@@ -1332,6 +1332,10 @@ async function writeFiles(ctx: NodeExecuteContext, input: Item[]): Promise<Item[
     const append = bool(await ctx.getParam('append', i));
     const content = getBinaryBuffer(item, property, i);
     const target = await resolveAllowedPath(fileName, ctx.filesDirs, roots);
+    // Gravar dentro de um .git mudaria a configuração do repositório que o nó Git usa (hooks, filtros).
+    if (target.split(/[\\/]/).some((part) => part.toLowerCase() === '.git')) {
+      throw new NodeOperationError(`Não é permitido gravar dentro de uma pasta .git ("${fileName}"); use o nó Git para mexer no repositório`);
+    }
     try {
       await mkdir(path.dirname(target), { recursive: true });
       // O_NOFOLLOW: não grava através de um link simbólico trocado depois da conferência.

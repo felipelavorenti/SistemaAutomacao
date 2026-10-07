@@ -5,6 +5,7 @@ import {
   DatabasePools,
   executeWorkflow,
   NodeOperationError,
+  type CommandLog,
   type DatabaseCommandLog,
   type JsonValue,
   type ConnectionData,
@@ -19,12 +20,15 @@ import { one, type Db } from '../db/db.js';
 import { loadApiEndpoint } from '../lib/catalog.js';
 import { decryptJson } from '../lib/crypto.js';
 import { audit } from '../lib/audit.js';
+import { PgDataTableStore } from '../lib/data-tables.js';
 import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, QUEUE_NAME, type JobData } from './queue.js';
 import { createExecution, decodeResume, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
 /** Limites do que fica guardado de cada comando SQL. */
 const MAX_SQL_CHARS = 32 * 1024;
+/** Limite do texto de cada comando do Execute Command e do SSH na auditoria. */
+const MAX_COMMAND_CHARS = 8 * 1024;
 const MAX_PARAMS_CHARS = 8 * 1024;
 
 interface ExecutionRow {
@@ -56,6 +60,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
   const { db, config, redis, subscriber } = deps;
   const running = new Map<string, AbortController>();
   const pools = new DatabasePools();
+  const dataTables = new PgDataTableStore(db);
   const queue = new ExecutionQueue(redis);
   const publicUrl = config.publicUrl ?? `http://localhost:${config.port}`;
 
@@ -162,8 +167,32 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       );
     };
 
+    /** Execute Command e SSH: cada comando vai para a Auditoria, em nome de quem disparou. */
+    const onCommand = async (entry: CommandLog) => {
+      workflowName ??= one<{ name: string }>(db, 'SELECT name FROM workflows WHERE id = $1', [workflowId]).then((r) => r?.name ?? null);
+      await audit(db, {
+        userId: triggeredBy,
+        action: 'command',
+        entityType: 'execution',
+        entityId: executionId,
+        entityName: await workflowName,
+        after: {
+          workflowId,
+          node: entry.nodeName,
+          nodeType: entry.nodeType,
+          command: entry.command.slice(0, MAX_COMMAND_CHARS),
+          ...(entry.host ? { host: entry.host } : {}),
+          exitCode: entry.exitCode,
+          durationMs: entry.durationMs,
+          ...(entry.error ? { error: entry.error.slice(0, 2000) } : {}),
+        },
+      });
+    };
+
     return {
       onDatabaseCommand,
+      onCommand,
+      dataTables,
       databases: pools,
       getApiEndpoint: (erpClientId: string, endpointId: string) => loadApiEndpoint(db, config.encryptionKey, erpClientId, endpointId),
       filesDirs: config.filesDirs,

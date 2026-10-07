@@ -15,6 +15,7 @@ const ENTITY_LABEL: Record<string, string> = {
   erp_endpoint: 'Endpoint de ERP',
   erp_client: 'Cliente no ERP',
   file: 'Arquivo',
+  data_table: 'Tabela de dados',
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -32,6 +33,10 @@ const ACTION_LABEL: Record<string, string> = {
   unlock: 'desbloqueou',
   cancel: 'cancelou',
   retry: 'reexecutou',
+  command: 'rodou um comando na',
+  insert_rows: 'inseriu linhas na',
+  update_rows: 'alterou uma linha da',
+  delete_rows: 'apagou linhas da',
 };
 
 export function AuditPage() {

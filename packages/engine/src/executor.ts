@@ -1,7 +1,8 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
 import type { ApiEndpointData } from './catalog.js';
 import { DatabasePools } from './database/drivers.js';
-import type { ConnectionData, DatabaseCommandLog, DatabaseSession, FileData, NodeExecuteContext, NodeType, SubworkflowResult } from './node-types.js';
+import type { CommandLog, ConnectionData, DatabaseCommandLog, DatabaseSession, DataTableStore, FileData, NodeExecuteContext, NodeType, SubworkflowResult } from './node-types.js';
+import { MemoryDataTableStore } from './data-tables.js';
 
 type NodeExecuteContextWait = NodeExecuteContext['putToWait'];
 import { NodeOperationError } from './node-types.js';
@@ -66,6 +67,10 @@ export interface ExecuteOptions {
   resume?: { state: ResumeState; data?: ResumeData };
   /** Resposta para o pedido HTTP que iniciou ou retomou a execução (Respond to Webhook, Form). */
   onResponse?: (response: WebhookResponse) => void;
+  /** Chamado a cada comando do Execute Command e do SSH (auditoria). */
+  onCommand?: (entry: CommandLog) => void | Promise<void>;
+  /** Tabelas de dados (nó Data Table); sem elas, a execução usa tabelas em memória que somem no fim. */
+  dataTables?: DataTableStore;
 }
 
 let sharedPython: PythonRunner | null = null;
@@ -116,6 +121,8 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
   const sandbox = new ExpressionSandbox(options.sandbox);
   // Sem pools compartilhados, a execução usa os seus e fecha no fim.
   const ownPools = options.databases ? null : new DatabasePools();
+  // Sem tabelas do servidor, a execução usa tabelas em memória (testes).
+  options = { ...options, dataTables: options.dataTables ?? new MemoryDataTableStore() };
   const pools = options.databases ?? ownPools!;
 
   // Nós prontos para rodar, com os itens de cada entrada. Nós de várias
@@ -387,6 +394,14 @@ async function runNode(
           putToWait: pause.putToWait,
           resumeData: pause.resumeData,
           sendResponse: (response) => options.onResponse?.(response),
+          logCommand: async (entry) => {
+            try {
+              await options.onCommand?.({ ...entry, nodeName: node.name, nodeType: node.type });
+            } catch {
+              // A auditoria não pode derrubar a execução.
+            }
+          },
+          dataTables: options.dataTables!,
         }),
         signal,
       );

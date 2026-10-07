@@ -42,6 +42,8 @@ Cada usuário tem um **perfil**, que diz o que ele pode fazer, e duas listas que
 
 Se você abrir um fluxo que usa uma conexão de um cliente que você não enxerga, o campo mostra "Conexão sem acesso ou excluída". O fluxo continua rodando normalmente no agendamento; você só não consegue trocar nem ver os dados daquela conexão.
 
+**Execute Command e SSH.** Esses dois nós rodam comandos em servidores, então só o perfil Administrador pode incluir, alterar ou tirar um deles de um fluxo (salvar, importar ou executar um fluxo com essa mudança). Um Editor ainda pode editar o resto do fluxo, desde que não mexa nesses nós. Cada comando executado vai para a Auditoria.
+
 **Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo.
 
 Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...` em cada chamada. Para disparar um fluxo, ele chama `POST /api/workflows/{id}/run` e depois consulta o resultado em `GET /api/executions/{id}`. O menu Referência da API mostra todas as chamadas dentro do Info8n. A mesma lista, com os parâmetros, um exemplo de chamada e um exemplo de resposta de cada uma, está na [documentação da API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9). Para uma integração, crie um usuário só para ela, com o menor perfil que resolve, e gere o token com esse usuário.
@@ -400,6 +402,55 @@ Esperas de mais de 1 minuto **pausam a execução de verdade**: ela fica Esperan
 
 **Read/Write Files from Disk.** Lê e grava arquivos no servidor do Info8n, como o nó Read/Write Files from Disk do n8n. Ele só enxerga as pastas liberadas pelo administrador na variável FILES_DIRS do .env; no Docker a pasta padrão é /files, ligada à pasta arquivos ao lado do docker-compose.yml no computador. Caminhos fora dessas pastas (inclusive com ".." ou por atalhos) são recusados, e um caminho relativo começa na primeira pasta liberada. Em Ler arquivo(s) do disco, informe o caminho ou um padrão com curingas, sempre com "/": * é qualquer nome, ** qualquer subpasta, ? um caractere e {csv,txt} uma das opções (ex.: /files/entrada/**/*.csv). Cada arquivo encontrado vira um item, com o arquivo em Colocar o arquivo no campo (padrão data) e, no JSON, mimeType, fileType, fileName, fileExtension e fileSize; se nada for encontrado, o nó para com erro. Dá para trocar o nome, a extensão e o tipo MIME informados na saída; [ ] e ( ) são tratados como texto, a menos que você desligue a opção para usá-los como classe ([0-9]) ou grupo. Arquivos de até 512 MB. Em Gravar arquivo no disco, informe o Caminho e nome do arquivo (ex.: /files/saida/relatorio.pdf; pastas que faltam são criadas) e o Campo do arquivo de entrada (padrão data); com Acrescentar ao final, o conteúdo vai para o fim de um arquivo que já existe (bom para CSV e log). O item segue com o JSON de entrada mais fileName. Exemplo: Convert to File gera o CSV de vendas e Gravar arquivo no disco salva em /files/relatorios/vendas.csv, que aparece na pasta arquivos/relatorios do computador.
 
+### Servidor e integrações
+
+**Send Email.** Envia e-mail por um servidor SMTP (o da empresa, Outlook/Office 365, Gmail com senha de app e outros), como o nó Send Email do n8n. Cada item vira um e-mail. Use uma conexão SMTP. Campos: De (ex.: `Info8n <automacao@empresa.com.br>`), Para, Cópia (CC) e Cópia oculta (CCO), com vários endereços separados por vírgula, Assunto, Responder para e o Formato: HTML (padrão), Texto ou Os dois, cada um com o seu corpo. Anexos (campos de arquivo) são os nomes dos arquivos do item, separados por vírgula (ex.: `data` ou `attachment_0, attachment_1`); se o item não tiver o arquivo, o nó dá erro dizendo quais arquivos ele tem. Aceitar certificado inválido serve para servidores internos com certificado próprio. Devolve o que o servidor respondeu: messageId, accepted (quem aceitou), rejected e response. Se o servidor recusar, o erro começa com "O servidor SMTP não aceitou o e-mail". Exemplo: depois do Convert to File com a planilha do dia, Send Email com Para financeiro@empresa.com.br e Anexos `data`.
+
+**FTP.** Lista, baixa, envia, renomeia e apaga arquivos num servidor FTP ou SFTP, como o nó FTP do n8n. O protocolo vem da conexão: escolha uma conexão FTP (com FTPS opcional) ou SFTP. Operações:
+
+- **Baixar arquivo:** Caminho do arquivo no servidor (ex.: `/saida/pedidos.csv`); o arquivo vai para o Campo do arquivo (padrão `data`), com o JSON do item de entrada.
+- **Enviar arquivo:** Caminho no servidor com o nome do arquivo (ex.: `/entrada/notas/nf123.xml`; as pastas que faltam são criadas). Com Enviar arquivo do item (padrão), manda o arquivo do Campo do arquivo; desligado, manda o texto de Conteúdo.
+- **Listar pasta:** um item por arquivo ou pasta, com type (`-` arquivo, `d` pasta, `l` atalho), name, size, modifyTime e path. Com Incluir subpastas, entra nas subpastas e devolve só os arquivos.
+- **Renomear ou mover:** Caminho atual e Caminho novo; Criar as pastas que faltarem cria o destino.
+- **Apagar:** um arquivo, ou uma pasta com É uma pasta (vazia, ou com Apagar o que tem dentro).
+
+Exemplo: Listar pasta em `/retorno` com um Filter por `name` terminando em `.ret`, depois Baixar arquivo com o Caminho `{{ $json.path }}` e Extract from File.
+
+**SSH.** Roda comandos e envia ou baixa arquivos num servidor por SSH, como o nó SSH do n8n. Use uma conexão SSH, com senha, chave privada ou as duas. No recurso Comando, Rodar comando executa o Comando na Pasta onde rodar (padrão `/`) e devolve code (código de saída), signal, stdout e stderr; um código diferente de 0 não é erro, confira code no próximo nó. No recurso Arquivo, Enviar arquivo grava o arquivo do Campo do arquivo na pasta do Caminho, com o Nome do arquivo no servidor (vazio usa o nome do arquivo do item), e Baixar arquivo traz o arquivo do Caminho para o Campo do arquivo. **Só o perfil Administrador pode criar ou alterar este nó**, e cada comando executado fica registrado na Auditoria.
+
+**Execute Command.** Roda um comando no servidor do Info8n (no Docker, dentro do container do app, com sh), como o nó Execute Command do n8n. Com Rodar uma vez só (padrão) roda uma vez; desligado, roda uma vez por item, com as expressões daquele item. Devolve exitCode, stdout e stderr. Se o comando terminar com código diferente de 0, o nó dá erro com o código e a última linha de stderr. A saída pode ter até 64 MB; um comando que não termina segue rodando até a execução ser cancelada. **Só o perfil Administrador pode criar ou alterar este nó**, e cada comando executado fica registrado na Auditoria.
+
+**Git.** Clona, puxa, faz commit e push em repositórios Git, como o nó Git do n8n. A Pasta do repositório precisa estar dentro das pastas liberadas em FILES_DIRS (no Docker, `/files`, ex.: `/files/repos/relatorios`). Em Login, Sem login serve para repositórios públicos ou locais; Usuário e senha (ou token) usa uma conexão Git e vale para endereços `https://` (no GitHub e no GitLab, use um token de acesso pessoal no lugar da senha). Operações:
+
+- **Clonar:** Repositório de origem (ex.: `https://github.com/empresa/relatorios.git`) para a Pasta do repositório, que é criada.
+- **Adicionar arquivos (add)** e **Commit:** Arquivos separados por vírgula (ex.: `relatorio.csv, pasta/` ou `.`). No Commit, Mensagem é obrigatória e Arquivos vazio faz o commit do que já foi adicionado.
+- **Buscar do remoto (fetch)**, **Puxar (pull)**, **Enviar (push)** (Repositório de destino e Branch opcionais; vazios usam o remoto e a branch configurados) e **Enviar tags**.
+- **Situação (status):** devolve current (branch), tracking, ahead, behind, detached, files (cada um com path e as letras do git status), staged, modified, not_added, created, deleted, renamed e conflicted.
+- **Histórico (log):** um item por commit, com hash, date, message, refs, body, author_name e author_email; Só deste arquivo filtra pelo arquivo.
+- **Criar tag**, **Trocar de branch** (Criar a branch e A partir de opcionais), **Configurar usuário** (Nome e E-mail dos commits), **Adicionar configuração** e **Listar configuração**.
+
+Por segurança, os ganchos (hooks) do repositório não rodam, e Adicionar configuração só aceita user.name, user.email, remote.<nome>.url, branch.<nome>.remote/merge/rebase, pull.rebase, pull.ff, push.default, push.autoSetupRemote, init.defaultBranch, core.autocrlf, commit.gpgsign e fetch.prune. Os nós de gravar arquivos não gravam dentro da pasta `.git`. Exemplo: Write Files from Disk grava `/files/repos/relatorios/vendas.csv`, e um Git com Commit (Arquivos `vendas.csv`, Mensagem `Vendas de {{ new Date().toLocaleDateString('pt-BR') }}`) e depois Enviar (push) publica no repositório.
+
+**RSS Read.** Lê os itens de um feed RSS ou Atom, uma vez por item que chega, como o nó RSS Read do n8n. Informe a URL do feed; Ignorar erros de certificado (SSL) serve para feeds internos. Cada notícia vira um item, com title, link, pubDate, isoDate, content, contentSnippet, creator e guid. Para disparar um fluxo quando sai notícia nova, use o gatilho RSS Feed Trigger.
+
+**Info8n (API).** Usa a API do próprio Info8n de dentro de um fluxo, como o nó n8n do n8n. Use uma conexão API do Info8n, com um token criado em Minha conta, Tokens de API; o nó faz só o que o dono do token pode fazer. Endereço do Info8n vazio usa este Info8n (PUBLIC_URL). Recursos e operações:
+
+- **Fluxo:** Listar (Só os ativos, Nome contém, Trazer todos ou Quantidade), Buscar, Criar e Alterar (Fluxo em JSON, com name, folderId e definition; no Alterar, o que ficar de fora mantém o atual), Excluir, Ativar, Desativar e Executar (Itens de entrada em JSON, uma lista de objetos; devolve o ID da execução, que roda na fila).
+- **Execução:** Listar (Do fluxo e Situação), Buscar, Executar de novo e Cancelar.
+- **Conexão:** Listar, Criar (Nome, Tipo de conexão, Cliente e Dados em JSON com os campos do tipo), Excluir e Tipos de conexão (os campos de cada tipo).
+
+Exemplo: um fluxo agendado lista as execuções com Situação Erro do último dia e manda um resumo por e-mail.
+
+**Data Table.** Lê e grava as tabelas de dados do Info8n (veja [Tabelas de dados](#tabelas-de-dados)), como o nó Data Table do n8n. Escolha a Tabela na lista (numa expressão, o ID ou o nome dela). No recurso Linha:
+
+- **Inserir linha:** Dados da linha com Campos do item com o nome das colunas (os campos que não são colunas ficam de fora) ou Informar coluna por coluna. Devolve a linha gravada, com id, createdAt e updatedAt.
+- **Buscar linhas:** as linhas que atendem às Condições (vazias trazem todas), com Trazer todas ou Quantidade (padrão 50), Ordenar por e Ordem.
+- **Atualizar linhas** e **Atualizar ou inserir:** mudam as linhas que atendem às Condições com os Dados da linha; o segundo insere uma linha nova quando nenhuma atende. Devolvem as linhas gravadas.
+- **Apagar linhas:** apaga as que atendem às Condições e devolve as linhas apagadas; Só simular mostra quais seriam apagadas, sem apagar.
+- **Se a linha existe** e **Se a linha não existe:** deixam passar o item de entrada só quando alguma linha atende (ou nenhuma atende). Servem para não processar duas vezes o mesmo pedido.
+
+As Condições têm coluna, condição (É igual a, É diferente de, Parece com, com % como curinga, com ou sem diferenciar maiúsculas, Maior que, Maior ou igual a, Menor que, Menor ou igual a, Está vazio, Não está vazio, É verdadeiro, É falso) e valor, e Linhas que atendem a escolhe Todas as condições ou Qualquer condição. Atualizar, Atualizar ou inserir e Apagar exigem pelo menos uma condição, para não mexer na tabela inteira por engano. No recurso Tabela: Criar tabela (Nome da tabela, Colunas e Usar a tabela se já existir), Listar tabelas (Nome contém), Renomear tabela e Excluir tabela. Exemplo: um Se a linha não existe com a condição pedido É igual a `{{ $json.numero }}` antes de lançar o pedido no ERP e, depois, um Inserir linha com o número, para o mesmo pedido nunca ser lançado duas vezes.
+
 ### Nó do n8n não convertido
 
 Aparece quando um fluxo importado do n8n tem um nó sem equivalente aqui. Ele guarda o tipo e a configuração original para consulta. Substitua-o por outros nós: o fluxo não pode ser ativado enquanto ele existir.
@@ -447,8 +498,14 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 | Gmail (login com Google) | Client ID e client secret do app do Google Cloud, e o botão Conectar com Google | Gmail |
 | TOTP (código de dois fatores) | Chave secreta em base32 e identificação opcional | TOTP |
 | Chave privada (assinatura) | Chave privada no formato PEM, colada com as quebras de linha | Crypto, operação Assinar |
+| SMTP (envio de e-mail) | Servidor, porta (465 com SSL/TLS; 587 ou 25 sem), SSL/TLS, desligar STARTTLS, usuário e senha (vazios enviam sem login), nome deste servidor (EHLO) | Send Email |
+| FTP | Servidor, porta (21), usuário (vazio entra como anonymous), senha, FTPS e aceitar certificado inválido | FTP |
+| SFTP | Servidor, porta (22), usuário, senha e/ou chave privada (com a senha da chave) | FTP |
+| SSH | Servidor, porta (22), usuário, senha e/ou chave privada (com a senha da chave) | SSH |
+| Git (usuário e senha ou token) | Usuário e senha ou token de acesso pessoal | Git |
+| API do Info8n | Token da API (de Minha conta) e endereço do Info8n (vazio é este) | Info8n (API) |
 
-- **Testar conexão:** bancos, Metabase, ClickUp e Gmail têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
+- **Testar conexão:** bancos, Metabase, ClickUp, Gmail, SMTP, FTP, SFTP e SSH têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
 - **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual.
 - **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
@@ -513,6 +570,18 @@ Escolha o cliente, um ambiente opcional (para ter o mesmo cliente duas vezes, co
 
 Criar e alterar ERPs, endpoints e clientes nos ERPs exige perfil Editor ou Administrador; todos os perfis podem consultar o catálogo.
 
+## Tabelas de dados
+
+Tabelas simples guardadas no próprio Info8n, para os fluxos lerem e gravarem com o nó Data Table, sem precisar de um banco de cliente: controle do que já foi processado, de-para de códigos, parâmetros que mudam de vez em quando. Ficam no menu **Tabelas de dados**. Todos os usuários veem as tabelas; Administrador e Editor criam, alteram e apagam.
+
+- **Criar:** Nova tabela, com o nome e as colunas. Cada coluna tem nome (letras, números e _, começando por letra ou _) e tipo: Texto, Número, Sim/não ou Data. Toda linha também tem id (número sequencial), createdAt e updatedAt, que o Info8n preenche.
+- **Ver e editar as linhas:** clique no nome da tabela. A tela mostra 100 linhas por página, ordenadas por id (clique no id para inverter). Filtre por uma coluna com uma condição e um valor. Clique numa célula para alterar o valor (Enter salva, Esc cancela), use Nova linha para incluir e marque as linhas para apagar.
+- **Nome e colunas:** troca o nome da tabela, inclui e tira colunas. Tirar uma coluna apaga os valores dela. O tipo de uma coluna que já existe não muda: crie outra coluna. Trocar o nome não quebra os fluxos que escolheram a tabela na lista, porque eles guardam o ID.
+- **Excluir tabela:** apaga a tabela e todas as linhas.
+- **Limites:** até 1 milhão de linhas por tabela e 200 colunas.
+
+Toda criação, alteração e exclusão de tabelas e linhas feita na tela ou pela API fica na Auditoria. As gravações feitas pelos fluxos não vão para a Auditoria; elas aparecem na execução.
+
 ## Execuções, Comandos SQL e Auditoria
 
 ### Execuções
@@ -560,6 +629,8 @@ Todo comando que o nó Banco de dados executa num banco de cliente fica registra
 ### Auditoria
 
 Só para administradores. Registra quem fez o quê, quando e de qual IP: login, criação, alteração, exclusão, ativação, duplicação, importação e reexecução de fluxos, além de mudanças em conexões, usuários, pastas, clientes, ERPs e tokens de API. Nas alterações, mostra o antes e o depois; senhas e tokens nunca aparecem. Filtre pelo tipo de registro.
+
+Também ficam aqui, como "rodou um comando na execução", os comandos dos nós Execute Command e SSH: o fluxo, o nó, o comando, o servidor (no SSH), o código de saída, a duração e o erro, com quem disparou a execução (vazio nas agendadas). E, no tipo Tabela de dados, a criação, a alteração e a exclusão de tabelas e as linhas inseridas, alteradas e apagadas pela tela ou pela API.
 
 ## Administração: usuários e pastas
 
@@ -618,6 +689,10 @@ Uma forma simples de organizar é uma pasta por área ou por cliente, e marcar e
 | Code em Python com \_items ou .to\_py() | Use \_input.all() e \_json; os itens já são dicionários. Só a biblioteca padrão do Python |
 | Code em JavaScript com require() | Não existe |
 | Execute Workflow sem esperar | Sempre espera o subfluxo terminar |
+| Send Email, FTP, SSH, Execute Command, Git, RSS Read e Data Table | Existem, com as operações do n8n. As credenciais viram conexões; cadastre e escolha no nó depois de importar. Execute Command e SSH só o Administrador importa e edita |
+| Send Email com Enviar e esperar resposta | Não existe; a importação marca o nó como não convertido |
+| Nó n8n (API do n8n) | Vira o Info8n (API), com uma conexão API do Info8n. Auditoria e Excluir execução não existem |
+| Data Tables | As tabelas não vêm na importação: crie em Tabelas de dados com o mesmo nome e as mesmas colunas, e a importação avisa. O nó encontra a tabela pelo nome |
 | Gmail | Mesmas operações principais; excluir e-mail vira mover para a lixeira. Escolha a conexão do Gmail depois de importar. Anexos de dados binários e o prefixo dos anexos baixados são convertidos |
 
 A importação mostra esses pontos fluxo por fluxo, e o que não tem equivalente vira um nó do n8n não convertido, que impede a ativação até ser substituído. O importador ainda aponta .toJsonString() como incompatível; esse aviso pode ser ignorado.

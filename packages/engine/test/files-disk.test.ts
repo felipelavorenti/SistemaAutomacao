@@ -356,6 +356,8 @@ describe('Read/Write Files from Disk', () => {
     expect(await failure('readWriteFile', { operation: 'write', fileName: '../fora/novo.txt' }, [item], [root])).toMatch(/fora das pastas liberadas/);
     expect(await failure('readWriteFile', { operation: 'write', fileName: 'atalho/novo.txt' }, [item], [root])).toMatch(/fora das pastas liberadas/);
     expect(await failure('readWriteFile', { operation: 'write', fileName: 'x.txt' }, [item], [])).toMatch(/FILES_DIRS/);
+    expect(await failure('readWriteFile', { operation: 'write', fileName: 'repo/.git/hooks/pre-commit' }, [item], [root])).toMatch(/pasta \.git/);
+    expect(await failure('readWriteFile', { operation: 'write', fileName: 'repo/.GIT/config' }, [item], [root])).toMatch(/pasta \.git/);
   });
 
   it('grava, cria a pasta, acrescenta e devolve o item com fileName', async () => {

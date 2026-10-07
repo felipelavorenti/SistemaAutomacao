@@ -44,3 +44,18 @@ export {
   type IncomingWebhook,
 } from './nodes/webhook.js';
 export { pollTimesToCrons } from './nodes/triggers-listen.js';
+export {
+  coerceColumnValue,
+  coerceRow,
+  DATA_TABLE_COLUMN_TYPES,
+  DATA_TABLE_CONDITIONS,
+  DATA_TABLE_SYSTEM_COLUMNS,
+  DATA_TABLE_UNARY_CONDITIONS,
+  filterColumn,
+  matchesFilter,
+  MemoryDataTableStore,
+  normalizeFilter,
+  validateColumns,
+} from './data-tables.js';
+/** Nós que só o perfil Administrador pode criar ou alterar (rodam comandos). */
+export const ADMIN_ONLY_NODE_TYPES = ['executeCommand', 'ssh'];

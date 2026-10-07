@@ -17,6 +17,13 @@ import { fileConvertNodes } from './nodes/files-convert.js';
 import { fileDiskNodes } from './nodes/files-disk.js';
 import { webhookNodes } from './nodes/webhook.js';
 import { listenTriggerNodes } from './nodes/triggers-listen.js';
+import { emailSend } from './nodes/email-send.js';
+import { ftp } from './nodes/ftp.js';
+import { ssh } from './nodes/ssh.js';
+import { executeCommand, rssFeedRead } from './nodes/execute-command.js';
+import { gitNode } from './nodes/git.js';
+import { info8nApi } from './nodes/info8n-api.js';
+import { dataTable } from './nodes/data-table.js';
 
 export class NodeRegistry {
   private types = new Map<string, NodeType>();
@@ -63,5 +70,13 @@ export const defaultRegistry = new NodeRegistry([
   ...fileDiskNodes,
   ...webhookNodes,
   ...listenTriggerNodes,
+  emailSend,
+  ftp,
+  ssh,
+  executeCommand,
+  gitNode,
+  rssFeedRead,
+  info8nApi,
+  dataTable,
   n8nUnsupported,
 ]);

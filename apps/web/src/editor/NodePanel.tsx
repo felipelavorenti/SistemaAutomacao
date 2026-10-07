@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { resolveOutputs, type ApiCatalog, type ConnectionItem, type Item, type JsonValue, type NodeInstance, type NodeRun, type NodeSettings, type NodeTypeDescription, type WorkflowListItem } from '../api';
+import { resolveOutputs, type ApiCatalog, type ConnectionItem, type Item, type JsonValue, type NodeInstance, type NodeRun, type NodeSettings, type NodeTypeDescription, type PropertyDescription, type WorkflowListItem } from '../api';
 import { BinaryFiles, ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
 import { Icon, NODE_COLOR } from '../components/icons';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
@@ -63,7 +63,17 @@ export function NodePanel({
 
   const otherOutputs = Object.entries(previewOutputs).filter(([n, items]) => n !== node.name && items.length);
 
-  const setParam = (key: string, value: JsonValue) => onChange({ ...node, parameters: { ...node.parameters, [key]: value } });
+  const setParam = (key: string, value: JsonValue) => {
+    const parameters = { ...node.parameters, [key]: value };
+    // Trocar o recurso pode esconder a operação escolhida: passa para a primeira que vale.
+    const merged = { ...values, [key]: value };
+    for (const p of description?.properties ?? []) {
+      if (p.type !== 'options' || !p.options?.some((o) => o.showWhen) || !isVisible(p, merged)) continue;
+      const visible = p.options.filter((o) => isVisible(o, merged));
+      if (visible.length && !visible.some((o) => o.value === merged[p.name])) parameters[p.name] = merged[p.name] = visible[0].value;
+    }
+    onChange({ ...node, parameters });
+  };
   const setSetting = <K extends keyof NodeSettings>(key: K, value: NodeSettings[K]) => onChange({ ...node, settings: { ...node.settings, [key]: value } });
 
   const commitName = () => {
@@ -133,6 +143,9 @@ export function NodePanel({
           {tab === 'params' && (
             <div className="panel-body">
               <TriggerUrls node={node} />
+              {(node.type === 'executeCommand' || node.type === 'ssh') && (
+                <p className="muted small">Só o perfil Administrador pode criar ou alterar este nó. Cada comando executado fica registrado na Auditoria.</p>
+              )}
               {(node.type === 'manualTrigger' || node.type === 'executeWorkflowTrigger') && (
                 <Field label="JSON de entrada para testes" hint="Usado quando você clica em Executar no editor. Não é salvo no fluxo.">
                   <textarea className="code" rows={5} value={testInput} onChange={(e) => onTestInputChange(e.target.value)} placeholder='{ "sku": "123" }' />
@@ -141,7 +154,7 @@ export function NodePanel({
               {description?.properties
                 .filter((p) => isVisible(p, values))
                 .map((p) => (
-                  <ParameterField key={p.name} prop={p} value={values[p.name]} onChange={(v) => setParam(p.name, v)} ctx={ctx} />
+                  <ParameterField key={p.name} prop={visibleOptions(p, values)} value={values[p.name]} onChange={(v) => setParam(p.name, v)} ctx={ctx} />
                 ))}
               {description && !description.properties.length && description.group !== 'trigger' && <p className="muted">Este nó não tem parâmetros.</p>}
               {node.type === 'executeWorkflowTrigger' && (
@@ -272,4 +285,10 @@ function TriggerUrls({ node }: { node: NodeInstance }) {
       ))}
     </div>
   );
+}
+
+/** Tira da lista as opções escondidas pelo showWhen delas (ex.: as operações de outro recurso). */
+function visibleOptions(prop: PropertyDescription, values: Record<string, JsonValue>): PropertyDescription {
+  if (!prop.options?.some((o) => o.showWhen)) return prop;
+  return { ...prop, options: prop.options.filter((o) => isVisible(o, values)) };
 }

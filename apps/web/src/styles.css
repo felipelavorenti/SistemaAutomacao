@@ -105,7 +105,8 @@ textarea.code,
 }
 
 button,
-label.button {
+label.button,
+a.button {
   border: 1px solid var(--border);
   background: var(--surface);
   border-radius: var(--radius);
@@ -124,7 +125,8 @@ label.button {
     color 0.15s;
 }
 button:hover:not(:disabled),
-label.button:hover {
+label.button:hover,
+a.button:hover {
   background: var(--surface-2);
   border-color: var(--border-strong);
 }
@@ -1459,4 +1461,56 @@ textarea.code-editor {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Tabelas de dados */
+a.button {
+  color: var(--text);
+  text-decoration: none;
+}
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+table.data-grid th,
+table.data-grid td {
+  padding: 6px 10px;
+  white-space: nowrap;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+table.data-grid td.editable {
+  cursor: text;
+}
+table.data-grid td.editable:hover {
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -2px;
+}
+table.data-grid td input {
+  width: 100%;
+  min-width: 120px;
+}
+.pager {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.inline-form.grid-filter {
+  max-width: none;
+  flex-wrap: wrap;
+}
+.grid-filter select,
+.grid-filter input {
+  width: auto;
+  min-width: 160px;
+}
+table.data-grid .check {
+  width: 36px;
+}
+table.data-grid .check input {
+  width: auto;
+  min-width: 0;
 }

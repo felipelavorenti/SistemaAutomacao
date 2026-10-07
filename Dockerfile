@@ -12,8 +12,8 @@ RUN npm run build && npm prune --omit=dev
 
 # Etapa final: só o necessário para rodar.
 FROM node:22-bookworm-slim
-# Fontes para o nó Edit Image escrever texto nas imagens.
-RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig && rm -rf /var/lib/apt/lists/*
+# Fontes para o nó Edit Image escrever texto nas imagens; git e ssh para o nó Git.
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-dejavu-core fontconfig git openssh-client ca-certificates && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production WEB_DIST_DIR=/app/apps/web/dist
 WORKDIR /app
 COPY --from=build /app/node_modules node_modules

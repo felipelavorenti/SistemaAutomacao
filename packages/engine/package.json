@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "basic-ftp": "^6.2.2",
     "cheerio": "^1.2.0",
     "chokidar": "^5.0.0",
     "csv-parse": "^7.0.3",
@@ -27,6 +28,7 @@
     "mailparser": "^3.9.36",
     "mssql": "^12.7.2",
     "node-html-markdown": "^2.0.0",
+    "nodemailer": "^10.0.16",
     "oracledb": "^7.0.1",
     "otpauth": "^9.5.2",
     "pdfjs-dist": "^6.4.299",
@@ -36,6 +38,8 @@
     "rss-parser": "^3.13.0",
     "sharp": "^0.35.5",
     "showdown": "^2.1.0",
+    "ssh2": "^1.17.0",
+    "ssh2-sftp-client": "^12.1.1",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
@@ -43,10 +47,13 @@
     "@types/mailparser": "^3.9.0",
     "@types/mssql": "^12.3.0",
     "@types/node": "^22.10.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/oracledb": "^7.0.3",
     "@types/pg": "^8.23.1",
     "@types/picomatch": "^4.0.3",
     "@types/showdown": "^2.0.6",
+    "@types/ssh2": "^1.15.6",
+    "@types/ssh2-sftp-client": "^9.0.6",
     "@types/xml2js": "^0.4.14",
     "typescript": "^5.6.0",
     "vitest": "^3.2.0"

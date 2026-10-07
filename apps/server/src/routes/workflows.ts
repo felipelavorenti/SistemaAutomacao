@@ -2,7 +2,7 @@ import { CronExpressionParser } from 'cron-parser';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
-import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, scheduleRepeat, ScheduleError, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
+import { ADMIN_ONLY_NODE_TYPES, convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, scheduleRepeat, ScheduleError, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
 import { currentUser, type RouteDeps } from '../app.js';
 import { activatableTypes, isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
@@ -38,6 +38,34 @@ export const definitionSchema = z.object({
 }) as unknown as z.ZodType<WorkflowDefinition>;
 
 const idParam = z.object({ id: z.string().uuid() });
+
+/** JSON com as chaves em ordem, para comparar parâmetros. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Execute Command e SSH rodam comandos: só o Administrador cria ou altera esses nós. Os outros perfis
+ * podem salvar o fluxo se esses nós ficarem iguais aos da versão salva (ou forem removidos).
+ */
+export function checkAdminNodes(user: CurrentUser, definition: WorkflowDefinition, base?: WorkflowDefinition): void {
+  if (user.role === 'admin') return;
+  const signature = (n: WorkflowDefinition['nodes'][number]) => stableJson({ type: n.type, parameters: n.parameters, disabled: n.disabled === true });
+  for (const node of definition.nodes) {
+    if (!ADMIN_ONLY_NODE_TYPES.includes(node.type)) continue;
+    const before = base?.nodes.find((n) => n.id === node.id);
+    if (!before || signature(before) !== signature(node)) {
+      throw forbidden(`Só o perfil Administrador pode criar ou alterar o nó "${node.name}" (Execute Command e SSH rodam comandos no servidor)`);
+    }
+  }
+}
 
 interface WorkflowRow {
   id: string;
@@ -225,6 +253,7 @@ export const workflowRoutes =
         nodes: [{ id: 'gatilho', name: 'Gatilho manual', type: 'manualTrigger', position: { x: 100, y: 200 }, parameters: {} }],
         connections: [],
       };
+      checkAdminNodes(user, definition);
       await checkConnections(user, definition);
       await checkSubworkflows(user, definition);
       await checkErrorWorkflow(user, definition);
@@ -258,6 +287,7 @@ export const workflowRoutes =
       if (b.baseVersion !== undefined && b.baseVersion !== before.version) {
         throw new HttpError(409, 'Outra pessoa salvou este fluxo enquanto você editava. Recarregue para ver a versão atual.');
       }
+      checkAdminNodes(user, b.definition, before.definition);
       await checkConnections(user, b.definition);
       await checkSubworkflows(user, b.definition, id);
       checkSchedule(b.definition, before.active);
@@ -433,6 +463,7 @@ export const workflowRoutes =
       requireCap(user, 'workflow:edit');
       const b = z.object({ name: z.string().trim().min(1), folderId: z.string().uuid(), definition: definitionSchema }).parse(request.body);
       checkFolder(user, b.folderId);
+      checkAdminNodes(user, b.definition);
       await checkConnections(user, b.definition);
       await checkSubworkflows(user, b.definition);
       const row = await one<{ id: string }>(
@@ -489,6 +520,7 @@ export const workflowRoutes =
           }
           if (n8nId && results.some((r) => r.n8nId === n8nId)) continue;
           const converted = convertN8nWorkflow(wf, { workflowId: (id) => known.get(id) ?? fresh.get(id) });
+          checkAdminNodes(user, converted.definition);
           const id = (n8nId && fresh.get(n8nId)) || randomUUID();
           await tx.query(
             `INSERT INTO workflows (id, name, folder_id, definition, n8n_id, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $6)`,
@@ -531,6 +563,7 @@ export const workflowRoutes =
       const wf = await load(user, id);
       if (b.definition) {
         requireCap(user, 'workflow:edit');
+        checkAdminNodes(user, b.definition, wf.definition);
         await checkConnections(user, b.definition);
         await checkSubworkflows(user, b.definition, id);
       }
@@ -561,6 +594,7 @@ export const workflowRoutes =
       const wf = await load(user, id);
       if (b.definition) {
         requireCap(user, 'workflow:edit');
+        checkAdminNodes(user, b.definition, wf.definition);
         await checkConnections(user, b.definition);
         await checkSubworkflows(user, b.definition, id);
       }

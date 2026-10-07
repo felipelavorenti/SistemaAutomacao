@@ -22,7 +22,9 @@ export type PropertyType =
   /** Data e hora aaaa-mm-ddThh:mm:ss. */
   | 'dateTime'
   /** Arquivo enviado pela tela e guardado no servidor (valor: o ID do arquivo). */
-  | 'file';
+  | 'file'
+  /** Tabela de dados do Info8n (valor: o ID da tabela). */
+  | 'dataTable';
 
 /** Descreve um campo de configuração do nó; o editor monta o formulário a partir disso. */
 export interface PropertyDescription {
@@ -33,7 +35,8 @@ export interface PropertyDescription {
   description?: string;
   placeholder?: string;
   required?: boolean;
-  options?: { name: string; value: string }[];
+  /** Opções; uma opção com showWhen só aparece quando os outros campos batem (ex.: a operação de cada recurso). */
+  options?: { name: string; value: string; showWhen?: Record<string, JsonValue[]> }[];
   /** Tipos de conexão aceitos, para campos do tipo "connection". */
   connectionTypes?: string[];
   /** Campos de cada linha, para campos do tipo "list" (ex.: headers). */
@@ -160,6 +163,81 @@ export interface NodeExecuteContext {
   resumeData?: ResumeData;
   /** Responde o pedido HTTP que iniciou (ou retomou) a execução: Respond to Webhook e Form. */
   sendResponse(response: WebhookResponse): void;
+  /** Registra na auditoria um comando rodado no servidor (Execute Command) ou por SSH. */
+  logCommand(entry: Omit<CommandLog, 'nodeName' | 'nodeType'>): Promise<void>;
+  /** Tabelas de dados guardadas no Info8n (nó Data Table). */
+  dataTables: DataTableStore;
+}
+
+/** Comando rodado pelo Execute Command ou pelo SSH, para a auditoria. */
+export interface CommandLog {
+  nodeName: string;
+  nodeType: string;
+  command: string;
+  /** Servidor do SSH (usuário@host:porta); vazio no Execute Command. */
+  host?: string;
+  exitCode: number | null;
+  durationMs: number;
+  error?: string;
+}
+
+export type DataTableColumnType = 'string' | 'number' | 'boolean' | 'date';
+
+export interface DataTableColumn {
+  name: string;
+  type: DataTableColumnType;
+}
+
+export interface DataTableInfo {
+  id: string;
+  name: string;
+  columns: DataTableColumn[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type DataTableConditionType = 'eq' | 'neq' | 'like' | 'ilike' | 'gt' | 'gte' | 'lt' | 'lte' | 'isEmpty' | 'isNotEmpty' | 'isTrue' | 'isFalse';
+
+export interface DataTableCondition {
+  /** Coluna da tabela, ou id, createdAt e updatedAt. */
+  column: string;
+  condition: DataTableConditionType;
+  value?: JsonValue;
+}
+
+export interface DataTableFilter {
+  /** and: todas as condições; or: qualquer uma. */
+  type: 'and' | 'or';
+  conditions: DataTableCondition[];
+}
+
+export interface DataTableQuery {
+  filter?: DataTableFilter;
+  /** Sem limite: todas as linhas. */
+  limit?: number;
+  orderBy?: string;
+  orderDirection?: 'asc' | 'desc';
+}
+
+/**
+ * Acesso às tabelas de dados. As linhas voltam como no n8n: { id, ...colunas, createdAt, updatedAt }.
+ * Valores de coluna são convertidos para o tipo da coluna; colunas que não existem dão erro.
+ */
+export interface DataTableStore {
+  list(options?: { name?: string; limit?: number }): Promise<DataTableInfo[]>;
+  /** Pelo ID ou pelo nome. */
+  get(idOrName: string): Promise<DataTableInfo>;
+  create(name: string, columns: DataTableColumn[]): Promise<DataTableInfo>;
+  rename(id: string, name: string): Promise<DataTableInfo>;
+  delete(id: string): Promise<void>;
+  insertRows(tableId: string, rows: JsonObject[]): Promise<JsonObject[]>;
+  getRows(tableId: string, query: DataTableQuery): Promise<JsonObject[]>;
+  /** Atualiza as linhas do filtro; devolve as linhas já atualizadas. */
+  updateRows(tableId: string, filter: DataTableFilter, data: JsonObject): Promise<JsonObject[]>;
+  /** Atualiza as linhas do filtro ou, sem nenhuma, insere uma linha com os dados. */
+  upsertRow(tableId: string, filter: DataTableFilter, data: JsonObject): Promise<JsonObject[]>;
+  /** Apaga as linhas do filtro e devolve como estavam; com dryRun, só devolve. */
+  deleteRows(tableId: string, filter: DataTableFilter, dryRun?: boolean): Promise<JsonObject[]>;
 }
 
 /** O que um gatilho que escuta (IMAP, arquivo, SSE) ou consulta (RSS) recebe enquanto o fluxo está ativo. */

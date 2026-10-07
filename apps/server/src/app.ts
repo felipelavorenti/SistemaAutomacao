@@ -20,6 +20,8 @@ import { fileRoutes } from './routes/files.js';
 import { OAUTH_CALLBACK_PATH, oauthRoutes } from './routes/oauth.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { workflowRoutes } from './routes/workflows.js';
+import { dataTableRoutes } from './routes/data-tables.js';
+import { NodeOperationError } from '@sa/engine';
 
 export interface AppDeps {
   db: Db;
@@ -83,6 +85,10 @@ export async function buildApp(appDeps: AppDeps): Promise<FastifyInstance> {
     if (error instanceof HttpError) {
       return reply.status(error.statusCode).send({ error: error.message, details: error.details });
     }
+    // Regras do motor (ex.: tabelas de dados): coluna que não existe, valor do tipo errado.
+    if (error instanceof NodeOperationError) {
+      return reply.status(400).send({ error: error.message });
+    }
     if (error instanceof ZodError) {
       return reply.status(400).send({ error: 'Dados inválidos', details: error.issues });
     }
@@ -104,6 +110,7 @@ export async function buildApp(appDeps: AppDeps): Promise<FastifyInstance> {
   await app.register(dbCommandRoutes(deps), { prefix: '/api' });
   await app.register(oauthRoutes(deps), { prefix: '/api' });
   await app.register(fileRoutes(deps), { prefix: '/api' });
+  await app.register(dataTableRoutes(deps), { prefix: '/api' });
 
   // Avisos das execuções para os webhooks e formulários: conexão Redis criada no primeiro uso.
   let events: ExecutionEvents | null = null;

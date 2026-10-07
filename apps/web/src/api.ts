@@ -77,13 +77,14 @@ export interface PropertyDescription {
     | 'multiOptions'
     | 'time'
     | 'dateTime'
-    | 'file';
+    | 'file'
+    | 'dataTable';
   multiline?: boolean;
   default: JsonValue;
   description?: string;
   placeholder?: string;
   required?: boolean;
-  options?: { name: string; value: string }[];
+  options?: { name: string; value: string; showWhen?: Record<string, JsonValue[]> }[];
   connectionTypes?: string[];
   fields?: PropertyDescription[];
   showWhen?: Record<string, JsonValue[]>;
@@ -520,3 +521,29 @@ export interface DbCommand {
   error: string | null;
   triggered_by_name: string | null;
 }
+
+export type DataTableColumnType = 'string' | 'number' | 'boolean' | 'date';
+
+export interface DataTableColumn {
+  name: string;
+  type: DataTableColumnType;
+}
+
+export interface DataTable {
+  id: string;
+  name: string;
+  columns: DataTableColumn[];
+  createdAt: string;
+  updatedAt: string;
+  rowCount: number;
+}
+
+/** Linha de uma tabela de dados: id, os valores por coluna, createdAt e updatedAt. */
+export type DataTableRow = { id: number; createdAt: string; updatedAt: string } & Record<string, JsonValue>;
+
+export const DATA_TABLE_TYPE_LABEL: Record<DataTableColumnType, string> = {
+  string: 'Texto',
+  number: 'Número',
+  boolean: 'Sim/não',
+  date: 'Data',
+};
