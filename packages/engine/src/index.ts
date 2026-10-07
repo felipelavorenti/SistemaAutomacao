@@ -1,7 +1,7 @@
 export * from './types.js';
 export * from './node-types.js';
 export { NodeRegistry, defaultRegistry } from './registry.js';
-export { closeDefaultPythonRunner, defaultPythonRunner, executeWorkflow, type ExecuteOptions } from './executor.js';
+export { closeDefaultPythonRunner, defaultPythonRunner, executeWorkflow, executionUrls, type ExecuteOptions } from './executor.js';
 export { PythonRunner, type PythonRunnerOptions } from './python/runner.js';
 export { CodeError, ExpressionSandbox, ExpressionScope, ExpressionError, type ExpressionData } from './expressions/sandbox.js';
 export { isExpression, parseTemplate, TemplateSyntaxError } from './expressions/template.js';
@@ -34,3 +34,13 @@ export { CLICKUP_CONNECTION_TYPES } from './nodes/clickup.js';
 export { GMAIL_CONNECTION_TYPES, GMAIL_SCOPES, exchangeGoogleCode, googleAuthUrl } from './nodes/google.js';
 export { convertN8nWorkflow, readN8nExport, UNSUPPORTED_NODE_TYPE, type ConvertedWorkflow, type ImportWarning, type N8nWorkflow } from './n8n/import.js';
 export { binaryPropertyList, extensionFromMimeType, formatFileSize, getBinary, getBinaryBuffer, mimeTypeFromFileName, toBinary, withBinary } from './binary.js';
+export * from './forms.js';
+export {
+  immediateResponse,
+  isTextualContentType,
+  lastNodeResponse,
+  N8N_TRIGGER_EVENTS,
+  webhookItem,
+  type IncomingWebhook,
+} from './nodes/webhook.js';
+export { pollTimesToCrons } from './nodes/triggers-listen.js';

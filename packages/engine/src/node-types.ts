@@ -1,6 +1,6 @@
 import type { ApiEndpointData } from './catalog.js';
 import type { DbResult, ProcedureParam } from './database/drivers.js';
-import type { Item, JsonObject, JsonValue, NodeInstance } from './types.js';
+import type { Item, JsonObject, JsonValue, NodeInstance, ResumeData, WaitKind, WebhookResponse } from './types.js';
 
 export type PropertyType =
   | 'string'
@@ -144,6 +144,49 @@ export interface NodeExecuteContext {
   /** Informações extras que ficam registradas na execução do nó. */
   meta: JsonObject;
   signal: AbortSignal;
+  /** Modo da execução (manual, schedule, webhook, trigger, error, subworkflow, retry). */
+  mode: string;
+  /** Endereços para retomar esta execução pausada (Wait e Form). */
+  resumeUrl: string;
+  resumeFormUrl: string;
+  /** Endereço público do Info8n (para montar URLs de webhook e formulário). */
+  publicUrl: string;
+  /**
+   * Pausa a execução depois deste nó: a vaga do worker fica livre e o nó roda de novo na retomada,
+   * com `resumeData`. Devolve false quando a execução não pode pausar (subfluxo); aí o nó decide.
+   */
+  putToWait(wait: { kind: WaitKind; until?: number; config?: JsonObject }): boolean;
+  /** Dados da retomada, quando o nó roda de novo depois de uma pausa que ele pediu. */
+  resumeData?: ResumeData;
+  /** Responde o pedido HTTP que iniciou (ou retomou) a execução: Respond to Webhook e Form. */
+  sendResponse(response: WebhookResponse): void;
+}
+
+/** O que um gatilho que escuta (IMAP, arquivo, SSE) ou consulta (RSS) recebe enquanto o fluxo está ativo. */
+export interface TriggerContext {
+  node: NodeInstance;
+  workflowId: string;
+  /** Parâmetro do nó; expressões são resolvidas sem itens. */
+  getParam(name: string): Promise<JsonValue>;
+  getConnection(id: string): Promise<ConnectionData>;
+  filesDirs: string[];
+  /** Dados que o gatilho guarda entre disparos (ex.: a data do último item do RSS). */
+  staticData: JsonObject;
+  saveStaticData(): Promise<void>;
+  /** Dispara uma execução com estes itens. */
+  emit(items: Item[]): Promise<void>;
+  /** Avisa um erro do gatilho (fica no log do servidor; o gatilho continua tentando). */
+  emitError(err: Error): void;
+  /** Abortado quando o fluxo é desativado ou o servidor para. */
+  signal: AbortSignal;
+  /** Teste pelo editor ("Escutar"): consultas trazem o item mais recente mesmo que já tenha sido visto. */
+  testing: boolean;
+}
+
+/** Horários de consulta de um gatilho que consulta (RSS): os mesmos campos do n8n (pollTimes). */
+export interface PollTimes {
+  /** Expressões cron de 6 campos (com segundos). */
+  crons: string[];
 }
 
 export interface DatabaseSession {
@@ -183,6 +226,15 @@ export interface NodeType {
    * com a entrada vazia para seguir para o próximo lote.
    */
   hasPendingWork?(state: Record<string, unknown>): boolean;
+  /**
+   * Gatilho que escuta algo enquanto o fluxo está ativo (IMAP, pasta, SSE). Devolve a função que
+   * para de escutar. O execute do nó só repassa os itens que o gatilho emitiu.
+   */
+  listen?(ctx: TriggerContext): Promise<() => Promise<void>>;
+  /** Gatilho que consulta de tempos em tempos (RSS): devolve os itens novos, ou nada. */
+  poll?(ctx: TriggerContext): Promise<Item[] | null>;
+  /** Gatilho chamado por HTTP (Webhook, Form Trigger). O servidor monta os itens a partir do pedido. */
+  webhook?: 'webhook' | 'form';
 }
 
 /** Erro de um nó, com detalhes estruturados (ex.: a resposta da API que falhou). */

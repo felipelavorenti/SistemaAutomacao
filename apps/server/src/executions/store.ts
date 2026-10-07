@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { BinaryData, ExecutionResult, Item, JsonObject, JsonValue, NodeRun, WorkflowDefinition } from '@sa/engine';
+import type { BinaryData, ExecutionResult, Item, JsonObject, JsonValue, NodeRun, ResumeData, ResumeState, WorkflowDefinition } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
 
-export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry';
+export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry' | 'webhook' | 'trigger' | 'error';
 
 /** Limite por nó do que é guardado de entrada e saída, para o log não crescer demais. */
 const MAX_RUN_BYTES = 256 * 1024;
@@ -41,12 +41,14 @@ export async function createExecution(
     parentExecutionId?: string | null;
     /** Subfluxos já nascem rodando, dentro da execução de quem chamou. */
     status?: 'queued' | 'running';
+    /** Gatilho de onde começa (webhook, formulário, Error Trigger…); sem ele, o primeiro gatilho do fluxo. */
+    startNodeId?: string | null;
   },
 ): Promise<string> {
   const row = await one<{ id: string }>(
     db,
-    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at)
-     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END) RETURNING id`,
+    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id)
+     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10) RETURNING id`,
     [
       args.workflowId,
       args.workflowVersion,
@@ -57,6 +59,7 @@ export async function createExecution(
       args.retryOf ?? null,
       args.parentExecutionId ?? null,
       args.status ?? 'queued',
+      args.startNodeId ?? null,
     ],
   );
   return row!.id;
@@ -176,15 +179,17 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
     );
   }
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
+  const waiting = result.status === 'waiting';
   await db.query(
     `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,
-       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 THEN input END, custom_data = $12
+       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
+       wait_till = $14, wait_info = $15, resume_state = $16, resume_data = NULL
      WHERE id = $1`,
     [
       id,
       result.status,
       result.startedAt,
-      result.finishedAt,
+      waiting ? null : result.finishedAt,
       JSON.stringify(summarize(result.runs)),
       data,
       data?.length ?? null,
@@ -193,8 +198,27 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
       result.error?.nodeName ?? null,
       keepData,
       customData(result.runs),
+      waiting,
+      waiting ? (result.wait?.until ?? null) : null,
+      waiting && result.wait ? JSON.stringify(result.wait) : null,
+      waiting && result.resumeState ? encodeJson(result.resumeState) : null,
     ],
   );
+}
+
+export function encodeJson(value: unknown): Buffer {
+  return gzipSync(JSON.stringify(value));
+}
+
+export function decodeJson<T>(data: Buffer | null): T | null {
+  return data ? (JSON.parse(gunzipSync(data).toString('utf8')) as T) : null;
+}
+
+/** Estado e dados da retomada de uma execução pausada que voltou para a fila. */
+export function decodeResume(row: { resume_state: Buffer | null; resume_data: Buffer | null }): { state: ResumeState; data?: ResumeData } | undefined {
+  const state = decodeJson<ResumeState>(row.resume_state);
+  if (!state) return undefined;
+  return { state, data: decodeJson<ResumeData>(row.resume_data) ?? undefined };
 }
 
 /** Junta o que os nós Execution Data gravaram; um nó rodado depois sobrescreve a mesma chave. */
@@ -210,7 +234,8 @@ export function customData(runs: NodeRun[]): string | null {
 export async function failExecution(db: Queryable, id: string, message: string): Promise<void> {
   await db.query(
     `UPDATE executions SET status = 'error', finished_at = now(), started_at = coalesce(started_at, now()),
-       error_message = $2, error = $3 WHERE id = $1 AND status IN ('queued', 'running')`,
+       error_message = $2, error = $3, resume_state = NULL, resume_data = NULL, wait_till = NULL
+     WHERE id = $1 AND status IN ('queued', 'running')`,
     [id, message, JSON.stringify({ message })],
   );
 }

@@ -15,6 +15,8 @@ import { transformNodes } from './nodes/transform.js';
 import { formatNodes } from './nodes/formats.js';
 import { fileConvertNodes } from './nodes/files-convert.js';
 import { fileDiskNodes } from './nodes/files-disk.js';
+import { webhookNodes } from './nodes/webhook.js';
+import { listenTriggerNodes } from './nodes/triggers-listen.js';
 
 export class NodeRegistry {
   private types = new Map<string, NodeType>();
@@ -59,5 +61,7 @@ export const defaultRegistry = new NodeRegistry([
   ...formatNodes,
   ...fileConvertNodes,
   ...fileDiskNodes,
+  ...webhookNodes,
+  ...listenTriggerNodes,
   n8nUnsupported,
 ]);

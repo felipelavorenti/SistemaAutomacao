@@ -4,8 +4,15 @@ import { scheduleRepeat, type WorkflowDefinition } from '@sa/engine';
 
 export const QUEUE_NAME = 'executions';
 export const CANCEL_CHANNEL = 'sa:cancel';
+/** Canal de cada execução: resposta do Respond to Webhook ou do Form, pausa e fim (para quem chamou por HTTP). */
+export const executionChannel = (executionId: string) => `sa:exec:${executionId}`;
 
-export type JobData = { kind: 'run'; executionId: string } | { kind: 'scheduled'; workflowId: string; once?: number } | { kind: 'cleanup' };
+export type JobData =
+  | { kind: 'run'; executionId: string }
+  | { kind: 'scheduled'; workflowId: string; once?: number }
+  | { kind: 'cleanup' }
+  /** Execução pausada cujo tempo de espera acabou. */
+  | { kind: 'resume'; executionId: string };
 
 export function createRedis(url: string): Redis {
   return new Redis(url, { maxRetriesPerRequest: null });
@@ -46,6 +53,20 @@ export class ExecutionQueue {
       if (current === undefined || at < current) next.set(job.data.workflowId, at);
     }
     return next;
+  }
+
+  /** Agenda a volta de uma execução pausada (Wait por tempo, ou o limite de espera do webhook e do formulário). */
+  async scheduleResume(executionId: string, at: number): Promise<void> {
+    await this.cancelResume(executionId);
+    await this.queue.add(
+      'resume',
+      { kind: 'resume', executionId },
+      { jobId: `resume-${executionId}`, delay: Math.max(0, at - Date.now()), removeOnComplete: true, removeOnFail: 1000 },
+    );
+  }
+
+  async cancelResume(executionId: string): Promise<void> {
+    await this.removeOnce(`resume-${executionId}`);
   }
 
   async requestCancel(executionId: string): Promise<void> {

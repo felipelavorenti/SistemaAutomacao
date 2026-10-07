@@ -79,9 +79,15 @@ export interface Connection {
   toInput: number;
 }
 
+export interface WorkflowSettings {
+  /** Fluxo (com o gatilho Error Trigger) que roda quando uma execução de produção deste fluxo falha. */
+  errorWorkflowId?: string;
+}
+
 export interface WorkflowDefinition {
   nodes: NodeInstance[];
   connections: Connection[];
+  settings?: WorkflowSettings;
 }
 
 export type NodeRunStatus = 'success' | 'error';
@@ -108,8 +114,54 @@ export interface NodeRun {
   meta?: JsonObject;
 }
 
-export type ExecutionStatus = 'success' | 'error' | 'canceled';
+export type ExecutionStatus = 'success' | 'error' | 'canceled' | 'waiting';
 
+/** Como uma execução pausada volta a rodar. */
+export type WaitKind = 'time' | 'webhook' | 'form';
+
+/** Pausa pedida por um nó (Wait, Form): o que a execução espera e até quando. */
+export interface WaitInfo {
+  kind: WaitKind;
+  nodeId: string;
+  nodeName: string;
+  /** Momento em que a execução volta sozinha (ISO). Sem ele, espera só o webhook ou o formulário. */
+  until?: string;
+  /** Configuração do webhook ou do formulário de retomada, já com as expressões resolvidas. */
+  config?: JsonObject;
+}
+
+/** O que é preciso para continuar uma execução pausada; guardado no banco até a retomada. */
+export interface ResumeState {
+  version: 1;
+  startedAt: string;
+  runs: NodeRun[];
+  nodeOutputs: Record<string, Item[]>;
+  lastOutput: Item[];
+  ready: { nodeId: string; inputs: Item[][] }[];
+  waiting: { nodeId: string; inputs: Item[][]; received: boolean[]; seq: number }[];
+  nodeState: { nodeId: string; state: Record<string, unknown> }[];
+  pendingWork: { id: string; seq: number }[];
+  seq: number;
+  /** Nó que pediu a pausa; ele roda de novo na retomada, com os dados que chegaram. */
+  pausedNodeId: string;
+  pausedInputs: Item[][];
+}
+
+/** Dados que chegam na retomada (o pedido do webhook ou o formulário enviado); vazio quando o tempo acabou. */
+export interface ResumeData {
+  kind: WaitKind;
+  items?: Item[];
+}
+
+/** Resposta HTTP de um fluxo chamado por webhook ou formulário (Respond to Webhook, Form). */
+export interface WebhookResponse {
+  statusCode: number;
+  headers: Record<string, string>;
+  /** Corpo: texto, JSON, arquivo em base64 ou nada. */
+  body?: { kind: 'json'; value: JsonValue } | { kind: 'text'; value: string } | { kind: 'binary'; data: string; mimeType: string; fileName?: string };
+  /** Formulário: tela final (título e mensagem), página HTML pronta ou endereço para onde ir. */
+  form?: { kind: 'completion'; title: string; message: string } | { kind: 'html'; html: string } | { kind: 'redirect'; url: string };
+}
 export interface ExecutionResult {
   status: ExecutionStatus;
   startedAt: string;
@@ -119,4 +171,7 @@ export interface ExecutionResult {
   error?: NodeError & { nodeId?: string; nodeName?: string };
   /** Itens produzidos pelo último nó executado. */
   lastOutput: Item[];
+  /** Execução pausada: o que ela espera e o estado para continuar. */
+  wait?: WaitInfo;
+  resumeState?: ResumeState;
 }

@@ -1,7 +1,9 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
 import type { ApiEndpointData } from './catalog.js';
 import { DatabasePools } from './database/drivers.js';
-import type { ConnectionData, DatabaseCommandLog, DatabaseSession, FileData, NodeType, SubworkflowResult } from './node-types.js';
+import type { ConnectionData, DatabaseCommandLog, DatabaseSession, FileData, NodeExecuteContext, NodeType, SubworkflowResult } from './node-types.js';
+
+type NodeExecuteContextWait = NodeExecuteContext['putToWait'];
 import { NodeOperationError } from './node-types.js';
 import { PythonRunner, referencedNodes } from './python/runner.js';
 import { defaultRegistry, NodeRegistry } from './registry.js';
@@ -14,6 +16,10 @@ import type {
   NodeError,
   NodeInstance,
   NodeRun,
+  ResumeData,
+  ResumeState,
+  WaitInfo,
+  WebhookResponse,
   WorkflowDefinition,
 } from './types.js';
 
@@ -52,6 +58,14 @@ export interface ExecuteOptions {
   maxNodeRuns?: number;
   /** Processos que rodam o Python do nó Code; por padrão, um conjunto compartilhado pelo processo. */
   python?: PythonRunner;
+  /** Endereço público do Info8n, para $execution.resumeUrl e as URLs de webhook e formulário. */
+  publicUrl?: string;
+  /** A execução pode pausar (Wait, Form)? Subfluxos não podem: esperam no próprio worker. */
+  canWait?: boolean;
+  /** Continua uma execução pausada. */
+  resume?: { state: ResumeState; data?: ResumeData };
+  /** Resposta para o pedido HTTP que iniciou ou retomou a execução (Respond to Webhook, Form). */
+  onResponse?: (response: WebhookResponse) => void;
 }
 
 let sharedPython: PythonRunner | null = null;
@@ -76,13 +90,21 @@ interface PendingNode {
   seq: number;
 }
 
+/** Um nó na fila de execução; o nó que pediu a pausa volta com os dados da retomada. */
+interface ReadyNode {
+  node: NodeInstance;
+  inputs: Item[][];
+  resumeData?: ResumeData;
+}
+
 export async function executeWorkflow(options: ExecuteOptions): Promise<ExecutionResult> {
   const registry = options.registry ?? defaultRegistry;
   const { workflow } = options;
-  const startedAt = new Date().toISOString();
-  const runs: NodeRun[] = [];
-  const nodeOutputs: Record<string, Item[]> = {};
-  let lastOutput: Item[] = [];
+  const resume = options.resume?.state;
+  const startedAt = resume?.startedAt ?? new Date().toISOString();
+  const runs: NodeRun[] = resume ? [...resume.runs] : [];
+  const nodeOutputs: Record<string, Item[]> = resume ? { ...resume.nodeOutputs } : {};
+  let lastOutput: Item[] = resume?.lastOutput ?? [];
 
   const byId = new Map(workflow.nodes.map((n) => [n.id, n]));
   const outgoing = new Map<string, Connection[]>();
@@ -91,7 +113,6 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
     outgoing.set(c.from, [...(outgoing.get(c.from) ?? []), c]);
   }
 
-  const start = findStartNode(workflow, registry, options.startNodeId);
   const sandbox = new ExpressionSandbox(options.sandbox);
   // Sem pools compartilhados, a execução usa os seus e fecha no fim.
   const ownPools = options.databases ? null : new DatabasePools();
@@ -99,7 +120,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
 
   // Nós prontos para rodar, com os itens de cada entrada. Nós de várias
   // entradas (ex.: Merge) esperam em `waiting` até receber todas.
-  const ready: { node: NodeInstance; inputs: Item[][] }[] = [{ node: start, inputs: [options.triggerItems ?? []] }];
+  const ready: ReadyNode[] = [];
   const waiting = new Map<string, PendingNode>();
   // Estado dos nós que duram a execução toda (Loop) e os que ainda têm lotes pendentes,
   // do mais antigo para o mais recente, com o momento da última execução de cada um.
@@ -108,10 +129,45 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
   const maxRuns = options.maxNodeRuns ?? 50_000;
   let seq = 0;
 
+  const nodeById = (id: string): NodeInstance => {
+    const node = byId.get(id);
+    if (!node) throw new Error(`O nó ${id} não existe mais no fluxo desta execução`);
+    return node;
+  };
+  if (resume) {
+    for (const r of resume.ready) ready.push({ node: nodeById(r.nodeId), inputs: r.inputs });
+    for (const w of resume.waiting) waiting.set(w.nodeId, { inputs: w.inputs, received: w.received, seq: w.seq });
+    for (const n of resume.nodeState) nodeState.set(n.nodeId, n.state);
+    pendingWork.push(...resume.pendingWork);
+    seq = resume.seq;
+    ready.push({ node: nodeById(resume.pausedNodeId), inputs: resume.pausedInputs, resumeData: options.resume!.data ?? { kind: 'time' } });
+  } else {
+    ready.push({ node: findStartNode(workflow, registry, options.startNodeId), inputs: [options.triggerItems ?? []] });
+  }
+
   const finish = (status: ExecutionResult['status'], error?: ExecutionResult['error']): ExecutionResult => {
     sandbox.dispose();
     void ownPools?.closeAll();
     return { status, startedAt, finishedAt: new Date().toISOString(), runs, error, lastOutput };
+  };
+
+  /** Guarda tudo o que falta rodar para continuar depois. */
+  const pause = (node: NodeInstance, inputs: Item[][], wait: Omit<WaitInfo, 'nodeId' | 'nodeName'>): ExecutionResult => {
+    const resumeState: ResumeState = {
+      version: 1,
+      startedAt,
+      runs,
+      nodeOutputs,
+      lastOutput,
+      ready: ready.map((r) => ({ nodeId: r.node.id, inputs: r.inputs })),
+      waiting: [...waiting].map(([nodeId, p]) => ({ nodeId, inputs: p.inputs, received: p.received, seq: p.seq })),
+      nodeState: [...nodeState].map(([nodeId, state]) => ({ nodeId, state })),
+      pendingWork: [...pendingWork],
+      seq,
+      pausedNodeId: node.id,
+      pausedInputs: inputs,
+    };
+    return { ...finish('waiting'), wait: { ...wait, nodeId: node.id, nodeName: node.name }, resumeState };
   };
 
   try {
@@ -137,7 +193,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
         }
       }
 
-      const { node, inputs } = ready.pop()!;
+      const { node, inputs, resumeData } = ready.pop()!;
       const type = registry.get(node.type);
       if (!type) {
         return finish('error', { message: `Tipo de nó desconhecido: ${node.type}`, nodeId: node.id, nodeName: node.name });
@@ -152,7 +208,17 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
 
       const state = nodeState.get(node.id) ?? {};
       nodeState.set(node.id, state);
-      const run = await runNode(node, type, inputs, nodeOutputs, options, sandbox, state, pools);
+      let waitRequest: Omit<WaitInfo, 'nodeId' | 'nodeName'> | null = null;
+      const run = await runNode(node, type, inputs, nodeOutputs, options, sandbox, state, pools, {
+        resumeData,
+        putToWait: (w) => {
+          if (options.canWait === false) return false;
+          waitRequest = { kind: w.kind, until: w.until !== undefined ? new Date(w.until).toISOString() : undefined, config: w.config };
+          return true;
+        },
+      });
+      // O nó pediu a pausa e deu certo: ele roda de novo na retomada, então não entra no histórico agora.
+      if (waitRequest && run.status === 'success') return pause(node, inputs, waitRequest);
       runs.push(run);
       seq++;
       await options.onNodeFinished?.(run);
@@ -220,6 +286,11 @@ function findStartNode(workflow: WorkflowDefinition, registry: NodeRegistry, sta
   return trigger;
 }
 
+export function executionUrls(options: Pick<ExecuteOptions, 'publicUrl' | 'executionId'>): { resumeUrl: string; resumeFormUrl: string; publicUrl: string } {
+  const publicUrl = (options.publicUrl ?? 'http://localhost:3000').replace(/\/+$/, '');
+  return { publicUrl, resumeUrl: `${publicUrl}/webhook-waiting/${options.executionId}`, resumeFormUrl: `${publicUrl}/form-waiting/${options.executionId}` };
+}
+
 async function runNode(
   node: NodeInstance,
   type: NodeType,
@@ -229,7 +300,9 @@ async function runNode(
   sandbox: ExpressionSandbox,
   state: Record<string, unknown>,
   pools: DatabasePools,
+  pause: { resumeData?: ResumeData; putToWait: NodeExecuteContextWait },
 ): Promise<NodeRun> {
+  const urls = executionUrls(options);
   const started = Date.now();
   const base = {
     nodeId: node.id,
@@ -260,7 +333,7 @@ async function runNode(
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     const scope = await sandbox.createScope({
       nodeOutputs,
-      execution: { id: options.executionId, mode: options.mode },
+      execution: { id: options.executionId, mode: options.mode, resumeUrl: urls.resumeUrl, resumeFormUrl: urls.resumeFormUrl },
       vars: options.vars ?? {},
     });
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -307,6 +380,11 @@ async function runNode(
           },
           state,
           meta,
+          mode: options.mode,
+          ...urls,
+          putToWait: pause.putToWait,
+          resumeData: pause.resumeData,
+          sendResponse: (response) => options.onResponse?.(response),
         }),
         signal,
       );
