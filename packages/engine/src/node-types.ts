@@ -127,6 +127,8 @@ export interface NodeExecuteContext {
   getConnection(id: string): Promise<ConnectionData>;
   /** Arquivo guardado no servidor, pelo ID. */
   getFile(id: string): Promise<FileData>;
+  /** Pastas do servidor que os nós Read/Write Files from Disk podem usar (vazio: nenhuma). */
+  filesDirs: string[];
   /** Endpoint do catálogo de APIs combinado com o cadastro do cliente no ERP. */
   getApiEndpoint(erpClientId: string, endpointId: string): Promise<ApiEndpointData>;
   /** Sessão no banco da conexão; cada comando fica registrado na auditoria. */
