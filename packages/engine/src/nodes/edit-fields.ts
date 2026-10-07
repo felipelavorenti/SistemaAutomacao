@@ -107,6 +107,13 @@ export const editFields: NodeType = {
         description: 'Ligado: "a.b" cria { a: { b } }. Desligado: cria um campo chamado "a.b".',
       },
       {
+        name: 'includeBinary',
+        displayName: 'Include Binary File',
+        type: 'boolean',
+        default: true,
+        description: 'Ligado: os arquivos que chegaram no item seguem junto. Desligado: o item sai só com o JSON.',
+      },
+      {
         name: 'ignoreConversionErrors',
         displayName: 'Ignore Type Conversion Errors',
         type: 'boolean',
@@ -153,7 +160,9 @@ export const editFields: NodeType = {
           assign(json, name, convert(a.value ?? null, type, name, i, ignoreErrors), dotNotation);
         }
       }
-      out.push({ json });
+      const next: Item = { json };
+      if (item.binary && (await ctx.getParam('includeBinary', i)) !== false) next.binary = item.binary;
+      out.push(next);
     }
     return [out];
   },

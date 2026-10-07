@@ -32,6 +32,8 @@ export interface ExecuteOptions {
   getConnection?: (id: string) => Promise<ConnectionData>;
   /** Arquivos enviados pela tela (ex.: anexos do Gmail). */
   getFile?: (id: string) => Promise<FileData>;
+  /** Pastas do servidor liberadas para ler e gravar arquivos. */
+  filesDirs?: string[];
   signal?: AbortSignal;
   onNodeFinished?: (run: NodeRun) => void | Promise<void>;
   registry?: NodeRegistry;
@@ -277,6 +279,7 @@ async function runNode(
             if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
             return options.getConnection(id);
           },
+          filesDirs: options.filesDirs ?? [],
           getFile: async (id) => {
             if (!options.getFile) throw new NodeOperationError('Arquivos não estão disponíveis nesta execução');
             return options.getFile(id);

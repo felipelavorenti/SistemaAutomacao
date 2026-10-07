@@ -1,7 +1,8 @@
 import { coerceVariable, endpointVariables, fillJsonTemplate, fillTemplate, TemplateError, type ApiEndpointData } from '../catalog.js';
 import type { NodeExecuteContext, NodeType } from '../node-types.js';
 import { NodeOperationError } from '../node-types.js';
-import type { Item, JsonObject, JsonValue } from '../types.js';
+import type { BinaryData, Item, JsonObject, JsonValue } from '../types.js';
+import { getBinary, mimeTypeFromFileName, toBinary } from '../binary.js';
 
 export const HTTP_CONNECTION_TYPES = ['httpHeaderAuth', 'httpBearerAuth', 'httpBasicAuth'];
 
@@ -70,6 +71,8 @@ export const httpRequest: NodeType = {
           { name: 'JSON', value: 'json' },
           { name: 'Formulário (x-www-form-urlencoded)', value: 'form' },
           { name: 'Texto', value: 'text' },
+          { name: 'Formulário multipart (form-data, aceita arquivos)', value: 'multipart' },
+          { name: 'Arquivo (binário)', value: 'binary' },
         ],
       },
       { name: 'jsonBody', displayName: 'Corpo JSON', type: 'json', default: '{}', showWhen: { source: ['manual'], bodyType: ['json'] } },
@@ -82,6 +85,58 @@ export const httpRequest: NodeType = {
         showWhen: { source: ['manual'], bodyType: ['form'] },
       },
       { name: 'textBody', displayName: 'Corpo', type: 'string', default: '', showWhen: { source: ['manual'], bodyType: ['text'] } },
+      {
+        name: 'multipartBody',
+        displayName: 'Campos do formulário',
+        type: 'list',
+        default: [],
+        description: 'Cada linha é um campo de texto ou um arquivo do item. No arquivo, o valor é o nome do arquivo no item (ex.: data).',
+        fields: [
+          {
+            name: 'parameterType',
+            displayName: 'Tipo',
+            type: 'options',
+            default: 'formData',
+            options: [
+              { name: 'Texto', value: 'formData' },
+              { name: 'Arquivo do item', value: 'formBinaryData' },
+            ],
+          },
+          { name: 'name', displayName: 'Nome', type: 'string', default: '' },
+          { name: 'value', displayName: 'Valor (ou nome do arquivo no item)', type: 'string', default: '' },
+        ],
+        showWhen: { source: ['manual'], bodyType: ['multipart'] },
+      },
+      {
+        name: 'inputDataFieldName',
+        displayName: 'Arquivo do item',
+        type: 'string',
+        default: 'data',
+        required: true,
+        description: 'Nome do arquivo no item que vai como corpo da requisição (ex.: data). O Content-Type vem do arquivo, a menos que um header o defina.',
+        showWhen: { source: ['manual'], bodyType: ['binary'] },
+      },
+      {
+        name: 'responseFormat',
+        displayName: 'Formato da resposta',
+        type: 'options',
+        default: 'autodetect',
+        options: [
+          { name: 'Automático (pelo Content-Type)', value: 'autodetect' },
+          { name: 'JSON', value: 'json' },
+          { name: 'Texto', value: 'text' },
+          { name: 'Arquivo', value: 'file' },
+        ],
+        description: 'No automático, JSON vira itens, texto vai para um campo e PDF, imagem, zip e outros tipos binários viram arquivo do item.',
+      },
+      {
+        name: 'outputPropertyName',
+        displayName: 'Propriedade de saída',
+        type: 'string',
+        default: 'data',
+        description: 'Onde fica o arquivo (ou o texto) da resposta no item.',
+        showWhen: { responseFormat: ['autodetect', 'text', 'file'] },
+      },
       {
         name: 'fullResponse',
         displayName: 'Incluir status e headers da resposta',
@@ -111,7 +166,7 @@ interface PreparedRequest {
   method: string;
   url: URL;
   headers: Headers;
-  body?: string;
+  body?: string | Uint8Array<ArrayBuffer> | FormData;
   /** Para o log de erro: de qual endpoint do catálogo veio a chamada. */
   catalog?: { erp: string; endpoint: string; client: string };
 }
@@ -130,23 +185,90 @@ async function requestForItem(ctx: NodeExecuteContext, i: number): Promise<Item[
     throw new NodeOperationError(`Falha ao chamar ${method} ${url.origin}${url.pathname}: ${cause}`, { request: requestInfo });
   }
 
-  const responseBody = await readBody(response);
+  const raw = Buffer.from(await response.arrayBuffer());
   const responseHeaders: JsonObject = Object.fromEntries(response.headers.entries());
+  const contentType = response.headers.get('content-type') ?? '';
 
   if (!response.ok && (await ctx.getParam('failOnHttpError', i)) !== false) {
     throw new NodeOperationError(`A API respondeu com status ${response.status} ${response.statusText}`.trim(), {
       statusCode: response.status,
       statusText: response.statusText,
-      body: responseBody,
+      body: isBinaryContentType(contentType) ? `(arquivo de ${raw.length} bytes, ${contentType})` : parseBody(raw.toString('utf8'), contentType),
       headers: responseHeaders,
       request: requestInfo,
     });
   }
 
-  if (await ctx.getParam('fullResponse', i)) {
-    return [{ json: { statusCode: response.status, headers: responseHeaders, body: responseBody } }];
+  const format = String((await ctx.getParam('responseFormat', i)) || 'autodetect');
+  const property = String((await ctx.getParam('outputPropertyName', i)) ?? '').trim() || 'data';
+  const full = Boolean(await ctx.getParam('fullResponse', i));
+  const head = { statusCode: response.status, headers: responseHeaders };
+
+  // Arquivo: pedido no formato ou, no automático, quando o Content-Type não é texto nem JSON.
+  if (format === 'file' || (format === 'autodetect' && raw.length > 0 && isBinaryContentType(contentType))) {
+    const binary = responseFile(raw, response, url);
+    return [{ json: full ? head : {}, binary: { [property]: binary } }];
   }
-  return toItems(responseBody);
+
+  const text = raw.toString('utf8');
+  if (format === 'text') {
+    if (full) return [{ json: { ...head, body: text } }];
+    return text ? [{ json: { [property]: text } }] : [];
+  }
+  let responseBody: JsonValue;
+  if (format === 'json') {
+    try {
+      responseBody = text.trim() ? (JSON.parse(text) as JsonValue) : null;
+    } catch {
+      throw new NodeOperationError('A resposta não é um JSON válido. Mude o formato da resposta para Texto ou Automático.', { body: text.slice(0, 2000), request: requestInfo });
+    }
+  } else responseBody = text ? parseBody(text, contentType) : null;
+
+  if (full) return [{ json: { ...head, body: responseBody } }];
+  return toItems(responseBody, property);
+}
+
+/**
+ * Conteúdo que não é texto: o automático devolve como arquivo. Texto, JSON, XML, JavaScript,
+ * CSV, YAML e formulário continuam texto; sem Content-Type, também.
+ */
+export function isBinaryContentType(contentType: string): boolean {
+  const type = contentType.split(';')[0]!.trim().toLowerCase();
+  if (!type) return false;
+  if (type.startsWith('text/')) return false;
+  if (/json|xml|javascript|ecmascript|x-www-form-urlencoded|yaml|csv|graphql/.test(type)) return false;
+  return true;
+}
+
+/** Monta o arquivo da resposta: nome do Content-Disposition ou do fim da URL, tipo do Content-Type. */
+function responseFile(raw: Buffer, response: Response, requestUrl: URL): BinaryData {
+  const contentType = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  const fileName = fileNameFromDisposition(response.headers.get('content-disposition')) ?? fileNameFromUrl(response.url || requestUrl.toString());
+  return toBinary(raw, { fileName, mimeType: contentType || mimeTypeFromFileName(fileName) || 'application/octet-stream' });
+}
+
+export function fileNameFromDisposition(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const extended = /filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i.exec(header);
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[2]!.trim().replace(/^"|"$/g, '')) || undefined;
+    } catch {
+      /* cai no filename simples */
+    }
+  }
+  const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(header);
+  const name = (plain?.[2] ?? plain?.[1] ?? '').trim();
+  return name ? name.replace(/^.*[\\/]/, '') : undefined;
+}
+
+function fileNameFromUrl(raw: string): string | undefined {
+  try {
+    const last = new URL(raw).pathname.split('/').pop() ?? '';
+    return last ? decodeURIComponent(last) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function prepareManual(ctx: NodeExecuteContext, i: number): Promise<PreparedRequest> {
@@ -164,7 +286,7 @@ async function prepareManual(ctx: NodeExecuteContext, i: number): Promise<Prepar
     await applyAuth(ctx, connectionId, headers);
   }
 
-  let body: string | undefined;
+  let body: PreparedRequest['body'];
   const bodyType = await ctx.getParam('bodyType', i);
   if (bodyType === 'json') {
     const raw = await ctx.getParam('jsonBody', i);
@@ -177,6 +299,28 @@ async function prepareManual(ctx: NodeExecuteContext, i: number): Promise<Prepar
     if (!headers.has('content-type')) headers.set('content-type', 'application/x-www-form-urlencoded');
   } else if (bodyType === 'text') {
     body = String((await ctx.getParam('textBody', i)) ?? '');
+  } else if (bodyType === 'binary') {
+    const item = ctx.inputs[0]?.[i] ?? { json: {} };
+    const property = String((await ctx.getParam('inputDataFieldName', i)) ?? '').trim() || 'data';
+    const file = getBinary(item, property, i);
+    body = Buffer.from(file.data, 'base64');
+    if (!headers.has('content-type')) headers.set('content-type', file.mimeType || 'application/octet-stream');
+  } else if (bodyType === 'multipart') {
+    const item = ctx.inputs[0]?.[i] ?? { json: {} };
+    const form = new FormData();
+    for (const row of rows(await ctx.getParam('multipartBody', i))) {
+      const name = row.name === undefined || row.name === null ? '' : String(row.name);
+      if (!name) continue;
+      const value = row.value === undefined || row.value === null ? '' : String(row.value);
+      if (row.parameterType === 'formBinaryData') {
+        const file = getBinary(item, value.trim() || 'data', i);
+        const blob = new Blob([Buffer.from(file.data, 'base64')], { type: file.mimeType || 'application/octet-stream' });
+        form.append(name, blob, file.fileName || name);
+      } else form.append(name, value);
+    }
+    body = form;
+    // O fetch põe o Content-Type com o boundary; um multipart informado à mão ficaria sem ele.
+    if (/multipart\/form-data/i.test(headers.get('content-type') ?? '')) headers.delete('content-type');
   }
   return { method, url, headers, body };
 }
@@ -253,6 +397,10 @@ async function applyAuth(ctx: NodeExecuteContext, connectionId: string, headers:
   }
 }
 
+function rows(value: JsonValue): JsonObject[] {
+  return Array.isArray(value) ? value.filter((v): v is JsonObject => v !== null && typeof v === 'object' && !Array.isArray(v)) : [];
+}
+
 function pairs(value: JsonValue): { name: string; value: string }[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -269,10 +417,8 @@ function normalizeJson(raw: string): string {
   }
 }
 
-async function readBody(response: Response): Promise<JsonValue> {
-  const text = await response.text();
+function parseBody(text: string, type: string): JsonValue {
   if (!text) return null;
-  const type = response.headers.get('content-type') ?? '';
   if (type.includes('json') || /^\s*[[{]/.test(text)) {
     try {
       return JSON.parse(text) as JsonValue;
@@ -284,13 +430,13 @@ async function readBody(response: Response): Promise<JsonValue> {
 }
 
 /** Arrays de objetos viram um item por elemento, como no n8n. Resposta vazia não gera item: o fluxo para ali, sem erro. */
-function toItems(body: JsonValue): Item[] {
+function toItems(body: JsonValue, property = 'data'): Item[] {
   if (body === null || (typeof body === 'string' && !body.trim())) return [];
   if (Array.isArray(body)) {
-    return body.map((el) => ({ json: el !== null && typeof el === 'object' && !Array.isArray(el) ? el : { data: el } }));
+    return body.map((el) => ({ json: el !== null && typeof el === 'object' && !Array.isArray(el) ? el : { [property]: el } }));
   }
   if (body !== null && typeof body === 'object') return [{ json: body }];
-  return [{ json: { data: body } }];
+  return [{ json: { [property]: body } }];
 }
 
 function redactUrl(url: URL): string {

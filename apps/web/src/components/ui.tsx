@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { errorMessage, STATUS_LABEL, type ExecutionStatus, type JsonValue, type NodeRun } from '../api';
+import { errorMessage, STATUS_LABEL, type ExecutionStatus, type Item, type JsonValue, type NodeRun } from '../api';
 
 /** Carrega dados de forma assíncrona e expõe recarga. */
 export function useLoad<T>(loader: () => Promise<T>, deps: unknown[] = []) {
@@ -150,5 +150,44 @@ export function RunMeta({ meta }: { meta: NodeRun['meta'] }) {
         </details>
       )}
     </>
+  );
+}
+
+/** Arquivos dos itens (dados binários): nome, tipo, tamanho e, quando guardados, links para abrir e baixar. */
+export function BinaryFiles({ items, executionId }: { items: Item[]; executionId?: string }) {
+  const rows = items.flatMap((item, index) => Object.entries(item.binary ?? {}).map(([key, file]) => ({ index, key, file })));
+  if (!rows.length) return null;
+  return (
+    <div className="binary-files">
+      <div className="muted small">Arquivos</div>
+      <ul>
+        {rows.map(({ index, key, file }) => {
+          const url = executionId && file.ref ? `/api/executions/${executionId}/files/${file.ref}` : null;
+          return (
+            <li key={`${index}-${key}`}>
+              <span className="binary-key">
+                {items.length > 1 ? `item ${index} · ` : ''}
+                {key}
+              </span>{' '}
+              <strong>{file.fileName ?? '(sem nome)'}</strong>{' '}
+              <span className="muted small">
+                {file.mimeType}
+                {file.fileSize ? ` · ${file.fileSize}` : ''}
+              </span>
+              {url ? (
+                <span className="binary-links">
+                  <a href={url} target="_blank" rel="noreferrer">
+                    Abrir
+                  </a>
+                  <a href={`${url}?download=true`}>Baixar</a>
+                </span>
+              ) : (
+                file.omitted && <span className="muted small"> · conteúdo não guardado</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

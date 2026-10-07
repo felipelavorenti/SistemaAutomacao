@@ -2,7 +2,9 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { executeWorkflow } from '../src/executor.js';
-import type { NodeInstance, WorkflowDefinition } from '../src/types.js';
+import { toBinary } from '../src/binary.js';
+import { fileNameFromDisposition, isBinaryContentType } from '../src/nodes/http-request.js';
+import type { Item, NodeInstance, WorkflowDefinition } from '../src/types.js';
 import { validateWorkflow } from '../src/validate.js';
 
 let server: Server;
@@ -189,5 +191,138 @@ describe('validateWorkflow', () => {
         expect.stringMatching(/"B": Expressão sem/),
       ]),
     );
+  });
+});
+
+describe('HTTP Request com arquivos', () => {
+  let fileServer: Server;
+  let fileBase = '';
+  const pdf = Buffer.from('%PDF-1.4\n\x00\xff binário', 'latin1');
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xfe]);
+
+  beforeAll(async () => {
+    fileServer = createServer((req, res) => {
+      const url = new URL(req.url!, 'http://x');
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks);
+        if (url.pathname === '/docs/nota.pdf') {
+          res.setHeader('content-type', 'application/pdf');
+          res.end(pdf);
+        } else if (url.pathname === '/imagem') {
+          res.setHeader('content-type', 'image/png');
+          res.end(png);
+        } else if (url.pathname === '/relatorio') {
+          res.setHeader('content-type', 'text/csv; charset=utf-8');
+          res.setHeader('content-disposition', "attachment; filename=\"relatorio.csv\"; filename*=UTF-8''relat%C3%B3rio%20m%C3%AAs.csv");
+          res.end('a,b\n1,2\n');
+        } else if (url.pathname === '/texto') {
+          res.setHeader('content-type', 'text/plain; charset=utf-8');
+          res.end('olá');
+        } else if (url.pathname === '/upload') {
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify({ contentType: req.headers['content-type'] ?? null, base64: body.toString('base64') }));
+        } else {
+          res.statusCode = 404;
+          res.end();
+        }
+      });
+    });
+    await new Promise<void>((r) => fileServer.listen(0, '127.0.0.1', r));
+    fileBase = `http://127.0.0.1:${(fileServer.address() as AddressInfo).port}`;
+  });
+  afterAll(() => {
+    fileServer.closeAllConnections();
+    fileServer.close();
+  });
+
+  const one = async (parameters: NodeInstance['parameters'], triggerItems?: Item[]) => {
+    const r = await run(chain(trigger, http('h', 'HTTP', parameters)), triggerItems ? { triggerItems } : {});
+    expect(r.status, JSON.stringify(r.error)).toBe('success');
+    return r.lastOutput;
+  };
+
+  it('no automático, PDF e imagem viram arquivo; nome do fim da URL e tipo do Content-Type', async () => {
+    const [item] = await one({ url: `${fileBase}/docs/nota.pdf` });
+    expect(item!.json).toEqual({});
+    expect(item!.binary?.data).toMatchObject({ fileName: 'nota.pdf', mimeType: 'application/pdf', fileExtension: 'pdf', bytes: pdf.length });
+    expect(Buffer.from(item!.binary!.data!.data, 'base64').equals(pdf)).toBe(true);
+
+    const [img] = await one({ url: `${fileBase}/imagem`, outputPropertyName: 'foto' });
+    expect(img!.binary?.foto).toMatchObject({ fileName: 'imagem', mimeType: 'image/png', fileExtension: 'png', fileType: 'image' });
+    expect(Buffer.from(img!.binary!.foto!.data, 'base64').equals(png)).toBe(true);
+  });
+
+  it('texto continua texto no automático; formato Arquivo usa o nome do Content-Disposition', async () => {
+    expect((await one({ url: `${fileBase}/texto` })).map((i) => i.json)).toEqual([{ data: 'olá' }]);
+    expect((await one({ url: `${fileBase}/texto`, responseFormat: 'text', outputPropertyName: 'conteudo' })).map((i) => i.json)).toEqual([{ conteudo: 'olá' }]);
+    expect((await one({ url: `${fileBase}/relatorio` }))[0]!.binary).toBeUndefined();
+
+    const [file] = await one({ url: `${fileBase}/relatorio`, responseFormat: 'file', outputPropertyName: 'planilha' });
+    expect(file!.binary?.planilha).toMatchObject({ fileName: 'relatório mês.csv', mimeType: 'text/csv', fileExtension: 'csv' });
+    expect(Buffer.from(file!.binary!.planilha!.data, 'base64').toString('utf8')).toBe('a,b\n1,2\n');
+
+    const [full] = await one({ url: `${fileBase}/docs/nota.pdf`, fullResponse: true });
+    expect(full!.json).toMatchObject({ statusCode: 200, headers: { 'content-type': 'application/pdf' } });
+    expect(full!.binary?.data?.fileName).toBe('nota.pdf');
+  });
+
+  it('formato JSON recusa resposta que não é JSON', async () => {
+    const r = await run(chain(trigger, http('h', 'HTTP', { url: `${fileBase}/texto`, responseFormat: 'json' })));
+    expect(r.status).toBe('error');
+    expect(r.error?.message).toMatch(/não é um JSON válido/);
+  });
+
+  it('envia um arquivo do item como corpo e em formulário multipart', async () => {
+    const file = toBinary(pdf, { fileName: 'nota.pdf' });
+    const items: Item[] = [{ json: { id: 7 }, binary: { data: file, outro: toBinary(Buffer.from('x;y'), { fileName: 'dados.csv' }) } }];
+
+    const [raw] = await one({ method: 'POST', url: `${fileBase}/upload`, bodyType: 'binary' }, items);
+    expect(raw!.json.contentType).toBe('application/pdf');
+    expect(Buffer.from(String(raw!.json.base64), 'base64').equals(pdf)).toBe(true);
+
+    const [own] = await one({ method: 'PUT', url: `${fileBase}/upload`, bodyType: 'binary', inputDataFieldName: 'outro', headers: [{ name: 'Content-Type', value: 'application/octet-stream' }] }, items);
+    expect(own!.json.contentType).toBe('application/octet-stream');
+
+    const [multi] = await one(
+      {
+        method: 'POST',
+        url: `${fileBase}/upload`,
+        bodyType: 'multipart',
+        headers: [{ name: 'Content-Type', value: 'multipart/form-data' }],
+        multipartBody: [
+          { parameterType: 'formData', name: 'id', value: '={{ $json.id }}' },
+          { parameterType: 'formBinaryData', name: 'arquivo', value: 'data' },
+          { parameterType: 'formBinaryData', name: 'planilha', value: 'outro' },
+        ],
+      },
+      items,
+    );
+    const contentType = String(multi!.json.contentType);
+    expect(contentType).toMatch(/^multipart\/form-data; boundary=/);
+    const form = await new Response(Buffer.from(String(multi!.json.base64), 'base64'), { headers: { 'content-type': contentType } }).formData();
+    expect(form.get('id')).toBe('7');
+    const sent = form.get('arquivo') as File;
+    expect(sent.name).toBe('nota.pdf');
+    expect(sent.type).toBe('application/pdf');
+    expect(Buffer.from(await sent.arrayBuffer()).equals(pdf)).toBe(true);
+    expect((form.get('planilha') as File).name).toBe('dados.csv');
+
+    const missing = await run(chain(trigger, http('h', 'HTTP', { method: 'POST', url: `${fileBase}/upload`, bodyType: 'binary' })));
+    expect(missing.status).toBe('error');
+    expect(missing.error?.message).toMatch(/não tem arquivo/);
+  });
+});
+
+describe('fileNameFromDisposition', () => {
+  it('lê filename*, filename com e sem aspas', () => {
+    expect(fileNameFromDisposition("attachment; filename*=UTF-8''a%20b.pdf")).toBe('a b.pdf');
+    expect(fileNameFromDisposition('attachment; filename="c:\\pasta\\nota.pdf"')).toBe('nota.pdf');
+    expect(fileNameFromDisposition('inline; filename=x.txt')).toBe('x.txt');
+    expect(fileNameFromDisposition('inline')).toBeUndefined();
+    expect(isBinaryContentType('application/vnd.api+json')).toBe(false);
+    expect(isBinaryContentType('application/zip')).toBe(true);
+    expect(isBinaryContentType('')).toBe(false);
   });
 });

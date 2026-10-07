@@ -272,4 +272,57 @@ describe('importador do n8n', () => {
       server.close();
     }
   });
+
+  it('HTTP Request com arquivos: corpo binário, multipart e resposta como arquivo', () => {
+    const http = (parameters: Record<string, unknown>, typeVersion = 4.2) => {
+      const converted = convertN8nWorkflow({ nodes: [{ name: 'HTTP', type: 'n8n-nodes-base.httpRequest', typeVersion, parameters }] });
+      return { parameters: converted.definition.nodes[0]!.parameters, warnings: converted.warnings.map((w) => w.message) };
+    };
+    const binary = http({ method: 'POST', url: 'https://x/up', sendBody: true, contentType: 'binaryData', inputDataFieldName: 'arquivo' });
+    expect(binary.parameters).toMatchObject({ bodyType: 'binary', inputDataFieldName: 'arquivo' });
+    expect(binary.warnings.join(' ')).not.toMatch(/não existe aqui/);
+
+    const multipart = http({
+      method: 'POST',
+      url: 'https://x/up',
+      sendBody: true,
+      contentType: 'multipart-form-data',
+      bodyParameters: { parameters: [{ parameterType: 'formBinaryData', name: 'file', inputDataFieldName: 'data' }, { name: 'descricao', value: '={{ $json.d }}' }] },
+    });
+    expect(multipart.parameters).toMatchObject({
+      bodyType: 'multipart',
+      multipartBody: [
+        { parameterType: 'formBinaryData', name: 'file', value: 'data' },
+        { parameterType: 'formData', name: 'descricao', value: '={{ $json.d }}' },
+      ],
+    });
+
+    const file = http({ url: 'https://x/nota.pdf', options: { response: { response: { responseFormat: 'file', outputPropertyName: 'pdf' } } } });
+    expect(file.parameters).toMatchObject({ responseFormat: 'file', outputPropertyName: 'pdf' });
+    expect(http({ url: 'https://x', options: { response: { response: { responseFormat: 'json' } } } }).parameters.responseFormat).toBe('json');
+    expect(http({ url: 'https://x', options: { response: { response: { responseFormat: 'autodetect' } } } }).parameters.responseFormat).toBeUndefined();
+
+    // Versões 1 e 2: "Send Binary Data" e o formato da resposta.
+    const v1 = http({ requestMethod: 'POST', url: 'https://x', sendBinaryData: true, binaryPropertyName: 'data', responseFormat: 'file', dataPropertyName: 'resposta' }, 1);
+    expect(v1.parameters).toMatchObject({ bodyType: 'binary', inputDataFieldName: 'data', responseFormat: 'file', outputPropertyName: 'resposta' });
+    const v1multi = http(
+      {
+        requestMethod: 'POST',
+        url: 'https://x',
+        options: { bodyContentType: 'multipart-form-data' },
+        bodyParametersUi: { parameter: [{ name: 'tipo', value: 'nf' }] },
+        sendBinaryData: true,
+        binaryPropertyName: 'arquivo:data, xml',
+      },
+      2,
+    );
+    expect(v1multi.parameters).toMatchObject({
+      bodyType: 'multipart',
+      multipartBody: [
+        { parameterType: 'formData', name: 'tipo', value: 'nf' },
+        { parameterType: 'formBinaryData', name: 'arquivo', value: 'data' },
+        { parameterType: 'formBinaryData', name: 'xml', value: 'xml' },
+      ],
+    });
+  });
 });

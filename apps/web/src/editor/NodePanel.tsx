@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { resolveOutputs, type ApiCatalog, type ConnectionItem, type Item, type JsonValue, type NodeInstance, type NodeRun, type NodeSettings, type NodeTypeDescription, type WorkflowListItem } from '../api';
-import { ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
+import { BinaryFiles, ErrorBox, Field, JsonView, RunMeta } from '../components/ui';
 import { Icon, NODE_COLOR } from '../components/icons';
 import { isVisible, ParameterField, type FieldContext } from './ParameterField';
 
@@ -10,6 +10,7 @@ export function NodePanel({
   node,
   description,
   run,
+  executionId,
   previewOutputs,
   connections,
   workflows,
@@ -26,6 +27,8 @@ export function NodePanel({
   node: NodeInstance;
   description?: NodeTypeDescription;
   run?: NodeRun;
+  /** Execução de onde vêm os dados mostrados, para baixar os arquivos. */
+  executionId?: string;
   previewOutputs: Record<string, Item[]>;
   connections: ConnectionItem[];
   workflows: WorkflowListItem[];
@@ -84,6 +87,7 @@ export function NodePanel({
                 {input.length} {input.length === 1 ? 'item' : 'itens'} · arraste um campo para um parâmetro
               </div>
               <JsonView value={input[0].json} pathPrefix="$json" draggable />
+              <BinaryFiles items={input} executionId={executionId} />
               {input.length > 1 && (
                 <details>
                   <summary className="small">Todos os itens</summary>
@@ -212,6 +216,7 @@ export function NodePanel({
                 {items.length} {items.length === 1 ? 'item' : 'itens'}
               </div>
               <JsonView value={items.map((it) => it.json)} />
+              <BinaryFiles items={items} executionId={executionId} />
             </div>
           ))}
         </section>

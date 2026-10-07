@@ -15,8 +15,31 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
+/**
+ * Arquivo dentro de um item, no formato do n8n. `data` é o conteúdo em base64; na execução gravada
+ * ele é retirado (`omitted`) ou trocado por uma referência (`ref`) para baixar depois.
+ */
+export interface BinaryData {
+  data: string;
+  mimeType: string;
+  fileName?: string;
+  fileExtension?: string;
+  /** Tamanho legível, como no n8n (ex.: "12.3 kB"). */
+  fileSize?: string;
+  /** Tamanho em bytes. */
+  bytes?: number;
+  fileType?: string;
+  directory?: string;
+  /** Conteúdo retirado ao gravar a execução. */
+  omitted?: boolean;
+  /** Referência para baixar o conteúdo guardado da execução. */
+  ref?: string;
+}
+
 export interface Item {
   json: JsonObject;
+  /** Arquivos do item, pelo nome da propriedade (o padrão do n8n é "data"). */
+  binary?: Record<string, BinaryData>;
 }
 
 /**

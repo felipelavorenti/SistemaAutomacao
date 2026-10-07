@@ -74,6 +74,7 @@ globalThis.console = { log: __log, info: __log, warn: __log, error: __log, debug
 let __index = 0;
 let __input = [];
 let $json = {};
+let $binary = {};
 let $input = __wrap([]);
 let $itemIndex = 0;
 const __setItem = (rawInput, index) => {
@@ -82,6 +83,7 @@ const __setItem = (rawInput, index) => {
   $itemIndex = index;
   $input = __wrap(__input);
   $json = (__input[index] ?? { json: {} }).json;
+  $binary = (__input[index] ?? {}).binary ?? {};
 };
 `;
 

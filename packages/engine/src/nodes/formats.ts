@@ -9,6 +9,7 @@ import { Builder, Parser } from 'xml2js';
 import type { NodeExecuteContext, NodeType, PropertyDescription } from '../node-types.js';
 import { NodeOperationError } from '../node-types.js';
 import type { Item, JsonObject, JsonValue } from '../types.js';
+import { getBinaryBuffer } from '../binary.js';
 import { getPath, isPlainObject, splitPath } from './paths.js';
 
 /**
@@ -474,6 +475,23 @@ export const cryptoNode: NodeType = {
       },
       { name: 'type', displayName: 'Tipo', type: 'options', default: 'SHA256', options: HASH_TYPES, showWhen: { action: ['hash', 'hmac'] } },
       {
+        name: 'binaryData',
+        displayName: 'Usar um arquivo do item',
+        type: 'boolean',
+        default: false,
+        description: 'Ligado, calcula o hash ou o HMAC do conteúdo de um arquivo do item em vez de um texto.',
+        showWhen: { action: ['hash', 'hmac'] },
+      },
+      {
+        name: 'binaryPropertyName',
+        displayName: 'Propriedade do arquivo',
+        type: 'string',
+        default: 'data',
+        required: true,
+        description: 'Nome do arquivo no item (ex.: data, attachment_0).',
+        showWhen: { action: ['hash', 'hmac'], binaryData: [true] },
+      },
+      {
         name: 'value',
         displayName: 'Valor',
         type: 'string',
@@ -481,7 +499,7 @@ export const cryptoNode: NodeType = {
         required: true,
         placeholder: '={{ $json.senha }}',
         description: 'O texto a processar.',
-        showWhen: { action: ['hash', 'hmac', 'sign'] },
+        showWhen: { action: ['hash', 'hmac', 'sign'], binaryData: [false] },
       },
       { name: 'secret', displayName: 'Segredo', type: 'string', default: '', required: true, description: 'Chave secreta do HMAC.', showWhen: { action: ['hmac'] } },
       {
@@ -544,8 +562,10 @@ export const cryptoNode: NodeType = {
           result = (type === 'base64' ? raw.replace(/\W/g, '') : raw).slice(0, length);
         }
       } else {
-        const value = str(await p('value'));
         const encoding = str(await p('encoding'), 'hex') as BinaryToTextEncoding;
+        const fromFile = (action === 'hash' || action === 'hmac') && bool(await p('binaryData'));
+        // Como no n8n: com arquivo, o hash é do conteúdo em bytes, não do texto.
+        const value: string | Buffer = fromFile ? getBinaryBuffer(item, str(await p('binaryPropertyName'), 'data') || 'data', i) : str(await p('value'));
         if (action === 'hash' || action === 'hmac') {
           const type = str(await p('type'), 'SHA256');
           if (action === 'hmac') {
@@ -566,7 +586,8 @@ export const cryptoNode: NodeType = {
       }
       const json: JsonObject = field.includes('.') ? structuredClone(item.json) : { ...item.json };
       setPath(json, field, result);
-      return { json };
+      // O n8n mantém os arquivos do item na saída do Crypto.
+      return item.binary ? { json, binary: item.binary } : { json };
     });
   },
 };
@@ -800,7 +821,10 @@ export const html: NodeType = {
         displayName: 'Origem do HTML',
         type: 'options',
         default: 'json',
-        options: [{ name: 'Campo JSON', value: 'json' }],
+        options: [
+          { name: 'Campo JSON', value: 'json' },
+          { name: 'Arquivo do item', value: 'binary' },
+        ],
         showWhen: { operation: ['extractHtmlContent'] },
       },
       {
@@ -809,7 +833,8 @@ export const html: NodeType = {
         type: 'string',
         default: 'data',
         required: true,
-        description: 'Campo do item com o HTML (texto ou lista de textos). Aceita caminho com pontos.',
+        description:
+          'Campo JSON: campo do item com o HTML (texto ou lista de textos), aceita caminho com pontos. Arquivo do item: nome do arquivo no item (ex.: data), lido como texto UTF-8.',
         showWhen: { operation: ['extractHtmlContent'] },
       },
       {
@@ -906,8 +931,9 @@ export const html: NodeType = {
 
     if (operation === 'extractHtmlContent') {
       return eachItem(ctx, async (item, i) => {
-        const path = str(await ctx.getParam('dataPropertyName', i), 'data');
-        const source = getPath(item.json, path);
+        const path = str(await ctx.getParam('dataPropertyName', i), 'data') || 'data';
+        const fromFile = str(await ctx.getParam('sourceData', i), 'json') === 'binary';
+        const source: JsonValue | undefined = fromFile ? getBinaryBuffer(item, path, i).toString('utf8') : getPath(item.json, path);
         if (source === undefined) throw new NodeOperationError(`O item não tem o campo "${path}"`);
         const rows = await ctx.getParam('extractionValues', i);
         const list = (Array.isArray(rows) ? rows : []).filter(isPlainObject);

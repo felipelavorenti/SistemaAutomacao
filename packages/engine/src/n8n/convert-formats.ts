@@ -206,20 +206,21 @@ function crypto({ params, warn, node }: Ctx): Converted | null {
     warn(`a ação "${action}" do Crypto ainda não existe aqui`);
     return null;
   }
-  if ((action === 'hash' || action === 'hmac') && params.binaryData === true) {
-    warn('o Crypto calculava o hash de um arquivo (dado binário), o que ainda não existe aqui');
-    return null;
-  }
   const p: JsonObject = { action, dataPropertyName: v(params.dataPropertyName, 'data') };
+  if ((action === 'hash' || action === 'hmac') && params.binaryData === true) {
+    // Hash ou HMAC do conteúdo de um arquivo do item, como no n8n.
+    p.binaryData = true;
+    p.binaryPropertyName = v(params.binaryPropertyName, 'data');
+  }
   switch (action) {
     case 'hash':
       p.type = v(params.type, version >= 2 ? 'SHA256' : 'MD5');
-      p.value = v(params.value, '');
+      if (!p.binaryData) p.value = v(params.value, '');
       p.encoding = v(params.encoding, 'hex');
       break;
     case 'hmac':
       p.type = v(params.type, version >= 2 ? 'SHA256' : 'MD5');
-      p.value = v(params.value, '');
+      if (!p.binaryData) p.value = v(params.value, '');
       p.encoding = v(params.encoding, 'hex');
       p.secret = v(params.secret, '');
       if (version >= 2 || !params.secret) warn('o segredo do HMAC estava na credencial do n8n, que não vem na exportação; preencha o campo "Segredo"');
@@ -258,10 +259,7 @@ function extractionRows(value: unknown): JsonObject[] {
 
 function extract(ctx: Ctx, oldText: boolean): Converted | null {
   const { params, warn } = ctx;
-  if ((params.sourceData ?? 'json') === 'binary') {
-    warn('o HTML vinha de um arquivo (dado binário), o que ainda não existe aqui');
-    return null;
-  }
+  const fromFile = (params.sourceData ?? 'json') === 'binary';
   const o = opts(params);
   const rows = extractionRows(params.extractionValues);
   if (oldText && rows.some((r) => r.returnValue === 'text')) warn('a extração de texto agora segue a versão nova do nó HTML do n8n (blocos viram linhas); confira os valores');
@@ -269,7 +267,7 @@ function extract(ctx: Ctx, oldText: boolean): Converted | null {
     type: 'html',
     parameters: {
       operation: 'extractHtmlContent',
-      sourceData: 'json',
+      sourceData: fromFile ? 'binary' : 'json',
       dataPropertyName: v(params.dataPropertyName, 'data'),
       extractionValues: rows.length ? rows : [{ key: '', cssSelector: '', returnValue: 'text', attribute: '', skipSelectors: '', returnArray: false }],
       trimValues: bool(o.trimValues, true),

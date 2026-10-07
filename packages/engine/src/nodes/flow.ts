@@ -1,6 +1,6 @@
 import type { NodeType } from '../node-types.js';
 import { NodeOperationError } from '../node-types.js';
-import type { Item, JsonValue } from '../types.js';
+import type { BinaryData, Item, JsonValue } from '../types.js';
 import { isPlainObject } from './paths.js';
 
 interface LoopState {
@@ -208,8 +208,25 @@ function toItems(result: JsonValue, itemIndex?: number): Item[] {
       const where = itemIndex === undefined ? `posição ${i}` : `item ${itemIndex}`;
       throw new NodeOperationError(`O código deve devolver objetos; recebeu ${JSON.stringify(value)} (${where})`);
     }
-    return isPlainObject(value.json) && Object.keys(value).every((k) => k === 'json' || k === 'binary') ? { json: value.json } : { json: value };
+    if (!isPlainObject(value.json) || !Object.keys(value).every((k) => k === 'json' || k === 'binary')) return { json: value };
+    const item: Item = { json: value.json };
+    const binary = toBinaryMap(value.binary);
+    if (binary) item.binary = binary;
+    return item;
   });
+}
+
+/** Arquivos devolvidos pelo código: cada um precisa de data (base64) e mimeType, como no n8n. */
+function toBinaryMap(value: JsonValue | undefined): Record<string, BinaryData> | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const out: Record<string, BinaryData> = {};
+  for (const [key, file] of Object.entries(value)) {
+    if (!isPlainObject(file) || typeof file.data !== 'string') {
+      throw new NodeOperationError(`O arquivo "${key}" devolvido pelo código precisa ter o conteúdo em base64 no campo data`);
+    }
+    out[key] = { ...(file as unknown as BinaryData), mimeType: typeof file.mimeType === 'string' && file.mimeType ? file.mimeType : 'application/octet-stream' };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export const executeWorkflowTrigger: NodeType = {

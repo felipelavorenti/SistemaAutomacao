@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { NodeExecuteContext, NodeType, PropertyDescription } from '../node-types.js';
 import { NodeOperationError } from '../node-types.js';
-import type { Item, JsonObject, JsonValue } from '../types.js';
+import type { BinaryData, Item, JsonObject, JsonValue } from '../types.js';
+import { binaryPropertyList, extensionFromMimeType, getBinary, toBinary } from '../binary.js';
 import { callApi } from './api.js';
 import { GMAIL_API, GMAIL_CONNECTION_TYPES, googleAccessToken } from './google.js';
 import { isPlainObject } from './paths.js';
@@ -142,6 +143,15 @@ const properties: PropertyDescription[] = [
     ],
   },
   {
+    name: 'attachmentProperties',
+    displayName: 'Anexos dos arquivos do item',
+    type: 'string',
+    default: '',
+    placeholder: 'data, attachment_0',
+    description: 'Nomes dos arquivos do item que vão anexados, separados por vírgula (ex.: o "data" que o HTTP Request ou o Read Files from Disk devolve). Somam aos anexos acima.',
+    showWhen: when(...COMPOSE),
+  },
+  {
     name: 'query',
     displayName: 'Busca',
     type: 'string',
@@ -179,8 +189,25 @@ const properties: PropertyDescription[] = [
     displayName: 'Trazer o conteúdo dos anexos',
     type: 'boolean',
     default: false,
-    description: 'Põe o conteúdo de cada anexo em base64 no item. Sem isso, vem só o nome, o tipo e o tamanho.',
+    description: 'Cada anexo vira um arquivo do item (attachment_0, attachment_1...), como no n8n. Sem isso, vem só o nome, o tipo e o tamanho.',
     showWhen: when('search', 'searchDrafts', 'get'),
+  },
+  {
+    name: 'attachmentsPrefix',
+    displayName: 'Prefixo dos arquivos dos anexos',
+    type: 'string',
+    default: 'attachment_',
+    description: 'O primeiro anexo fica em <prefixo>0, o segundo em <prefixo>1 e assim por diante.',
+    showWhen: { operation: ['search', 'searchDrafts', 'get'], downloadAttachments: [true] },
+  },
+  {
+    name: 'attachmentsBase64InJson',
+    displayName: 'Também pôr o conteúdo em base64 no JSON',
+    type: 'boolean',
+    // Ligado por padrão para os fluxos já salvos continuarem lendo attachments[n].content; os importados do n8n vêm desligados.
+    default: true,
+    description: 'Repete o conteúdo de cada anexo em base64 em attachments[n].content, como era antes dos arquivos do item. Desligue quando o fluxo usar só os arquivos do item: a execução fica bem menor.',
+    showWhen: { operation: ['search', 'searchDrafts', 'get'], downloadAttachments: [true] },
   },
   {
     name: 'labels',
@@ -266,23 +293,23 @@ export const gmail: NodeType = {
             includeSpamTrash: flag(await ctx.getParam('includeSpamTrash', i)),
             limit,
           });
-          const download = flag(await ctx.getParam('downloadAttachments', i));
-          for (const id of ids) output.push({ json: await api.readMessage(id, download) });
+          const download = await downloadOptions(ctx, i);
+          for (const id of ids) output.push(await api.readMessage(id, download));
           break;
         }
         case 'searchDrafts': {
           const limit = Math.min(500, Math.max(1, Math.trunc(Number(await ctx.getParam('limit', i)) || 20)));
           const drafts = await api.searchDrafts({ q: await param('query'), limit });
-          const download = flag(await ctx.getParam('downloadAttachments', i));
+          const download = await downloadOptions(ctx, i);
           for (const draft of drafts) {
             const message = await api.readMessage(draft.messageId, download);
             // id é o do rascunho, o que Enviar e Excluir rascunho pedem; o do e-mail fica em emailId.
-            output.push({ json: { ...message, id: draft.id, emailId: draft.messageId } });
+            output.push({ ...message, json: { ...message.json, id: draft.id, emailId: draft.messageId } });
           }
           break;
         }
         case 'get':
-          output.push({ json: await api.readMessage(await required('messageId', 'o ID do e-mail'), flag(await ctx.getParam('downloadAttachments', i))) });
+          output.push(await api.readMessage(await required('messageId', 'o ID do e-mail'), await downloadOptions(ctx, i)));
           break;
         case 'markRead':
         case 'markUnread': {
@@ -399,20 +426,30 @@ class GmailApi {
     return drafts.slice(0, options.limit);
   }
 
-  async readMessage(id: string, downloadAttachments: boolean): Promise<JsonObject> {
+  async readMessage(id: string, download: DownloadOptions): Promise<Item> {
     const message = await this.get(`/messages/${encodeURIComponent(id)}?format=full`);
     const parsed = parseMessage(message);
-    if (downloadAttachments) {
-      for (const attachment of parsed.attachments) {
-        if (attachment.content === undefined && typeof attachment.attachmentId === 'string') {
-          const data = await this.get(`/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachment.attachmentId)}`);
-          attachment.content = typeof data.data === 'string' ? fromBase64Url(data.data).toString('base64') : '';
-        }
-      }
-    } else {
+    if (!download.enabled) {
       for (const attachment of parsed.attachments) delete attachment.content;
+      return { json: parsed as unknown as JsonObject };
     }
-    return parsed as unknown as JsonObject;
+    // Como no n8n: cada anexo vira um arquivo do item, em <prefixo>0, <prefixo>1...
+    const binary: Record<string, BinaryData> = {};
+    for (const [index, attachment] of parsed.attachments.entries()) {
+      if (attachment.content === undefined && typeof attachment.attachmentId === 'string') {
+        const data = await this.get(`/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachment.attachmentId)}`);
+        attachment.content = typeof data.data === 'string' ? fromBase64Url(data.data).toString('base64') : '';
+      }
+      const property = `${download.prefix}${index}`;
+      binary[property] = toBinary(Buffer.from(attachment.content ?? '', 'base64'), {
+        fileName: attachment.fileName || undefined,
+        mimeType: attachment.mimeType || undefined,
+      });
+      attachment.binaryProperty = property;
+      if (!download.base64InJson) delete attachment.content;
+    }
+    const json = parsed as unknown as JsonObject;
+    return Object.keys(binary).length ? { json, binary } : { json };
   }
 
   async replyInfo(messageId: string, account: string, replyAll: boolean): Promise<ReplyInfo> {
@@ -434,6 +471,22 @@ class GmailApi {
       cc: unique(cc),
     };
   }
+}
+
+interface DownloadOptions {
+  enabled: boolean;
+  prefix: string;
+  base64InJson: boolean;
+}
+
+async function downloadOptions(ctx: NodeExecuteContext, i: number): Promise<DownloadOptions> {
+  const enabled = flag(await ctx.getParam('downloadAttachments', i));
+  if (!enabled) return { enabled, prefix: '', base64InJson: false };
+  return {
+    enabled,
+    prefix: text(await ctx.getParam('attachmentsPrefix', i)) || 'attachment_',
+    base64InJson: flag(await ctx.getParam('attachmentsBase64InJson', i)),
+  };
 }
 
 async function resolveLabels(names: string[], labels: Promise<Map<string, string>>): Promise<string[]> {
@@ -484,13 +537,27 @@ async function composeFromParams(ctx: NodeExecuteContext, i: number, reply: Repl
     html: (await param('bodyType')) === 'html',
     inReplyTo: reply?.messageId || undefined,
     references: reply?.references || undefined,
-    attachments: await attachmentsFrom(ctx, await ctx.getParam('attachments', i)),
+    attachments: [...(await attachmentsFrom(ctx, await ctx.getParam('attachments', i))), ...binaryAttachments(ctx.inputs[0]?.[i], await param('attachmentProperties'), i)],
   };
+}
+
+/** Anexos tirados dos arquivos do item (n8n: attachmentsUi.attachmentsBinary[].property). */
+function binaryAttachments(item: Item | undefined, properties: string, itemIndex: number): Attachment[] {
+  return binaryPropertyList(properties).map((property, index) => {
+    const file = getBinary(item ?? { json: {} }, property, itemIndex);
+    const extension = file.fileExtension ?? extensionFromMimeType(file.mimeType);
+    return {
+      fileName: file.fileName || `anexo-${index + 1}${extension ? `.${extension}` : ''}`,
+      content: file.data,
+      mimeType: file.mimeType || 'application/octet-stream',
+    };
+  });
 }
 
 async function attachmentsFrom(ctx: NodeExecuteContext, value: JsonValue): Promise<Attachment[]> {
   if (!Array.isArray(value)) return [];
   const attachments: Attachment[] = [];
+  const rawRows = Array.isArray(ctx.node.parameters.attachments) ? ctx.node.parameters.attachments : [];
   for (const [index, row] of value.filter(isPlainObject).entries()) {
     const fileId = text(row.file ?? null);
     if (fileId) {
@@ -505,7 +572,17 @@ async function attachmentsFrom(ctx: NodeExecuteContext, value: JsonValue): Promi
     }
     const content = text(row.content ?? null).replace(/\s+/g, '');
     const fileName = text(row.fileName ?? null) || `anexo-${index + 1}`;
-    if (!content) continue;
+    if (!content) {
+      // Fluxo antigo que lia o base64 dos anexos baixados: agora o conteúdo fica nos arquivos do item.
+      const raw = rawRows[index];
+      const expression = isPlainObject(raw) && typeof raw.content === 'string' && raw.content.startsWith('=') ? raw.content : '';
+      if (/attachments\b[\s\S]*\.content\b/.test(expression)) {
+        throw new NodeOperationError(
+          `O anexo ${fileName} veio vazio: o base64 dos anexos baixados não fica mais em attachments[n].content. Use "Anexos dos arquivos do item" (ex.: attachment_0) ou ligue "Também pôr o conteúdo em base64 no JSON" no nó que baixa os anexos.`,
+        );
+      }
+      continue;
+    }
     if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(content)) throw new NodeOperationError(`O conteúdo do anexo ${fileName} não está em base64`);
     attachments.push({ fileName, content: content.replace(/-/g, '+').replace(/_/g, '/'), mimeType: text(row.mimeType ?? null) || 'application/octet-stream' });
   }
@@ -579,6 +656,8 @@ interface ParsedAttachment {
   size: number;
   attachmentId?: string;
   content?: string;
+  /** Arquivo do item com o conteúdo do anexo, quando baixado. */
+  binaryProperty?: string;
 }
 
 interface ParsedMessage {
