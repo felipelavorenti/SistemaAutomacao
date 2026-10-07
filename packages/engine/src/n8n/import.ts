@@ -531,6 +531,8 @@ function setNode({ params, node }: Ctx): Converted {
       include,
       includeFields: text(params.includeFields),
       excludeFields: text(params.excludeFields),
+      // Até a 3.3 o padrão era manter os arquivos; da 3.4 em diante eles seguem com os outros campos, salvo a opção Strip Binary.
+      includeBinary: version < 3.4 ? opts.includeBinary !== false : params.includeOtherFields === true || opts.stripBinary === false,
     };
     if (params.mode === 'raw') return { type: 'editFields', parameters: { mode: 'raw', jsonOutput: text(params.jsonOutput ?? '{}'), ...others, ...common } };
     const assignments: JsonObject[] = [];
