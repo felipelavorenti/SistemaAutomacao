@@ -287,6 +287,19 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
     body: { input: [{ json: { sku: '7891000100103' } }] },
     response: { executionId: '4b31556c-2e1d-48da-9043-d1a708320b46' },
   },
+  'POST /workflows/{id}/listen': {
+    path: '/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen',
+    body: {},
+    response: { expiresAt: '2026-10-07T18:52:10.120Z', webhooks: [{ kind: 'webhook', method: 'POST', path: 'pedidos/novo', nodeName: 'Webhook' }] },
+  },
+  'GET /workflows/{id}/listen': {
+    path: '/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen',
+    response: { listening: false, executionId: '4b31556c-2e1d-48da-9043-d1a708320b46', expiresAt: '2026-10-07T18:51:02.004Z' },
+  },
+  'DELETE /workflows/{id}/listen': {
+    path: '/workflows/28eed8f6-3e9c-48e0-a144-c4b5226d3b79/listen',
+    response: { ok: true },
+  },
   'GET /workflows/{id}/callers': {
     path: '/workflows/001f6938-0a6c-411e-b8b8-d0f9c96efd04/callers',
     response: [{ id: 'e0d680d2-37e4-403d-a15e-4d31808d352b', name: 'Fechar pedido' }],

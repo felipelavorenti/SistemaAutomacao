@@ -3,7 +3,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, scheduleRepeat, ScheduleError, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
-import { currentUser, type AppDeps } from '../app.js';
+import { currentUser, type RouteDeps } from '../app.js';
+import { isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
 import { audit } from '../lib/audit.js';
@@ -33,6 +34,7 @@ export const definitionSchema = z.object({
     }),
   ),
   connections: z.array(z.object({ from: z.string(), fromOutput: z.number().int().min(0), to: z.string(), toInput: z.number().int().min(0) })),
+  settings: z.object({ errorWorkflowId: z.string().uuid().optional() }).optional(),
 }) as unknown as z.ZodType<WorkflowDefinition>;
 
 const idParam = z.object({ id: z.string().uuid() });
@@ -48,7 +50,7 @@ interface WorkflowRow {
 }
 
 export const workflowRoutes =
-  ({ db, queue }: AppDeps): FastifyPluginAsync =>
+  ({ db, queue, triggers }: RouteDeps): FastifyPluginAsync =>
   async (app) => {
     const load = async (user: CurrentUser, id: string): Promise<WorkflowRow> => {
       const row = await one<WorkflowRow>(db, 'SELECT id, name, folder_id, active, definition, version, updated_at FROM workflows WHERE id = $1', [id]);
@@ -130,6 +132,24 @@ export const workflowRoutes =
       }
     };
 
+    /** Fluxo de erro escolhido nas configurações: precisa existir, estar visível e ter o Error Trigger. */
+    const checkErrorWorkflow = async (user: CurrentUser, definition: WorkflowDefinition) => {
+      const target = definition.settings?.errorWorkflowId;
+      if (!target) return;
+      const row = await one<{ folder_id: string; definition: WorkflowDefinition }>(db, 'SELECT folder_id, definition FROM workflows WHERE id = $1', [target]);
+      if (!row) throw new HttpError(400, 'O fluxo de erro escolhido não existe mais');
+      if (!canSeeFolder(user, row.folder_id)) throw forbidden('O fluxo de erro escolhido está numa pasta à qual você não tem acesso');
+      if (!row.definition.nodes.some((n) => n.type === 'errorTrigger' && !n.disabled)) {
+        throw new HttpError(400, 'O fluxo de erro escolhido não começa pelo gatilho Error Trigger');
+      }
+    };
+
+    /** Webhook e formulário com caminho já usado por outro fluxo ativo. */
+    const checkTriggerConflicts = (wf: { id: string; name: string; version: number; definition: WorkflowDefinition }) => {
+      const problems = triggers.conflicts(wf);
+      if (problems.length) throw new HttpError(400, problems.join('; '));
+    };
+
     app.get('/node-types', async () => defaultRegistry.descriptions());
 
     /** Prévia de uma expressão no editor, usando os dados da última execução. */
@@ -202,6 +222,7 @@ export const workflowRoutes =
       };
       await checkConnections(user, definition);
       await checkSubworkflows(user, definition);
+      await checkErrorWorkflow(user, definition);
       const id = await transaction(db, async (tx) => {
         const row = await one<{ id: string }>(
           tx,
@@ -235,6 +256,8 @@ export const workflowRoutes =
       await checkConnections(user, b.definition);
       await checkSubworkflows(user, b.definition, id);
       checkSchedule(b.definition, before.active);
+      await checkErrorWorkflow(user, b.definition);
+      if (before.active) checkTriggerConflicts({ id, name: b.name, version: before.version, definition: b.definition });
       const issues = validateWorkflow(b.definition);
       if (before.active && issues.length) {
         throw new HttpError(400, 'O fluxo está ativo e tem problemas; corrija antes de salvar', issues);
@@ -265,7 +288,11 @@ export const workflowRoutes =
         });
       });
       const saved = await load(user, id);
-      if (saved.active) await queue.syncSchedule(saved);
+      if (saved.active) {
+        await queue.syncSchedule(saved);
+        await triggers.sync(saved);
+        await triggers.fireEvent(saved, 'update');
+      }
       return { ...saved, issues };
     });
 
@@ -275,15 +302,26 @@ export const workflowRoutes =
       const { id } = idParam.parse(request.params);
       const wf = await load(user, id);
       if (active) {
-        if (!wf.definition.nodes.some((n) => n.type === 'scheduleTrigger' && !n.disabled)) {
-          throw new HttpError(400, 'Só fluxos com gatilho de agendamento precisam ser ativados');
+        if (!isActivatable(wf.definition)) {
+          throw new HttpError(400, 'Só fluxos com gatilho de agendamento, webhook, formulário ou outro gatilho que escuta precisam ser ativados');
         }
         const issues = validateWorkflow(wf.definition);
         if (issues.length) throw new HttpError(400, 'Corrija os problemas do fluxo antes de ativar', issues);
         checkSchedule(wf.definition, true);
+        checkTriggerConflicts(wf);
       }
       await db.query('UPDATE workflows SET active = $2, updated_at = now(), updated_by = $3 WHERE id = $1', [id, active, user.id]);
       await queue.syncSchedule({ ...wf, active });
+      try {
+        await triggers.sync({ ...wf, active }, { strict: true });
+      } catch (err) {
+        // Um gatilho que não sobe (ex.: pasta fora de FILES_DIRS) não deixa o fluxo ativo.
+        await db.query('UPDATE workflows SET active = false WHERE id = $1', [id]);
+        await queue.syncSchedule({ ...wf, active: false });
+        await triggers.sync({ ...wf, active: false });
+        throw new HttpError(400, `O gatilho não iniciou: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (active) await triggers.fireEvent({ ...wf, active }, 'activate');
       await audit(db, { userId: user.id, action: active ? 'activate' : 'deactivate', entityType: 'workflow', entityId: id, entityName: wf.name, ip: request.ip });
       return { ok: true, active };
     };
@@ -308,6 +346,7 @@ export const workflowRoutes =
         throw new HttpError(400, `Este fluxo é chamado por outros fluxos: ${callers.map((c) => c.name).join(', ')}. Remova as chamadas antes de excluir.`);
       }
       await queue.syncSchedule({ ...wf, active: false });
+      await triggers.remove(id);
       await db.query('DELETE FROM workflows WHERE id = $1', [id]);
       await audit(db, {
         userId: user.id,
@@ -480,6 +519,8 @@ export const workflowRoutes =
         .object({
           definition: definitionSchema.optional(),
           input: z.array(z.object({ json: z.record(jsonValue) })).optional(),
+          /** Gatilho de onde começar, em fluxos com mais de um. */
+          startNodeId: z.string().min(1).optional(),
         })
         .parse(request.body ?? {});
       const wf = await load(user, id);
@@ -496,8 +537,47 @@ export const workflowRoutes =
         triggeredBy: user.id,
         definition,
         input: (b.input as Item[] | undefined) ?? null,
+        startNodeId: b.startNodeId && definition.nodes.some((n) => n.id === b.startNodeId) ? b.startNodeId : null,
       });
       await queue.enqueueRun(executionId);
       return { executionId };
+    });
+
+    /**
+     * Escuta de teste do editor: abre por 2 minutos as URLs de teste do Webhook e do Form Trigger e os
+     * gatilhos que escutam (IMAP, pasta, SSE) ou consultam (RSS, consulta uma vez na hora). O primeiro
+     * evento vira uma execução manual da definição enviada (mesmo ainda não salva).
+     */
+    app.post('/workflows/:id/listen', async (request) => {
+      const user = currentUser(request);
+      requireCap(user, 'workflow:execute');
+      const { id } = idParam.parse(request.params);
+      const b = z.object({ definition: definitionSchema.optional() }).parse(request.body ?? {});
+      const wf = await load(user, id);
+      if (b.definition) {
+        requireCap(user, 'workflow:edit');
+        await checkConnections(user, b.definition);
+        await checkSubworkflows(user, b.definition, id);
+      }
+      try {
+        return await triggers.startTest(wf, b.definition ?? wf.definition, user.id);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+    });
+
+    app.get('/workflows/:id/listen', async (request) => {
+      const user = currentUser(request);
+      const { id } = idParam.parse(request.params);
+      await load(user, id);
+      return triggers.testStatus(id);
+    });
+
+    app.delete('/workflows/:id/listen', async (request) => {
+      const user = currentUser(request);
+      const { id } = idParam.parse(request.params);
+      await load(user, id);
+      await triggers.stopTest(id);
+      return { ok: true };
     });
   };

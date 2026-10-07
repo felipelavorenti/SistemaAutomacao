@@ -53,7 +53,7 @@ export function validateWorkflow(workflow: WorkflowDefinition, registry: NodeReg
 
   const triggers = workflow.nodes.filter((n) => registry.get(n.type)?.description.group === 'trigger');
   if (triggers.length === 0) issues.push({ message: 'O fluxo precisa de um gatilho' });
-  if (triggers.length > 1) issues.push({ message: 'O fluxo deve ter apenas um gatilho' });
+  // Vários gatilhos valem, como no n8n: cada execução começa no gatilho que disparou.
 
   for (const c of workflow.connections) {
     if (!ids.has(c.from) || !ids.has(c.to)) issues.push({ message: 'Existe uma ligação para um nó que não existe' });

@@ -6,6 +6,7 @@ import { createDb, many, migrate } from './db/db.js';
 import { createRedis, ExecutionQueue } from './executions/queue.js';
 import { startWorker } from './executions/worker.js';
 import { ensureAdmin } from './lib/auth.js';
+import { TriggerManager } from './triggers/manager.js';
 
 const config = loadConfig();
 const db = createDb(config.databaseUrl);
@@ -23,11 +24,15 @@ await queue.scheduleCleanup(config.executionRetentionDays > 0);
 
 const worker = config.runWorkerInProcess ? startWorker({ db, config, redis: createRedis(config.redisUrl), subscriber: createRedis(config.redisUrl) }) : null;
 
-const app = await buildApp({ db, config: { ...config, webDistDir: config.webDistDir && resolve(config.webDistDir) }, queue });
+const triggers = new TriggerManager({ db, config, queue });
+const app = await buildApp({ db, config: { ...config, webDistDir: config.webDistDir && resolve(config.webDistDir) }, queue, triggers });
 await app.listen({ port: config.port, host: '0.0.0.0' });
+// Webhooks, formulários e gatilhos que escutam dos fluxos ativos.
+await triggers.start();
 
 const shutdown = async () => {
   await app.close();
+  await triggers.close();
   await worker?.close();
   await queue.close();
   redis.disconnect();

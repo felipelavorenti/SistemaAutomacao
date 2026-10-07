@@ -158,12 +158,18 @@ export class TriggerManager {
   }
 
   /** Deixa os gatilhos do fluxo iguais à versão salva (chamado ao salvar, ativar, desativar e excluir). */
-  async sync(wf: TriggerWorkflow): Promise<void> {
+  async sync(wf: TriggerWorkflow, options: { strict?: boolean } = {}): Promise<void> {
     await this.stopRunning(wf.id);
     this.production.delete(wf.id);
     if (!wf.active) return;
     this.production.set(wf.id, entriesFor(wf));
-    await this.startListeners(wf, null);
+    try {
+      await this.startListeners(wf, null, options.strict === true);
+    } catch (err) {
+      await this.stopRunning(wf.id);
+      this.production.delete(wf.id);
+      throw err;
+    }
   }
 
   async remove(workflowId: string): Promise<void> {
@@ -341,7 +347,7 @@ export class TriggerManager {
     return { id: row.id, type: row.type, data: decryptJson<JsonObject>(this.deps.config.encryptionKey, row.data_encrypted) };
   }
 
-  private async startListeners(wf: TriggerWorkflow, test: TestSession | null): Promise<Running> {
+  private async startListeners(wf: TriggerWorkflow, test: TestSession | null, strict = false): Promise<Running> {
     const running: Running = { controller: new AbortController(), closers: [], timers: [] };
     if (!test) this.running.set(wf.id, running);
     for (const node of wf.definition.nodes) {
@@ -353,8 +359,8 @@ export class TriggerManager {
         try {
           running.closers.push(await type.listen(ctx));
         } catch (err) {
+          if (test || strict) throw new Error(`"${node.name}": ${err instanceof Error ? err.message : String(err)}`);
           console.error(`Gatilho "${node.name}" do fluxo "${wf.name}" não iniciou:`, err);
-          if (test) throw err;
         }
       }
       if (type.poll) {

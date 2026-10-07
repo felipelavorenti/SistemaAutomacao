@@ -30,6 +30,11 @@ interface ExecutionRow {
   custom_data: unknown;
   data: Buffer | null;
   data_size: number | null;
+  start_node_id: string | null;
+  wait_till: Date | null;
+  wait_info: unknown;
+  resume_state: Buffer | null;
+  resume_data: Buffer | null;
 }
 
 export const executionRoutes =
@@ -53,8 +58,8 @@ export const executionRoutes =
       const q = z
         .object({
           workflowId: z.string().uuid().optional(),
-          status: z.enum(['queued', 'running', 'success', 'error', 'canceled']).optional(),
-          mode: z.enum(['manual', 'schedule', 'subworkflow', 'retry']).optional(),
+          status: z.enum(['queued', 'running', 'success', 'error', 'canceled', 'waiting']).optional(),
+          mode: z.enum(['manual', 'schedule', 'subworkflow', 'retry', 'webhook', 'trigger', 'error']).optional(),
           parentId: z.string().uuid().optional(),
           from: z.string().datetime({ offset: true }).optional(),
           to: z.string().datetime({ offset: true }).optional(),
@@ -68,7 +73,7 @@ export const executionRoutes =
         .parse(request.query);
       return many(
         db,
-        `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.mode, e.status, e.created_at, e.started_at, e.finished_at,
+        `SELECT e.id, e.workflow_id, w.name AS workflow_name, e.mode, e.status, e.created_at, e.started_at, e.finished_at, e.wait_till,
                 e.error_message, e.error_node, u.name AS triggered_by_name, e.data_size, e.parent_execution_id, e.custom_data,
                 round(extract(epoch FROM (e.finished_at - e.started_at)) * 1000)::float8 AS duration_ms
          FROM executions e JOIN workflows w ON w.id = e.workflow_id LEFT JOIN users u ON u.id = e.triggered_by
@@ -121,7 +126,8 @@ export const executionRoutes =
       requireCap(user, 'execution:view');
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
-      const { data, ...rest } = row;
+      // O estado da pausa é interno (pode ter arquivos inteiros); a tela usa wait_till e wait_info.
+      const { data, resume_state: _state, resume_data: _resume, ...rest } = row;
       // Subfluxos que esta execução chamou, só os que o usuário pode ver.
       const children = await many(
         db,
@@ -166,6 +172,13 @@ export const executionRoutes =
         await db.query(`UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada antes de começar' WHERE id = $1 AND status = 'queued'`, [id]);
       } else if (row.status === 'running') {
         await queue.requestCancel(id);
+      } else if (row.status === 'waiting') {
+        await db.query(
+          `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',
+             resume_state = NULL, resume_data = NULL, wait_till = NULL WHERE id = $1 AND status = 'waiting'`,
+          [id],
+        );
+        await queue.cancelResume(id);
       } else {
         throw new HttpError(400, 'A execução já terminou');
       }
@@ -179,7 +192,7 @@ export const executionRoutes =
       requireCap(user, 'workflow:execute');
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
-      if (row.status === 'queued' || row.status === 'running') throw new HttpError(400, 'A execução ainda está em andamento');
+      if (row.status === 'queued' || row.status === 'running' || row.status === 'waiting') throw new HttpError(400, 'A execução ainda está em andamento');
       const executionId = await createExecution(db, {
         workflowId: row.workflow_id,
         workflowVersion: row.workflow_version,
@@ -188,6 +201,7 @@ export const executionRoutes =
         definition: row.definition,
         input: row.input as never,
         retryOf: id,
+        startNodeId: row.start_node_id,
       });
       await queue.enqueueRun(executionId);
       await audit(db, { userId: user.id, action: 'retry', entityType: 'execution', entityId: executionId, entityName: row.workflow_name, after: { retryOf: id }, ip: request.ip });

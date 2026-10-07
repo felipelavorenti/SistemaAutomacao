@@ -29,6 +29,11 @@ export class ExecutionQueue {
     await this.queue.add('run', { kind: 'run', executionId }, { jobId: executionId, removeOnComplete: 1000, removeOnFail: 1000 });
   }
 
+  /** Execução pausada que voltou para a fila: outro ID de job, porque o da primeira rodada ainda pode estar guardado. */
+  async enqueueResumed(executionId: string): Promise<void> {
+    await this.queue.add('run', { kind: 'run', executionId }, { jobId: `${executionId}-${Date.now()}`, removeOnComplete: 1000, removeOnFail: 1000 });
+  }
+
   /**
    * Execuções agendadas esperando vaga no worker. Elas só viram uma linha em executions
    * quando o worker as pega, então sem isto não apareceriam em lugar nenhum.
