@@ -47,9 +47,15 @@ export interface Connection {
   toInput: number;
 }
 
+export interface WorkflowSettings {
+  /** Fluxo que roda quando este falha numa execução automática (começa pelo Error Trigger). */
+  errorWorkflowId?: string;
+}
+
 export interface WorkflowDefinition {
   nodes: NodeInstance[];
   connections: Connection[];
+  settings?: WorkflowSettings;
 }
 
 export interface PropertyDescription {
@@ -94,6 +100,8 @@ export interface NodeTypeDescription {
   inputNames?: string[];
   dynamicOutputs?: DynamicOutputs;
   hidden?: boolean;
+  /** Gatilho que faz o fluxo rodar sozinho quando ele está ativo. */
+  activatable?: boolean;
   properties: PropertyDescription[];
 }
 
@@ -171,7 +179,7 @@ export interface NodeRunSummary {
   error?: string;
 }
 
-export type ExecutionStatus = 'queued' | 'running' | 'success' | 'error' | 'canceled';
+export type ExecutionStatus = 'queued' | 'running' | 'waiting' | 'success' | 'error' | 'canceled';
 
 export interface ExecutionListItem {
   id: string;
@@ -190,6 +198,15 @@ export interface ExecutionListItem {
   parent_execution_id: string | null;
   /** Pares gravados pelo nó Execution Data. */
   custom_data: Record<string, string> | null;
+  /** Até quando uma execução em espera aguarda; null quando espera sem prazo. */
+  wait_till?: string | null;
+}
+
+export interface WaitInfo {
+  kind: 'time' | 'webhook' | 'form';
+  nodeId: string;
+  nodeName: string;
+  until?: string;
 }
 
 export interface ExecutionDetail extends ExecutionListItem {
@@ -200,6 +217,7 @@ export interface ExecutionDetail extends ExecutionListItem {
   error: { message: string; details?: JsonValue; nodeName?: string } | null;
   summary: NodeRunSummary[] | null;
   runs: NodeRun[] | null;
+  wait_info: WaitInfo | null;
   children: { id: string; workflow_id: string; workflow_name: string; status: ExecutionStatus; created_at: string; error_message: string | null }[];
 }
 
@@ -211,6 +229,8 @@ export interface WorkflowListItem {
   active: boolean;
   scheduled: boolean;
   callable: boolean;
+  /** Tem gatilho que faz o fluxo rodar sozinho quando ativo. */
+  activatable: boolean;
   version: number;
   updated_at: string;
   updated_by_name: string | null;
@@ -384,6 +404,7 @@ export function errorMessage(err: unknown): string {
 export const STATUS_LABEL: Record<ExecutionStatus, string> = {
   queued: 'Na fila',
   running: 'Executando',
+  waiting: 'Esperando',
   success: 'Sucesso',
   error: 'Erro',
   canceled: 'Cancelada',
@@ -394,6 +415,9 @@ export const MODE_LABEL: Record<string, string> = {
   schedule: 'Agendada',
   subworkflow: 'Subfluxo',
   retry: 'Reexecução',
+  webhook: 'Webhook',
+  trigger: 'Gatilho',
+  error: 'Fluxo de erro',
 };
 
 export const ROLE_LABEL: Record<Me['role'], string> = {

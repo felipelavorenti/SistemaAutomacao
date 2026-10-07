@@ -72,6 +72,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: null,
         scheduled: true,
         callable: false,
+        activatable: true,
         next_run: '2026-10-01T11:00:00.000Z',
       },
       {
@@ -86,6 +87,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: { id: 'b449e37f-eb2d-4b32-b2a0-7a17fece43ac', status: 'success', createdAt: '2026-09-30T12:44:10.690956+00:00' },
         scheduled: false,
         callable: true,
+        activatable: false,
         next_run: null,
       },
       {
@@ -100,6 +102,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         last_execution: { id: '4b31556c-2e1d-48da-9043-d1a708320b46', status: 'success', createdAt: '2026-09-30T12:44:10.139475+00:00' },
         scheduled: false,
         callable: false,
+        activatable: false,
         next_run: null,
       },
     ],

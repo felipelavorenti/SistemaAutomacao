@@ -94,13 +94,21 @@ export function webhookPath(node: NodeInstance): string {
   return path || node.id;
 }
 
+/** Tipos de nó que fazem o fluxo rodar sozinho quando ele está ativo. */
+export function activatableTypes(): string[] {
+  return defaultRegistry
+    .descriptions()
+    .map((d) => d.type)
+    .filter((t) => {
+      const type = defaultRegistry.get(t);
+      return ACTIVATABLE.has(t) || Boolean(type?.listen || type?.poll);
+    });
+}
+
 /** O fluxo tem algum gatilho que precisa estar ativo para disparar? */
 export function isActivatable(definition: WorkflowDefinition): boolean {
-  return definition.nodes.some((n) => {
-    if (n.disabled) return false;
-    const type = defaultRegistry.get(n.type);
-    return ACTIVATABLE.has(n.type) || Boolean(type?.listen || type?.poll);
-  });
+  const types = new Set(activatableTypes());
+  return definition.nodes.some((n) => !n.disabled && types.has(n.type));
 }
 
 function entriesFor(wf: { id: string; name: string; version: number | null; definition: WorkflowDefinition }, test?: { userId: string }): WebhookEntry[] {

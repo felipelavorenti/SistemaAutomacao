@@ -436,7 +436,7 @@ curl "$INFO8N/api/workflows" \
 
 **Exemplo de resposta**
 
-scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).
+scheduled diz se o fluxo tem gatilho de agendamento; activatable, se tem algum gatilho que o faz rodar sozinho quando ativo (agendamento, Webhook, Form Trigger, n8n Trigger, IMAP, RSS, pasta ou SSE); callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).
 
 ```json
 [
@@ -452,6 +452,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     "last_execution": null,
     "scheduled": true,
     "callable": false,
+    "activatable": true,
     "next_run": "2026-10-01T11:00:00.000Z"
   },
   {
@@ -470,6 +471,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     },
     "scheduled": false,
     "callable": true,
+    "activatable": false,
     "next_run": null
   },
   {
@@ -488,6 +490,7 @@ scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser cha
     },
     "scheduled": false,
     "callable": false,
+    "activatable": false,
     "next_run": null
   }
 ]
@@ -1377,7 +1380,7 @@ curl "$INFO8N/api/node-types" \
 
 **Exemplo de resposta**
 
-Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer.
+Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer. activatable: true marca os gatilhos que fazem o fluxo rodar sozinho quando ele está ativo.
 
 ```json
 [

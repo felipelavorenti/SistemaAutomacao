@@ -272,6 +272,65 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M12 10v6M9 13h6" />
     </>
   ),
+  webhook: (
+    <>
+      <path d="M18 16.98h-5.99c-1.1 0-1.95.94-2.48 1.9A4 4 0 0 1 2 17c.01-.7.2-1.4.57-2" />
+      <path d="M6 17l3.13-5.78c.53-.97.1-2.18-.5-3.1a4 4 0 1 1 6.89-4.06" />
+      <path d="M12 6l3.13 5.73C15.66 12.7 16.9 13 18 13a4 4 0 0 1 0 8" />
+    </>
+  ),
+  respondToWebhook: (
+    <>
+      <path d="M9 14L4 9l5-5" />
+      <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+    </>
+  ),
+  formTrigger: (
+    <>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 8h8M8 12h8M8 16h5" />
+    </>
+  ),
+  form: (
+    <>
+      <rect x="4" y="3" width="16" height="18" rx="2" />
+      <path d="M8 9l2 2 4-4M8 15h8" />
+    </>
+  ),
+  errorTrigger: (
+    <>
+      <path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+      <path d="M12 9v4M12 17h.01" />
+    </>
+  ),
+  n8nTrigger: (
+    <>
+      <path d="M13 2L3 14h9l-1 8 10-12h-9z" />
+    </>
+  ),
+  rssFeedReadTrigger: (
+    <>
+      <path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" />
+    </>
+  ),
+  emailReadImap: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M22 7l-10 6L2 7" />
+    </>
+  ),
+  localFileTrigger: (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <circle cx="12" cy="13" r="2.5" />
+    </>
+  ),
+  sseTrigger: (
+    <>
+      <path d="M2 12h3l3-8 4 16 3-8h7" />
+    </>
+  ),
   unknown: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -322,6 +381,16 @@ export const NODE_COLOR: Record<string, string> = {
   compression: '#8a6d3b',
   editImage: '#c2185b',
   readWriteFile: '#5c6bc0',
+  webhook: '#c94a73',
+  respondToWebhook: '#c94a73',
+  formTrigger: '#ff6d5a',
+  form: '#ff6d5a',
+  errorTrigger: '#ec5b62',
+  n8nTrigger: '#ea4b71',
+  rssFeedReadTrigger: '#f26522',
+  emailReadImap: '#0078d4',
+  localFileTrigger: '#5c6bc0',
+  sseTrigger: '#6b6f80',
 };
 
 export function Icon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {

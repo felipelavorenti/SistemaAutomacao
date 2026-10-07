@@ -372,6 +372,7 @@ fieldset {
   color: #c73a41;
 }
 .badge-running,
+.badge-waiting,
 .badge-queued {
   background: var(--primary-soft);
   color: var(--primary);
@@ -1432,3 +1433,30 @@ textarea.code-editor {
 .binary-key { font-family: monospace; font-size: 12px; color: var(--muted); }
 .binary-links { margin-left: 8px; }
 .binary-links a + a { margin-left: 8px; }
+.trigger-urls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bar);
+}
+.trigger-url-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.trigger-url-line code {
+  flex: 1;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.listen-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

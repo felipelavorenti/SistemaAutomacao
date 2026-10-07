@@ -166,7 +166,7 @@ export function ExecutionsPage() {
                 {e.triggered_by_name && <span className="muted"> · {e.triggered_by_name}</span>}
               </td>
               <td>{formatDate(e.started_at ?? e.created_at)}</td>
-              <td>{formatDuration(e.duration_ms)}</td>
+              <td>{e.status === 'waiting' ? <span className="muted">{e.wait_till ? `esperando até ${formatDate(e.wait_till)}` : 'esperando'}</span> : formatDuration(e.duration_ms)}</td>
               <td className="error-cell">{e.error_message && `${e.error_node ? `${e.error_node}: ` : ''}${e.error_message}`}</td>
             </tr>
           ))}

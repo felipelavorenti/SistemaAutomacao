@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { convertN8nWorkflow, defaultRegistry, ExpressionSandbox, readN8nExport, scheduleRepeat, ScheduleError, validateWorkflow, type Item, type N8nWorkflow, type WorkflowDefinition } from '@sa/engine';
 import { currentUser, type RouteDeps } from '../app.js';
-import { isActivatable } from '../triggers/manager.js';
+import { activatableTypes, isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
 import { audit } from '../lib/audit.js';
@@ -150,7 +150,10 @@ export const workflowRoutes =
       if (problems.length) throw new HttpError(400, problems.join('; '));
     };
 
-    app.get('/node-types', async () => defaultRegistry.descriptions());
+    app.get('/node-types', async () => {
+      const activatable = new Set(activatableTypes());
+      return defaultRegistry.descriptions().map((d) => (activatable.has(d.type) ? { ...d, activatable: true } : d));
+    });
 
     /** Prévia de uma expressão no editor, usando os dados da última execução. */
     app.post('/expressions/preview', async (request) => {
@@ -188,11 +191,13 @@ export const workflowRoutes =
                   (SELECT jsonb_build_object('id', e.id, 'status', e.status, 'createdAt', e.created_at)
                      FROM executions e WHERE e.workflow_id = w.id ORDER BY e.created_at DESC LIMIT 1) AS last_execution,
                   EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'scheduleTrigger') AS scheduled,
-                  EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'executeWorkflowTrigger') AS callable
+                  EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n WHERE n->>'type' = 'executeWorkflowTrigger') AS callable,
+                  EXISTS (SELECT 1 FROM jsonb_array_elements(w.definition->'nodes') n
+                           WHERE n->>'type' = ANY($2::text[]) AND COALESCE(n->>'disabled', 'false') <> 'true') AS activatable
            FROM workflows w JOIN folders f ON f.id = w.folder_id LEFT JOIN users u ON u.id = w.updated_by
            WHERE ($1::uuid[] IS NULL OR w.folder_id = ANY($1))
            ORDER BY f.name, w.name`,
-          [user.folderIds],
+          [user.folderIds, activatableTypes()],
         ),
         queue.nextRuns(),
       ]);

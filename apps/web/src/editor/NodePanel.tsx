@@ -132,6 +132,7 @@ export function NodePanel({
 
           {tab === 'params' && (
             <div className="panel-body">
+              <TriggerUrls node={node} />
               {(node.type === 'manualTrigger' || node.type === 'executeWorkflowTrigger') && (
                 <Field label="JSON de entrada para testes" hint="Usado quando você clica em Executar no editor. Não é salvo no fluxo.">
                   <textarea className="code" rows={5} value={testInput} onChange={(e) => onTestInputChange(e.target.value)} placeholder='{ "sku": "123" }' />
@@ -221,6 +222,54 @@ export function NodePanel({
           ))}
         </section>
       </div>
+    </div>
+  );
+}
+
+/** Endereços de teste e de produção dos nós Webhook e Form Trigger (iguais aos do n8n). */
+function TriggerUrls({ node }: { node: NodeInstance }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const kind = node.type === 'webhook' ? 'webhook' : node.type === 'formTrigger' ? 'form' : null;
+  if (node.type === 'wait') {
+    const resume = node.parameters.resume;
+    if (resume !== 'webhook' && resume !== 'form') return null;
+    return (
+      <p className="muted small">
+        O fluxo fica parado aqui até alguém chamar o endereço {resume === 'form' ? '{{ $execution.resumeFormUrl }}' : '{{ $execution.resumeUrl }}'}. Mande esse endereço
+        antes, por exemplo num e-mail ou numa requisição HTTP.
+      </p>
+    );
+  }
+  if (!kind) return null;
+  const raw = node.parameters.path;
+  const path = (typeof raw === 'string' && !raw.startsWith('=') ? raw.split('/').map((p) => p.trim()).filter(Boolean).join('/') : '') || node.id;
+  const method = kind === 'webhook' ? String(node.parameters.httpMethod ?? 'GET') : null;
+  const urls = [
+    { label: 'Teste', url: `${window.location.origin}/${kind}-test/${path}`, hint: 'Funciona por 2 minutos depois de clicar em Escutar no editor.' },
+    { label: 'Produção', url: `${window.location.origin}/${kind}/${path}`, hint: 'Funciona enquanto o fluxo estiver salvo e ativo.' },
+  ];
+  const copy = (url: string) => {
+    void navigator.clipboard?.writeText(url).then(() => {
+      setCopied(url);
+      setTimeout(() => setCopied(null), 1500);
+    });
+  };
+  return (
+    <div className="trigger-urls">
+      {urls.map((u) => (
+        <div key={u.label} className="trigger-url">
+          <div className="small">
+            <strong>{u.label}</strong> <span className="muted">{u.hint}</span>
+          </div>
+          <div className="trigger-url-line">
+            {method && <span className="badge">{method}</span>}
+            <code>{u.url}</code>
+            <button className="link" onClick={() => copy(u.url)}>
+              {copied === u.url ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

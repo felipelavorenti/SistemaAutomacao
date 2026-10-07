@@ -221,7 +221,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Fluxos das pastas que o usuário enxerga.',
         response:
-          'scheduled diz se o fluxo tem gatilho de agendamento, e callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).',
+          'scheduled diz se o fluxo tem gatilho de agendamento; activatable, se tem algum gatilho que o faz rodar sozinho quando ativo (agendamento, Webhook, Form Trigger, n8n Trigger, IMAP, RSS, pasta ou SSE); callable, se pode ser chamado como subfluxo (começa pelo gatilho Chamado por outro fluxo). last_execution é a execução mais recente, ou null se o fluxo nunca rodou. next_run é o próximo disparo do agendamento; null quando o fluxo está inativo, não é agendado ou não tem próximo disparo (ex.: a execução única já passou).',
       },
       {
         method: 'GET',
@@ -403,7 +403,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Tipos de nó disponíveis no editor, com os parâmetros de cada um.',
         response:
-          'Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer.',
+          'Cada item de properties é um parâmetro do nó: name é a chave dele em parameters, na definição do fluxo, e showWhen diz de quais outros parâmetros ele depende para aparecer. activatable: true marca os gatilhos que fazem o fluxo rodar sozinho quando ele está ativo.',
       },
       {
         method: 'POST',
