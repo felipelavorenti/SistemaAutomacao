@@ -297,7 +297,6 @@ Nenhuma nova. exceljs (XLSX, leitura e escrita), csv-parse (leitura de CSV, as m
 - O leitor de ICS não usa VTIMEZONE: fusos fora do padrão IANA ficam como UTC.
 - A leitura de números no HTML e no RTF é simples (sem separador de milhar, porcentagem nem moeda).
 - Os arquivos ficam em base64 dentro do item, como em todo o motor; planilhas e PDFs muito grandes pesam na memória do worker.
-- Para aparecer no editor e no importador, falta registrar `fileConvertNodes` no `registry.ts` (ou onde os nós são montados) e incluir os `converters` deste arquivo no `convertNode` de `import.ts`, como os outros `convert-*.ts`.
 
 ### Compression, Edit Image e Read/Write Files from Disk
 
@@ -337,10 +336,9 @@ Nenhuma nova. exceljs (XLSX, leitura e escrita), csv-parse (leitura de CSV, as m
 
 **Limites e pendências**
 
-- A imagem Docker (`node:22-bookworm-slim`) não tem fontes: o Escrever texto não desenha nada até instalar uma (ex.: `apt-get install -y fonts-dejavu-core` na etapa final do Dockerfile).
+- A imagem Docker instala `fonts-dejavu-core` e `fontconfig` na etapa final, para o Escrever texto ter fonte. Fora do Docker, o servidor precisa ter alguma fonte instalada.
 - Operadores de Composite de canal e de subtração/divisão, o raio do Blur e a lista de fontes do servidor (o `getFonts` do n8n) não foram feitos.
 - Os limites de descompactação e de leitura são constantes; não há variável de ambiente para mudar.
-- Os nós ainda precisam entrar no `registry.ts` (`fileDiskNodes`) e os conversores em `import.ts` (`extraConverters`), além de ícone e cor na paleta.
 
 ### Arquivos no HTTP Request, Gmail, HTML e Crypto
 
