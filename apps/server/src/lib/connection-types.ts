@@ -194,6 +194,81 @@ export const connectionTypes: ConnectionTypeDescription[] = [
     ],
   },
   {
+    type: 'smtp',
+    displayName: 'SMTP (envio de e-mail)',
+    testable: true,
+    fields: [
+      { name: 'host', displayName: 'Servidor', secret: false, required: true, placeholder: 'smtp.office365.com' },
+      { name: 'port', displayName: 'Porta', secret: false, required: false, default: '465', hint: '465 com SSL/TLS; 587 ou 25 sem (usa STARTTLS quando o servidor oferece).' },
+      { name: 'secure', displayName: 'SSL/TLS', secret: false, required: false, default: 'true', options: yesNo, hint: 'Sim para a porta 465; Não para 587 e 25.' },
+      { name: 'disableStartTls', displayName: 'Desligar STARTTLS', secret: false, required: false, default: 'false', options: yesNo },
+      { name: 'user', displayName: 'Usuário', secret: false, required: false, placeholder: 'automacao@empresa.com.br', hint: 'Vazio: envia sem login (relay interno).' },
+      { name: 'password', displayName: 'Senha', secret: true, required: false, hint: 'No Gmail e no Outlook com verificação em duas etapas, use uma senha de app.' },
+      { name: 'hostName', displayName: 'Nome deste servidor (EHLO)', secret: false, required: false, hint: 'Opcional. Alguns servidores exigem um nome conhecido.' },
+    ],
+  },
+  {
+    type: 'ftp',
+    displayName: 'FTP',
+    testable: true,
+    fields: [
+      { name: 'host', displayName: 'Servidor', secret: false, required: true, placeholder: 'ftp.empresa.com.br' },
+      { name: 'port', displayName: 'Porta', secret: false, required: false, default: '21' },
+      { name: 'user', displayName: 'Usuário', secret: false, required: false, hint: 'Vazio: entra como anonymous.' },
+      { name: 'password', displayName: 'Senha', secret: true, required: false },
+      { name: 'secure', displayName: 'FTPS (TLS explícito)', secret: false, required: false, default: 'false', options: yesNo },
+      { name: 'allowUnauthorizedCerts', displayName: 'Aceitar certificado inválido', secret: false, required: false, default: 'false', options: yesNo },
+    ],
+  },
+  {
+    type: 'sftp',
+    displayName: 'SFTP',
+    testable: true,
+    fields: [
+      { name: 'host', displayName: 'Servidor', secret: false, required: true, placeholder: 'sftp.empresa.com.br' },
+      { name: 'port', displayName: 'Porta', secret: false, required: false, default: '22' },
+      { name: 'user', displayName: 'Usuário', secret: false, required: true },
+      { name: 'password', displayName: 'Senha', secret: true, required: false, hint: 'Senha, chave privada ou as duas.' },
+      { name: 'privateKey', displayName: 'Chave privada (PEM ou OpenSSH)', secret: true, required: false, multiline: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+      { name: 'passphrase', displayName: 'Senha da chave', secret: true, required: false },
+    ],
+  },
+  {
+    type: 'ssh',
+    displayName: 'SSH',
+    testable: true,
+    fields: [
+      { name: 'host', displayName: 'Servidor', secret: false, required: true, placeholder: '10.0.0.5' },
+      { name: 'port', displayName: 'Porta', secret: false, required: false, default: '22' },
+      { name: 'user', displayName: 'Usuário', secret: false, required: true },
+      { name: 'password', displayName: 'Senha', secret: true, required: false, hint: 'Senha, chave privada ou as duas.' },
+      { name: 'privateKey', displayName: 'Chave privada (PEM ou OpenSSH)', secret: true, required: false, multiline: true, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+      { name: 'passphrase', displayName: 'Senha da chave', secret: true, required: false },
+    ],
+  },
+  {
+    type: 'gitPassword',
+    displayName: 'Git (usuário e senha ou token)',
+    fields: [
+      { name: 'username', displayName: 'Usuário', secret: false, required: true },
+      { name: 'password', displayName: 'Senha ou token', secret: true, required: true, hint: 'No GitHub e no GitLab, use um token de acesso pessoal.' },
+    ],
+  },
+  {
+    type: 'info8nApi',
+    displayName: 'API do Info8n',
+    fields: [
+      {
+        name: 'apiKey',
+        displayName: 'Token da API',
+        secret: true,
+        required: true,
+        hint: 'Crie em Minha conta > Tokens de API. O nó faz só o que o dono do token pode fazer.',
+      },
+      { name: 'baseUrl', displayName: 'Endereço do Info8n (opcional)', secret: false, required: false, placeholder: 'http://info8n:3000', hint: 'Vazio: este Info8n (PUBLIC_URL).' },
+    ],
+  },
+  {
     type: 'totp',
     displayName: 'TOTP (código de dois fatores)',
     fields: [
@@ -270,5 +345,6 @@ export function missingFields(type: ConnectionTypeDescription, data: JsonObject)
   const missing = type.fields.filter((f) => f.required && !data[f.name]).map((f) => f.displayName);
   if (type.type === 'oracle' && !data.connectString && !(data.host && data.serviceName)) missing.push('Servidor e service name, ou a connect string');
   if (type.type === 'metabase' && !data.apiKey && !(data.username && data.password)) missing.push('API key, ou usuário e senha');
+  if ((type.type === 'ssh' || type.type === 'sftp') && !data.password && !data.privateKey) missing.push('Senha ou chave privada');
   return missing;
 }

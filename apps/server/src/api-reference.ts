@@ -239,7 +239,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Cria um fluxo. Sem definition, ele nasce só com o Gatilho manual.',
         body: workflowBody(false),
-        errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso'],
+        errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso, ou o fluxo tem um nó Execute Command ou SSH e o usuário não é Administrador'],
         audited: true,
       },
       {
@@ -255,6 +255,7 @@ const GROUPS: ApiGroup[] = [
         response: 'O fluxo salvo, com a version nova e os issues da validação.',
         errors: [
           '400: fluxo ativo com problemas, agendamento inválido (horário, dias, cron) ou execução única com data que já passou, conexão ou subfluxo que não existe, ou o fluxo chama ele mesmo',
+          '403: o fluxo cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador',
           '409: outra pessoa salvou depois da baseVersion',
         ],
         audited: true,
@@ -314,7 +315,7 @@ const GROUPS: ApiGroup[] = [
           },
         ],
         response: 'Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o resultado.',
-        errors: ['404: o fluxo não existe ou está numa pasta sem acesso'],
+        errors: ['403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador', '404: o fluxo não existe ou está numa pasta sem acesso'],
       },
       {
         method: 'POST',
@@ -325,7 +326,11 @@ const GROUPS: ApiGroup[] = [
         params: [id('do fluxo')],
         body: [{ name: 'definition', type: 'objeto', description: 'Definição ainda não salva, enviada pelo editor. Exige o perfil Editor. Sem ela, vale a versão salva' }],
         response: 'expiresAt é quando a escuta fecha sozinha; webhooks lista os caminhos de teste abertos (kind webhook ou form). Acompanhe com GET /workflows/{id}/listen.',
-        errors: ['400: o fluxo não tem gatilho para escutar, ou um gatilho não conseguiu ligar (o motivo vem na mensagem)', '404: o fluxo não existe ou está numa pasta sem acesso'],
+        errors: [
+          '400: o fluxo não tem gatilho para escutar, ou um gatilho não conseguiu ligar (o motivo vem na mensagem)',
+          '403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador',
+          '404: o fluxo não existe ou está numa pasta sem acesso',
+        ],
       },
       {
         method: 'GET',
@@ -379,7 +384,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Importa um fluxo exportado. Ele entra desativado.',
         body: workflowBody(true),
-        errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso'],
+        errors: ['400: usa conexão ou subfluxo que não existe', '403: pasta, conexão ou subfluxo sem acesso, ou o fluxo tem um nó Execute Command ou SSH e o usuário não é Administrador'],
         audited: true,
       },
       {
@@ -394,7 +399,7 @@ const GROUPS: ApiGroup[] = [
         ],
         response:
           'Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.',
-        errors: ['400: o arquivo não é uma exportação do n8n'],
+        errors: ['400: o arquivo não é uma exportação do n8n', '403: um fluxo tem o nó Execute Command ou SSH e o usuário não é Administrador (nada é importado)'],
         audited: true,
       },
       {
@@ -693,6 +698,121 @@ const GROUPS: ApiGroup[] = [
     ],
   },
   {
+    title: 'Tabelas de dados',
+    routes: [
+      {
+        method: 'GET',
+        path: '/data-tables',
+        profile: 'any',
+        summary: 'Tabelas de dados (as do nó Data Table), em ordem de nome, com as colunas e quantas linhas cada uma tem.',
+        query: [{ name: 'name', type: 'texto', description: 'Só as tabelas cujo nome contém este texto' }],
+        response: 'columns traz o nome e o tipo (string, number, boolean ou date) de cada coluna; id, createdAt e updatedAt existem em toda linha e não aparecem aqui.',
+      },
+      {
+        method: 'POST',
+        path: '/data-tables',
+        profile: 'editor',
+        summary: 'Cria uma tabela de dados.',
+        body: [
+          { name: 'name', type: 'texto', required: true, description: 'Nome da tabela, único (até 128 caracteres)' },
+          {
+            name: 'columns',
+            type: 'lista',
+            description:
+              'Colunas: [{ "name": "cpf", "type": "string" }]. Tipos: string, number, boolean e date. O nome usa letras, números e _, começa por letra ou _, e não pode ser id, createdAt ou updatedAt',
+          },
+        ],
+        errors: ['400: já existe uma tabela com o nome, ou uma coluna tem nome ou tipo que não vale'],
+        audited: true,
+      },
+      {
+        method: 'GET',
+        path: '/data-tables/{id}',
+        profile: 'any',
+        summary: 'Uma tabela de dados, com as colunas e quantas linhas tem.',
+        params: [id('da tabela')],
+        errors: ['400: a tabela não existe'],
+      },
+      {
+        method: 'PUT',
+        path: '/data-tables/{id}',
+        profile: 'editor',
+        summary:
+          'Renomeia a tabela e troca as colunas. Coluna nova entra vazia nas linhas que já existem; coluna que sai some das linhas. O tipo de uma coluna que já existe não muda.',
+        params: [id('da tabela')],
+        body: [
+          { name: 'name', type: 'texto', description: 'Nome novo' },
+          { name: 'columns', type: 'lista', description: 'A lista completa de colunas, como no POST' },
+        ],
+        errors: ['400: a tabela não existe, o nome já é de outra tabela ou o tipo de uma coluna mudou'],
+        audited: true,
+      },
+      {
+        method: 'DELETE',
+        path: '/data-tables/{id}',
+        profile: 'editor',
+        summary: 'Exclui a tabela e todas as linhas dela. Os fluxos que usam a tabela passam a dar erro.',
+        params: [id('da tabela')],
+        errors: ['400: a tabela não existe'],
+        audited: true,
+      },
+      {
+        method: 'GET',
+        path: '/data-tables/{id}/rows',
+        profile: 'any',
+        summary: 'Linhas da tabela, com filtro, ordem e paginação.',
+        params: [id('da tabela')],
+        query: [
+          { name: 'limit', type: 'número', description: 'Quantas linhas devolver, de 1 a 1000 (padrão 100)' },
+          { name: 'offset', type: 'número', description: 'Quantas linhas pular, para paginar (padrão 0)' },
+          { name: 'orderBy', type: 'texto', description: 'Coluna da ordem (padrão id)' },
+          { name: 'orderDirection', type: 'texto', description: 'asc (padrão) ou desc' },
+          {
+            name: 'filter',
+            type: 'JSON',
+            description:
+              'Filtro como no nó: {"type":"and","conditions":[{"column":"idade","condition":"gte","value":18}]}. type and exige todas as condições e or, qualquer uma. Condições: eq, neq, like, ilike (com % e _), gt, gte, lt, lte, isEmpty, isNotEmpty, isTrue e isFalse',
+          },
+        ],
+        response: 'rows são as linhas da página, com id, as colunas, createdAt e updatedAt; total é quantas linhas atendem ao filtro.',
+        errors: ['400: a tabela não existe, ou o filtro usa coluna que não existe ou valor do tipo errado'],
+      },
+      {
+        method: 'POST',
+        path: '/data-tables/{id}/rows',
+        profile: 'editor',
+        summary: 'Insere linhas. Cada valor é convertido para o tipo da coluna (ex.: "31" numa coluna number vira 31).',
+        params: [id('da tabela')],
+        body: [{ name: 'rows', type: 'lista', required: true, description: 'Até 10.000 linhas, cada uma com os valores por coluna: [{ "nome": "Ana", "idade": 31 }]' }],
+        response: 'As linhas inseridas, com o id que cada uma recebeu.',
+        errors: ['400: a tabela não existe, uma coluna não existe, um valor não serve para o tipo da coluna, ou a tabela passaria de 1.000.000 de linhas'],
+        audited: true,
+      },
+      {
+        method: 'PUT',
+        path: '/data-tables/{id}/rows/{rowId}',
+        profile: 'editor',
+        summary: 'Altera uma linha. As colunas que não vierem ficam como estão.',
+        params: [id('da tabela'), { name: 'rowId', type: 'número', required: true, description: 'id da linha' }],
+        body: [{ name: 'data', type: 'objeto', required: true, description: 'Valores por coluna: { "idade": 32 }' }],
+        response: 'A linha já alterada.',
+        errors: ['400: a tabela ou a coluna não existe, ou o valor não serve para o tipo da coluna', '404: a linha não existe'],
+        audited: true,
+      },
+      {
+        method: 'POST',
+        path: '/data-tables/{id}/rows/delete',
+        profile: 'editor',
+        summary: 'Apaga linhas pelo id.',
+        params: [id('da tabela')],
+        body: [{ name: 'ids', type: 'lista', required: true, description: 'ids das linhas, até 10.000: [1, 2, 3]' }],
+        response: 'deleted é quantas linhas foram apagadas (ids que não existem são ignorados).',
+        errors: ['400: a tabela não existe'],
+        audited: true,
+      },
+    ],
+  },
+  {
     title: 'APIs dos ERPs',
     routes: [
       {
@@ -910,7 +1030,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'admin',
         summary: 'Registros da auditoria, mais novos primeiro.',
         query: [
-          { name: 'entityType', type: 'texto', description: 'Tipo do registro (workflow, connection, user, api_token, execution…)' },
+          { name: 'entityType', type: 'texto', description: 'Tipo do registro (workflow, connection, user, api_token, execution, data_table…). Os comandos do Execute Command e do SSH ficam em execution, com action command' },
           { name: 'entityId', type: 'texto', description: 'ID do registro' },
           { name: 'userId', type: 'uuid', description: 'Quem fez' },
           from,

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { errorMessage, formatSize, get, MAX_FILE_BYTES, post, uploadFile, type ApiCatalog, type StoredFile, type ApiVariable, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
+import { errorMessage, formatSize, get, MAX_FILE_BYTES, post, uploadFile, type ApiCatalog, type DataTable, type StoredFile, type ApiVariable, type ConnectionItem, type Item, type JsonValue, type PropertyDescription, type WorkflowListItem } from '../api';
 
 export interface FieldContext {
   connections: ConnectionItem[];
@@ -16,7 +16,7 @@ export interface FieldContext {
   readOnly: boolean;
 }
 
-const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection', 'workflow', 'erpClient', 'erpEndpoint']);
+const EXPRESSION_TYPES = new Set(['string', 'number', 'boolean', 'options', 'json', 'connection', 'workflow', 'erpClient', 'erpEndpoint', 'dataTable']);
 
 export function isExpression(value: JsonValue): value is string {
   return typeof value === 'string' && value.startsWith('=');
@@ -27,7 +27,7 @@ function withSeconds(raw: string): string {
   return /(^|T)\d{2}:\d{2}$/.test(raw) ? `${raw}:00` : raw;
 }
 
-export function isVisible(prop: PropertyDescription, values: Record<string, JsonValue>): boolean {
+export function isVisible(prop: { showWhen?: Record<string, JsonValue[]> }, values: Record<string, JsonValue>): boolean {
   if (!prop.showWhen) return true;
   return Object.entries(prop.showWhen).every(([key, allowed]) => {
     const current = values[key];
@@ -232,6 +232,8 @@ function FixedInput({ prop, value, onChange, ctx }: { prop: PropertyDescription;
       return <ErpVariablesInput value={value} onChange={onChange} ctx={ctx} />;
     case 'file':
       return <FileInput value={value} onChange={onChange} disabled={disabled} />;
+    case 'dataTable':
+      return <DataTableInput value={value} onChange={onChange} disabled={disabled} />;
     case 'list':
       return <ListInput prop={prop} value={value} onChange={onChange} ctx={ctx} />;
     default:
@@ -434,5 +436,47 @@ function ExpressionEditor({ value, onChange, ctx }: { value: string; onChange: (
         </div>
       )}
     </div>
+  );
+}
+
+/** Tabela de dados do nó Data Table: lista as tabelas cadastradas; o valor é o ID. */
+function DataTableInput({ value, onChange, disabled }: { value: JsonValue; onChange: (value: JsonValue) => void; disabled: boolean }) {
+  const [tables, setTables] = useState<DataTable[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    get<DataTable[]>('/data-tables')
+      .then(setTables)
+      .catch((err) => setError(errorMessage(err)));
+  }, []);
+  const current = tables?.find((t) => t.id === value || t.name === value);
+  return (
+    <>
+      <select disabled={disabled || !tables} value={current?.id ?? String(value ?? '')} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{tables ? 'Escolha a tabela' : 'Carregando…'}</option>
+        {tables?.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}
+          </option>
+        ))}
+        {value && tables && !current && <option value={String(value)}>Tabela "{String(value)}" não existe</option>}
+      </select>
+      {error && <div className="field-hint required">{error}</div>}
+      {current && (
+        <div className="field-hint">
+          Colunas: {current.columns.map((c) => c.name).join(', ') || 'nenhuma'} ·{' '}
+          <a href={`/tabelas-de-dados/${current.id}`} target="_blank" rel="noreferrer">
+            abrir a tabela
+          </a>
+        </div>
+      )}
+      {tables && !tables.length && (
+        <div className="field-hint">
+          Nenhuma tabela ainda.{' '}
+          <a href="/tabelas-de-dados" target="_blank" rel="noreferrer">
+            Criar em Tabelas de dados
+          </a>
+        </div>
+      )}
+    </>
   );
 }

@@ -1288,4 +1288,120 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
       },
     ],
   },
+  'GET /data-tables': {
+    response: [
+      {
+        id: 'f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+        name: 'clientes',
+        columns: [
+          { name: 'nome', type: 'string' },
+          { name: 'idade', type: 'number' },
+          { name: 'ativo', type: 'boolean' },
+        ],
+        createdAt: '2026-10-07T23:18:33.089Z',
+        updatedAt: '2026-10-07T23:18:33.089Z',
+        rowCount: 2,
+      },
+    ],
+  },
+  'POST /data-tables': {
+    body: {
+      name: 'clientes',
+      columns: [
+        { name: 'nome', type: 'string' },
+        { name: 'idade', type: 'number' },
+        { name: 'ativo', type: 'boolean' },
+      ],
+    },
+    response: {
+      id: 'f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+      name: 'clientes',
+      columns: [
+        { name: 'nome', type: 'string' },
+        { name: 'idade', type: 'number' },
+        { name: 'ativo', type: 'boolean' },
+      ],
+      createdAt: '2026-10-07T23:18:33.089Z',
+      updatedAt: '2026-10-07T23:18:33.089Z',
+      rowCount: 0,
+    },
+  },
+  'GET /data-tables/{id}': {
+    path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+    response: {
+      id: 'f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+      name: 'clientes',
+      columns: [
+        { name: 'nome', type: 'string' },
+        { name: 'idade', type: 'number' },
+        { name: 'ativo', type: 'boolean' },
+      ],
+      createdAt: '2026-10-07T23:18:33.089Z',
+      updatedAt: '2026-10-07T23:18:33.089Z',
+      rowCount: 2,
+    },
+  },
+  'PUT /data-tables/{id}': {
+    path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+    body: {
+      name: 'clientes',
+      columns: [
+        { name: 'nome', type: 'string' },
+        { name: 'idade', type: 'number' },
+        { name: 'ativo', type: 'boolean' },
+        { name: 'desde', type: 'date' },
+      ],
+    },
+    response: {
+      id: 'f1d9649f-a70f-4405-9cd5-b007aa1c8369',
+      name: 'clientes',
+      columns: [
+        { name: 'nome', type: 'string' },
+        { name: 'idade', type: 'number' },
+        { name: 'ativo', type: 'boolean' },
+        { name: 'desde', type: 'date' },
+      ],
+      createdAt: '2026-10-07T23:18:33.089Z',
+      updatedAt: '2026-10-07T23:18:33.115Z',
+      rowCount: 2,
+    },
+  },
+  'DELETE /data-tables/{id}': { path: '/data-tables/a6399a24-f5c7-4b54-9808-1fdf2ced8c62', response: { ok: true } },
+  'GET /data-tables/{id}/rows': {
+    path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369/rows?limit=50&filter=%7B%22type%22%3A%22and%22%2C%22conditions%22%3A%5B%7B%22column%22%3A%22idade%22%2C%22condition%22%3A%22gte%22%2C%22value%22%3A18%7D%5D%7D',
+    response: {
+      rows: [
+        { id: 1, nome: 'Ana', idade: 31, ativo: true, desde: null, createdAt: '2026-10-07T23:18:33.097Z', updatedAt: '2026-10-07T23:18:33.097Z' },
+        { id: 2, nome: 'Carlos', idade: 18, ativo: null, desde: null, createdAt: '2026-10-07T23:18:33.097Z', updatedAt: '2026-10-07T23:18:33.097Z' },
+      ],
+      total: 2,
+    },
+  },
+  'POST /data-tables/{id}/rows': {
+    path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369/rows',
+    body: {
+      rows: [
+        { nome: 'Ana', idade: 31, ativo: true },
+        { nome: 'Carlos', idade: '18' },
+      ],
+    },
+    response: [
+      { id: 1, nome: 'Ana', idade: 31, ativo: true, createdAt: '2026-10-07T23:18:33.097Z', updatedAt: '2026-10-07T23:18:33.097Z' },
+      { id: 2, nome: 'Carlos', idade: 18, ativo: null, createdAt: '2026-10-07T23:18:33.097Z', updatedAt: '2026-10-07T23:18:33.097Z' },
+    ],
+  },
+  'PUT /data-tables/{id}/rows/{rowId}': {
+    path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369/rows/2',
+    body: { data: { ativo: false, desde: '2026-10-01' } },
+    response: {
+      id: 2,
+      nome: 'Carlos',
+      idade: 18,
+      ativo: false,
+      desde: '2026-10-01T00:00:00.000Z',
+      createdAt: '2026-10-07T23:18:33.097Z',
+      updatedAt: '2026-10-07T23:18:33.135Z',
+    },
+  },
+  'POST /data-tables/{id}/rows/delete': { path: '/data-tables/f1d9649f-a70f-4405-9cd5-b007aa1c8369/rows/delete', body: { ids: [2] }, response: { deleted: 1 } },
 };

@@ -331,6 +331,57 @@ const PATHS: Record<string, ReactNode> = {
       <path d="M2 12h3l3-8 4 16 3-8h7" />
     </>
   ),
+  emailSend: (
+    <>
+      <path d="M22 2L11 13" />
+      <path d="M22 2l-7 20-4-9-9-4z" />
+    </>
+  ),
+  ftp: (
+    <>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M9 13l3-3 3 3M12 10v6" />
+    </>
+  ),
+  ssh: (
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M6 9l3 3-3 3M12 15h6" />
+    </>
+  ),
+  executeCommand: (
+    <>
+      <path d="M4 17l6-6-6-6M12 19h8" />
+    </>
+  ),
+  git: (
+    <>
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="6" cy="18" r="2.5" />
+      <circle cx="18" cy="9" r="2.5" />
+      <path d="M6 8.5v7M18 11.5c0 3-3 3.5-9.5 5" />
+    </>
+  ),
+  rssFeedRead: (
+    <>
+      <path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" />
+    </>
+  ),
+  info8n: (
+    <>
+      <path d="M7 12h4c1.3 0 1.8-.9 2.4-2 .6-1.1 1.1-1.8 2.3-1.8M11 12c1.3 0 1.8.9 2.4 2 .6 1.1 1.1 1.8 2.3 1.8" />
+      <circle cx="5" cy="12" r="2.2" />
+      <circle cx="18" cy="8" r="2.2" />
+      <circle cx="18" cy="16" r="2.2" />
+    </>
+  ),
+  dataTable: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18M3 14.5h18M9 9v11" />
+    </>
+  ),
   unknown: (
     <>
       <circle cx="12" cy="12" r="9" />
@@ -391,6 +442,14 @@ export const NODE_COLOR: Record<string, string> = {
   emailReadImap: '#0078d4',
   localFileTrigger: '#5c6bc0',
   sseTrigger: '#6b6f80',
+  emailSend: '#0078d4',
+  ftp: '#5c6bc0',
+  ssh: '#333333',
+  executeCommand: '#333333',
+  git: '#f05032',
+  rssFeedRead: '#f26522',
+  info8n: '#378ef0',
+  dataTable: '#29a568',
 };
 
 export function Icon({ name, size = 18, className }: { name: string; size?: number; className?: string }) {

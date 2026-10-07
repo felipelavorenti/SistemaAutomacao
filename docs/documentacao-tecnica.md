@@ -25,6 +25,7 @@ Tudo é TypeScript sobre Node 22. O banco é o PostgreSQL 16, e a fila usa o Red
 | Expressões e Code JS | isolated-vm | 7.0 | Isolate V8 separado, com limite de memória e tempo |
 | Code Python | Pyodide | 314.0 | Python 3 em WebAssembly, em processos separados |
 | Bancos dos clientes | mssql, oracledb, pg | 12.7, 7.0, 8.23 | SQL Server, Oracle (modo thin, sem Instant Client) e Postgres |
+| E-mail, FTP e SSH | nodemailer, basic-ftp, ssh2, ssh2-sftp-client | 10.0, 6.2, 1.17, 12.1 | Send Email, FTP/SFTP e SSH |
 | Telas | React | 19 | Interface |
 | Editor de fluxos | @xyflow/react (React Flow) | 12.3 | Canvas de nós e ligações |
 | Rotas das telas | react-router-dom | 7.1 | Navegação |
@@ -525,9 +526,67 @@ A regra de um gatilho por fluxo saiu do `validate.ts`. `executions.start_node_id
 - IMAP sem OAuth2; SSE sem cabeçalhos nem autenticação; RSS sem proxy e sem cancelamento além do tempo limite de 60 s.
 - Wait dentro de subfluxo não pausa (espera rodando, até 24 dias) e não aceita webhook nem formulário.
 
+## Servidor, integrações e tabelas de dados (vindos do n8n)
+
+Fase 4 do pedido de ter os nós de Core e Flow do n8n: Send Email (SMTP), FTP/SFTP, SSH, Execute Command, Git, RSS Read, Info8n (API), que faz o papel do nó n8n, e Data Table, com a tela Tabelas de dados.
+
+**Arquivos**
+
+| Arquivo | Conteúdo |
+| --- | --- |
+| `packages/engine/src/nodes/email-send.ts` | Nó `emailSend` (nodemailer), `smtpTransportOptions` e `testSmtpConnection` |
+| `packages/engine/src/nodes/ftp.ts` | Nó `ftp` (basic-ftp para FTP/FTPS, ssh2-sftp-client para SFTP), `openRemoteFiles` e `testFtpConnection` |
+| `packages/engine/src/nodes/ssh.ts` | Nó `ssh` (ssh2): `connectSsh`, `sshExec`, `shellQuote` e `testSshConnection` |
+| `packages/engine/src/nodes/execute-command.ts` | Nós `executeCommand` (child_process `exec`) e `rssFeedRead` (reaproveita `readFeed` do RSS Feed Trigger) |
+| `packages/engine/src/nodes/git.ts` | Nó `git` (o binário `git` por `execFile`), `parseStatus` e `parseLog` |
+| `packages/engine/src/nodes/info8n-api.ts` | Nó `info8n`, que chama a API do Info8n com Bearer |
+| `packages/engine/src/nodes/data-table.ts`, `packages/engine/src/data-tables.ts` | Nó `dataTable`; validação de colunas, conversão de valores, filtros e `MemoryDataTableStore` |
+| `packages/engine/src/n8n/convert-server.ts` | Conversores do importador para os oito nós |
+| `apps/server/src/lib/data-tables.ts` | `PgDataTableStore`: tabelas de dados no Postgres |
+| `apps/server/src/routes/data-tables.ts` | Rotas `/api/data-tables` |
+| `apps/web/src/pages/DataTablesPage.tsx` | Telas Tabelas de dados e da tabela |
+| `packages/engine/test/fase4.test.ts`, `apps/server/test/fase4.test.ts` | Testes (SMTP, SSH e RSS com servidores locais, Git com repositório local, API mockada, tabelas no Postgres, regra de Administrador e auditoria de comandos) |
+
+Bibliotecas novas no motor: `nodemailer` 10, `basic-ftp` 6, `ssh2` 1.17 e `ssh2-sftp-client` 12 (as mesmas famílias do n8n). A imagem Docker final instala `git` e `openssh-client` para o nó Git.
+
+**Contexto novo do motor**
+
+- `ctx.logCommand(entry)`: Execute Command e SSH registram cada comando (`command`, `host`, `exitCode`, `durationMs`, `error`). O executor completa com o nome e o tipo do nó e chama `ExecuteOptions.onCommand`; um erro ao registrar não derruba o nó.
+- `ctx.dataTables`: a interface `DataTableStore` (`list`, `get` por ID ou nome, `create`, `rename`, `delete`, `insertRows`, `getRows`, `updateRows`, `upsertRow`, `deleteRows` com simulação). Sem `ExecuteOptions.dataTables`, o executor usa um `MemoryDataTableStore` (testes e execuções fora do servidor).
+- Opções de um campo `options` podem ter `showWhen` (ex.: as operações de cada recurso nos nós Data Table, SSH e Info8n). O editor só mostra as opções que valem e, quando o recurso muda, troca a operação pela primeira que vale.
+
+**Execute Command e SSH só para Administrador**
+
+- `ADMIN_ONLY_NODE_TYPES` (`executeCommand`, `ssh`) vem do motor. Em `routes/workflows.ts`, `checkAdminNodes` compara, por ID de nó, o tipo, os parâmetros e o desligado desses nós entre a definição nova e a salva. Qualquer diferença (incluir, alterar ou tirar) feita por quem não é Administrador devolve 403.
+- Vale em criar, alterar, importar (JSON e n8n) e em executar ou escutar com uma definição enviada pela tela. Executar um fluxo salvo continua liberado para Operador e acima.
+- O worker grava cada comando em `audit_log` com `action = 'command'`, `entity_type = 'execution'`, o ID da execução, o nome do fluxo e quem disparou; `after` leva o ID do fluxo, o nó, o tipo, o comando (até 8 KB), o servidor, o código de saída, a duração e o erro.
+
+**Git**
+
+- A pasta do repositório passa por `resolveAllowedPath`: precisa estar dentro de `FILES_DIRS`. Valores que começam com `-` são recusados onde viram argumento.
+- Cada chamada roda com `-c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c protocol.ext.allow=never -c safe.bareRepository=explicit -c credential.helper= -c safe.directory=*`, `ssh -o BatchMode=yes` e `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `LC_ALL=C`. Assim um repositório clonado não roda ganchos nem comandos de configuração.
+- O login da conexão `gitPassword` vai em `http.extraHeader=Authorization: Basic ...` só naquela chamada; nada fica gravado no repositório, e o cabeçalho é apagado das mensagens de erro.
+- Adicionar configuração só aceita as chaves da lista `CONFIG_ALLOWED`; Listar configuração esconde chaves com extraheader, password ou token.
+- Write Files from Disk recusa caminhos com uma pasta `.git`, para um fluxo não trocar a configuração ou os ganchos de um repositório.
+
+**Tabelas de dados**
+
+- Duas tabelas novas (migração `009_tabelas_de_dados`): `data_tables` (id, nome único, colunas em jsonb, próximo id de linha, quem criou, datas) e `data_table_rows` (tabela, id, dados em jsonb, datas; chave tabela + id, apagadas junto com a tabela).
+- Colunas: nome em `^[A-Za-z_][A-Za-z0-9_]{0,62}$`, sem repetir e sem usar id, createdAt e updatedAt; tipos string, number, boolean e date. Os valores são convertidos para o tipo da coluna ao gravar (data vira ISO); um valor que não converte dá erro com a coluna.
+- `PgDataTableStore` monta os filtros em SQL sobre o jsonb, com o valor convertido pelo tipo da coluna, texto com `COLLATE "C"` e LIKE/ILIKE só com `%` e `_` como curinga. Inserir trava a tabela (`FOR UPDATE`) para numerar as linhas em sequência. Limite de 1.000.000 de linhas por tabela.
+- Trocar as colunas não muda o tipo de uma coluna existente; tirar uma coluna apaga o valor dela de todas as linhas.
+- As tabelas são globais: qualquer usuário logado vê (`workflow:view`); criar, alterar e apagar exige `workflow:edit`. As mudanças pela tela e pela API vão para a auditoria (`entity_type = 'data_table'`, ações create, update, delete, insert_rows, update_rows e delete_rows); as dos fluxos ficam só na execução.
+
+**Importação do n8n**
+
+- Send Email v1, v2 e v2.1 viram `emailSend`; a operação Enviar e esperar resposta vira nó não convertido.
+- FTP, SSH, Execute Command, Git e RSS Read mantêm as operações e os nomes dos campos.
+- O nó n8n vira `info8n`; credencial vira conexão, e auditoria e excluir execução viram nó não convertido.
+- Data Table usa o nome da tabela (`cachedResultName`) e avisa para criar a tabela com as mesmas colunas, porque o n8n não exporta o conteúdo.
+
 ## Banco de dados
 
-A plataforma usa um Postgres próprio, com 17 tabelas criadas e atualizadas automaticamente ao subir (`db/migrations.ts`). Não há passo manual de migração.
+A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas automaticamente ao subir (`db/migrations.ts`). Não há passo manual de migração.
 
 | Tabela | Guarda |
 | --- | --- |
@@ -546,6 +605,7 @@ A plataforma usa um Postgres próprio, com 17 tabelas criadas e atualizadas auto
 | `erps`, `erp_endpoints`, `erp_clients` | Catálogo de APIs por ERP e cadastro do cliente em cada ERP |
 | `files` | Arquivos escolhidos na tela (ex.: anexos do Gmail): nome, tipo, tamanho, conteúdo e quem enviou |
 | `execution_files` | Arquivos gerados pelos nós nas execuções manuais e reexecuções, pelo hash do conteúdo, para baixar na tela |
+| `data_tables`, `data_table_rows` | Tabelas de dados (nome e colunas) e as linhas delas, em jsonb |
 
 **Tamanho e retenção dos logs**
 
@@ -606,6 +666,7 @@ Buscar rascunhos lista `GET /drafts` (com `q` e `maxResults`, seguindo `nextPage
 
 - A tabela `audit_log` registra quem criou, alterou, ativou, desativou, excluiu ou executou cada coisa, com IP, antes e depois, sem os segredos.
 - Cada comando SQL executado nos bancos dos clientes fica em `db_commands`, com cliente, conexão, fluxo, nó, quem disparou, parâmetros, linhas, duração e erro.
+- Cada comando dos nós Execute Command e SSH fica em `audit_log` com a ação `command`, e só o Administrador pode incluir ou alterar esses nós (detalhes em Servidor, integrações e tabelas de dados).
 
 ## API para outros sistemas
 
@@ -666,7 +727,7 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 | `EXECUTION_RETENTION_DAYS` | Não | 0 (guarda sempre) | Dias que execuções e comandos SQL ficam guardados |
 | `KEEP_SUCCESS_DATA` | Não | false | Guarda dados também das agendadas com sucesso |
 | `WORKER_CONCURRENCY` | Não | 5 | Execuções em paralelo por worker |
-| `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk e Local File Trigger podem usar, separadas por vírgula. No Docker Desktop (Windows ou Mac), o Local File Trigger precisa de Verificar por consulta (polling) |
+| `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk, Local File Trigger e Git podem usar, separadas por vírgula. No Docker Desktop (Windows ou Mac), o Local File Trigger precisa de Verificar por consulta (polling) |
 | `RUN_WORKER_IN_PROCESS` | Não | true | false = worker em processo separado |
 | `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS |
 | `PUBLIC_URL` | Não | endereço aberto na tela; nos endereços de retomada, `http://localhost:<PORT>` | Endereço pelo qual o Info8n é acessado (ex.: `http://info8n.empresa.local:3000`). Define o endereço de retorno do login com Google (precisa ser localhost ou um domínio, não IP), `$execution.resumeUrl`, `$execution.resumeFormUrl`, o `webhookUrl` dos webhooks e o link da execução no fluxo de erro. Configure sempre que usar Wait por webhook ou formulário |
@@ -717,4 +778,4 @@ O arquivo `.github/workflows/ci.yml` tem dois jobs em cada pull request:
 **Imagem Docker**
 
 - Build em duas etapas sobre `node:22-bookworm-slim`. A primeira instala `python3`, `make` e `g++` para compilar o isolated-vm, e roda `npm run build`.
-- A imagem final leva só o `node_modules` de produção e os `dist` dos três pacotes, e roda como o usuário `node` na porta 3000.
+- A imagem final instala `git`, `openssh-client` e `ca-certificates` (nó Git) e leva só o `node_modules` de produção e os `dist` dos três pacotes, e roda como o usuário `node` na porta 3000.
