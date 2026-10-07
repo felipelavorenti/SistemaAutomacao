@@ -281,7 +281,9 @@ function findStartNode(workflow: WorkflowDefinition, registry: NodeRegistry, sta
     if (!node) throw new Error(`Nó inicial ${startNodeId} não existe no fluxo`);
     return node;
   }
-  const trigger = workflow.nodes.find((n) => !n.disabled && registry.get(n.type)?.description.group === 'trigger');
+  // Sem gatilho escolhido (botão Executar), começa pelo manual; senão, pelo primeiro gatilho.
+  const triggers = workflow.nodes.filter((n) => !n.disabled && registry.get(n.type)?.description.group === 'trigger');
+  const trigger = triggers.find((n) => n.type === 'manualTrigger') ?? triggers[0];
   if (!trigger) throw new Error('O fluxo não tem gatilho');
   return trigger;
 }

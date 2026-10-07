@@ -377,7 +377,7 @@ describe.skipIf(!available)('Gatilhos: webhook, formulário, pausa e fluxo de er
     expect(handled!.mode).toBe('error');
     const full = (await call('GET', `/api/executions/${handled!.id}`)).body;
     expect(full.runs[0].output[0][0].json).toMatchObject({
-      execution: { id: failed!.id, url: `https://info8n.teste/executions/${failed!.id}`, lastNodeExecuted: 'Chamar API', mode: 'webhook' },
+      execution: { id: failed!.id, url: `https://info8n.teste/execucoes/${failed!.id}`, lastNodeExecuted: 'Chamar API', mode: 'webhook' },
       workflow: { id: failing, name: 'Falha no webhook' },
     });
 

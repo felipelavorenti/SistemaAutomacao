@@ -86,7 +86,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     const payload: JsonObject = {
       execution: {
         id: row.id,
-        url: `${publicUrl}/executions/${row.id}`,
+        url: `${publicUrl}/execucoes/${row.id}`,
         ...(row.retry_of ? { retryOf: row.retry_of } : {}),
         error: { message: error?.message ?? 'Erro desconhecido', ...(error?.details !== undefined ? { details: error.details } : {}) },
         lastNodeExecuted: error?.nodeName ?? null,
