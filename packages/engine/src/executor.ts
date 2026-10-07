@@ -17,6 +17,9 @@ import type {
   WorkflowDefinition,
 } from './types.js';
 
+/** Maior atraso que o setTimeout do Node aceita. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 export interface ExecuteOptions {
   workflow: WorkflowDefinition;
   executionId: string;
@@ -247,7 +250,8 @@ async function runNode(
   const settings = node.settings ?? {};
   const maxTries = settings.retryOnFail ? Math.max(1, settings.maxTries ?? 3) : 1;
   const wait = settings.waitBetweenTriesMs ?? 1000;
-  const timeoutMs = settings.timeoutMs ?? type.description.defaultTimeoutMs ?? options.defaultNodeTimeoutMs ?? 120_000;
+  // Acima de 2^31-1 ms (24,8 dias) o timer do Node dispara na hora; o limite fica nesse teto.
+  const timeoutMs = Math.min(settings.timeoutMs ?? type.description.defaultTimeoutMs ?? options.defaultNodeTimeoutMs ?? 120_000, MAX_TIMER_MS);
   const defaults = Object.fromEntries(type.description.properties.map((p) => [p.name, p.default]));
 
   let lastError: NodeError = { message: 'Erro desconhecido' };

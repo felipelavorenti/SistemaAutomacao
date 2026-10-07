@@ -10,6 +10,8 @@ import { editFields } from './nodes/edit-fields.js';
 import { metabase } from './nodes/metabase.js';
 import { n8nUnsupported } from './nodes/unsupported.js';
 import { code, executeWorkflow, executeWorkflowTrigger, loop, stopAndError } from './nodes/flow.js';
+import { flowExtraNodes } from './nodes/flow-extra.js';
+import { transformNodes } from './nodes/transform.js';
 
 export class NodeRegistry {
   private types = new Map<string, NodeType>();
@@ -49,5 +51,7 @@ export const defaultRegistry = new NodeRegistry([
   merge,
   editFields,
   code,
+  ...flowExtraNodes,
+  ...transformNodes,
   n8nUnsupported,
 ]);

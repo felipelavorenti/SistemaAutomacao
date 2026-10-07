@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { parseTemplate, TemplateSyntaxError } from '../expressions/template.js';
 import type { Connection, JsonObject, JsonValue, NodeInstance, NodeSettings, WorkflowDefinition } from '../types.js';
+import { converters as flowExtraConverters } from './convert-flow-extra.js';
+import { converters as transformConverters } from './convert-transform.js';
+
+/** Conversores dos nós da Fase 1, cada grupo no seu arquivo; valem antes dos de baixo. */
+const extraConverters = (): Record<string, (ctx: Ctx) => Converted | null> => ({ ...flowExtraConverters, ...transformConverters });
 
 /**
  * Converte fluxos exportados do n8n para o formato da plataforma.
@@ -193,6 +198,8 @@ export function convertN8nWorkflow(workflow: N8nWorkflow, options: ConvertOption
 }
 
 function convertNode(type: string, ctx: Ctx): Converted | null {
+  const extra = extraConverters()[type];
+  if (extra) return extra(ctx);
   switch (type) {
     case 'manualTrigger':
       return { type: 'manualTrigger', parameters: {} };
@@ -219,16 +226,10 @@ function convertNode(type: string, ctx: Ctx): Converted | null {
       return merge(ctx);
     case 'if':
       return ifNode(ctx);
-    case 'filter':
-      ctx.warn('o nó Filter virou um If; os itens que passam saem por "verdadeiro"');
-      return ifNode(ctx);
     case 'splitInBatches':
       return splitInBatches(ctx);
     case 'stopAndError':
       return stopAndError(ctx);
-    case 'noOp':
-      ctx.warn('o nó No Operation virou um Code que repassa os itens');
-      return { type: 'code', parameters: { language: 'javaScript', mode: 'all', jsCode: 'return $input.all();' } };
     case 'set':
       return setNode(ctx);
     case 'postgres':
