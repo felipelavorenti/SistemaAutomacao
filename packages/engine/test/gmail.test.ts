@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { executeWorkflow } from '../src/executor.js';
 import { convertN8nWorkflow } from '../src/n8n/import.js';
 import type { ConnectionData } from '../src/node-types.js';
+import { toBinary } from '../src/binary.js';
 import { buildMime, parseMessage, splitAddresses } from '../src/nodes/gmail.js';
 import { exchangeGoogleCode, googleAuthUrl, GOOGLE_TOKEN_URL } from '../src/nodes/google.js';
 import type { JsonObject, NodeInstance, WorkflowDefinition } from '../src/types.js';
@@ -275,7 +276,7 @@ describe('Gmail', () => {
       if (r.url.startsWith('/gmail/messages/b/attachments/')) return { body: { data: b64url('%PDF'), size: 4 } };
       return { status: 404, body: {} };
     };
-    const result = await run({ operation: 'search', query: 'is:unread', labelFilter: 'Notas fiscais', limit: 5, downloadAttachments: true });
+    const result = await run({ operation: 'search', query: 'is:unread', labelFilter: 'Notas fiscais', limit: 5, downloadAttachments: true, attachmentsBase64InJson: false });
     expect(result.status).toBe('success');
     const list = received.find((r) => r.url.startsWith('/gmail/messages?'))!;
     const params = new URL(`http://x${list.url}`).searchParams;
@@ -290,8 +291,63 @@ describe('Gmail', () => {
       text: 'Segue a nota fiscal.',
       html: '<b>Segue</b>',
       labelIds: ['INBOX', 'UNREAD'],
-      attachments: [{ fileName: 'nota.pdf', mimeType: 'application/pdf', size: 4, attachmentId: 'anexo-a', content: Buffer.from('%PDF').toString('base64') }],
+      attachments: [{ fileName: 'nota.pdf', mimeType: 'application/pdf', size: 4, attachmentId: 'anexo-a', binaryProperty: 'attachment_0' }],
     });
+    // Desligada a compatibilidade, o conteúdo fica só nos arquivos do item, como no n8n.
+    expect((result.lastOutput[0]!.json.attachments as JsonObject[])[0]).not.toHaveProperty('content');
+    expect(result.lastOutput[0]!.binary?.attachment_0).toMatchObject({ fileName: 'nota.pdf', mimeType: 'application/pdf', data: Buffer.from('%PDF').toString('base64'), bytes: 4 });
+
+    // Prefixo próprio e, por padrão (compatibilidade com fluxos salvos), o base64 também no JSON.
+    const legacy = await run({ operation: 'get', messageId: 'a', downloadAttachments: true, attachmentsPrefix: 'anexo_' });
+    expect(legacy.status).toBe('success');
+    expect(Object.keys(legacy.lastOutput[0]!.binary ?? {})).toEqual(['anexo_0']);
+    expect((legacy.lastOutput[0]!.json.attachments as JsonObject[])[0]).toMatchObject({ content: Buffer.from('%PDF').toString('base64'), binaryProperty: 'anexo_0' });
+
+    // Sem baixar, nada de arquivo no item.
+    const plain = await run({ operation: 'get', messageId: 'a' });
+    expect(plain.lastOutput[0]!.binary).toBeUndefined();
+  });
+
+  it('anexa arquivos do item, somados aos anexos da tela', async () => {
+    handler = (r) => (r.url === '/token' ? tokenOk : r.url === '/gmail/messages/send' ? { body: { id: 'm1' } } : { status: 404, body: {} });
+    const pdf = toBinary(Buffer.from('%PDF-item'), { fileName: 'boleto.pdf' });
+    const semNome = toBinary(Buffer.from('a,b'), { mimeType: 'text/csv' });
+    const result = await executeWorkflow({
+      workflow: flow(
+        node({
+          operation: 'send',
+          to: 'a@b.com',
+          subject: 'Boleto',
+          body: 'Segue',
+          attachments: [{ fileName: 'nota.txt', content: Buffer.from('nota').toString('base64'), mimeType: 'text/plain' }],
+          attachmentProperties: 'data, planilha',
+        }),
+      ),
+      executionId: 'x',
+      mode: 'manual',
+      triggerItems: [{ json: {}, binary: { data: pdf, planilha: semNome } }],
+      getConnection: async () => connection,
+    });
+    expect(result.status).toBe('success');
+    const raw = rawOf(received.find((r) => r.url === '/gmail/messages/send')!.body);
+    expect(raw).toContain('filename="nota.txt"');
+    expect(raw).toContain('Content-Type: application/pdf; name="boleto.pdf"');
+    expect(raw).toContain(Buffer.from('%PDF-item').toString('base64'));
+    expect(raw).toContain('Content-Type: text/csv; name="anexo-2.csv"');
+
+    const missing = await run({ operation: 'send', to: 'a@b.com', subject: 'x', body: 'y', attachmentProperties: 'data' });
+    expect(missing.status).toBe('error');
+    expect(missing.error?.message).toContain('não tem arquivo');
+  });
+
+  it('explica a mudança quando o fluxo antigo lê o base64 dos anexos baixados', async () => {
+    handler = (r) => (r.url === '/token' ? tokenOk : { body: { id: 'm1' } });
+    const result = await run(
+      { operation: 'send', to: 'a@b.com', subject: 'x', body: 'y', attachments: [{ fileName: 'nota.pdf', content: '={{ $json.attachments[0].content }}', mimeType: '' }] },
+      [{ attachments: [{ fileName: 'nota.pdf', binaryProperty: 'attachment_0' }] }],
+    );
+    expect(result.status).toBe('error');
+    expect(result.error?.message).toContain('Anexos dos arquivos do item');
   });
 
   it('marca como lido, troca etiquetas pelo nome e manda para a lixeira', async () => {
@@ -409,6 +465,21 @@ describe('Importação do Gmail do n8n', () => {
     const deleted = convert({ operation: 'delete', messageId: '={{ $json.id }}' });
     expect(deleted.definition.nodes[0]!.parameters).toMatchObject({ operation: 'trash', messageId: '={{ $json.id }}' });
     expect(deleted.warnings.map((w) => w.message)).toContain('no n8n o e-mail era apagado de vez; aqui ele vai para a lixeira');
+  });
+
+  it('traz os anexos de arquivos do item e o prefixo dos anexos baixados', () => {
+    const send = convert({
+      sendTo: 'a@b.com',
+      subject: 'x',
+      message: 'y',
+      options: { attachmentsUi: { attachmentsBinary: [{ property: 'data' }, { property: 'attachment_0,attachment_1' }] } },
+    });
+    expect(send.definition.nodes[0]!.parameters).toMatchObject({ attachmentProperties: 'data, attachment_0,attachment_1' });
+    expect(send.warnings.map((w) => w.message).join(' ')).not.toContain('binários');
+    const expr = convert({ sendTo: 'a@b.com', options: { attachmentsUi: { attachmentsBinary: [{ property: 'data' }, { property: '={{ $json.arquivo }}' }] } } });
+    expect(expr.definition.nodes[0]!.parameters.attachmentProperties).toBe('=data, {{ $json.arquivo }}');
+    const get = convert({ operation: 'get', messageId: '1', simple: false, options: { downloadAttachments: true, dataPropertyAttachmentsPrefixName: 'arq_' } });
+    expect(get.definition.nodes[0]!.parameters).toMatchObject({ operation: 'get', downloadAttachments: true, attachmentsPrefix: 'arq_' });
   });
 
   it('deixa como não convertido o Gmail antigo (versão 1) e as operações sem equivalente', () => {

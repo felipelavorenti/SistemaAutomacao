@@ -204,8 +204,9 @@ const properties: PropertyDescription[] = [
     name: 'attachmentsBase64InJson',
     displayName: 'Também pôr o conteúdo em base64 no JSON',
     type: 'boolean',
-    default: false,
-    description: 'Como era antes dos arquivos do item: repete o conteúdo de cada anexo em attachments[n].content. Deixa a execução bem maior; ligue só se o fluxo ainda usa esse campo.',
+    // Ligado por padrão para os fluxos já salvos continuarem lendo attachments[n].content; os importados do n8n vêm desligados.
+    default: true,
+    description: 'Repete o conteúdo de cada anexo em base64 em attachments[n].content, como era antes dos arquivos do item. Desligue quando o fluxo usar só os arquivos do item: a execução fica bem menor.',
     showWhen: { operation: ['search', 'searchDrafts', 'get'], downloadAttachments: [true] },
   },
   {

@@ -1,4 +1,4 @@
-import { createVerify, generateKeyPairSync } from 'node:crypto';
+import { createHash, createHmac, createVerify, generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { executeWorkflow } from '../src/executor.js';
 import type { Ctx, N8nNode } from '../src/n8n/import.js';
@@ -7,11 +7,12 @@ import type { ConnectionData } from '../src/node-types.js';
 import { cryptoNode, dateTime, formatPem, html, htmlToText, markdown, parseDate, totp, xml } from '../src/nodes/formats.js';
 import { manualTrigger } from '../src/nodes/triggers.js';
 import { NodeRegistry } from '../src/registry.js';
-import type { JsonObject, WorkflowDefinition } from '../src/types.js';
+import { toBinary } from '../src/binary.js';
+import type { Item, JsonObject, WorkflowDefinition } from '../src/types.js';
 
 const registry = new NodeRegistry([manualTrigger, dateTime, cryptoNode, html, markdown, xml, totp]);
 
-async function run(type: string, parameters: JsonObject, items: JsonObject[] = [{}], connections: Record<string, ConnectionData> = {}) {
+async function run(type: string, parameters: JsonObject, items: (JsonObject | Item)[] = [{}], connections: Record<string, ConnectionData> = {}) {
   const workflow: WorkflowDefinition = {
     nodes: [
       { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
@@ -24,7 +25,8 @@ async function run(type: string, parameters: JsonObject, items: JsonObject[] = [
     executionId: 'x',
     mode: 'manual',
     registry,
-    triggerItems: items.map((json) => ({ json })),
+    // Item pronto (com arquivos) passa como está; o resto é o JSON do item.
+    triggerItems: items.map((it) => ('json' in it && typeof it.json === 'object' && !Array.isArray(it.json) ? (it as Item) : { json: it as JsonObject })),
     getConnection: async (id) => {
       const c = connections[id];
       if (!c) throw new Error(`conexão ${id} não existe`);
@@ -159,6 +161,19 @@ describe('Crypto', () => {
     expect(r.error?.message).toMatch(/segredo/);
   });
 
+  it('calcula hash e HMAC do conteúdo de um arquivo do item e mantém o arquivo', async () => {
+    const file = toBinary(Buffer.from([0x00, 0xff, 0x61, 0x62, 0x63]), { fileName: 'x.bin' });
+    const item: Item = { json: { id: 1 }, binary: { arquivo: file } };
+    const r = await run('crypto', { action: 'hash', type: 'SHA256', binaryData: true, binaryPropertyName: 'arquivo', value: 'ignorado' }, [item]);
+    expect(r.status).toBe('success');
+    expect(r.lastOutput[0]!.json).toEqual({ id: 1, data: createHash('sha256').update(Buffer.from([0x00, 0xff, 0x61, 0x62, 0x63])).digest('hex') });
+    expect(r.lastOutput[0]!.binary?.arquivo).toEqual(file);
+    const [hmac] = await output('crypto', { action: 'hmac', type: 'MD5', secret: 'k', binaryData: true, encoding: 'base64' }, [{ json: {}, binary: { data: toBinary(Buffer.from('abc')) } }]);
+    expect(hmac!.data).toBe(createHmac('md5', 'k').update('abc').digest('base64'));
+    const missing = await run('crypto', { action: 'hash', binaryData: true }, [{ a: 1 }]);
+    expect(missing.error?.message).toMatch(/não tem arquivo/);
+  });
+
   it('assina com a chave privada da conexão (inclusive colada numa linha só)', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 1024 });
     const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -259,6 +274,18 @@ describe('HTML', () => {
     expect(out).toEqual([{ b: '1' }, { b: '2' }]);
     const r = await run('html', { operation: 'extractHtmlContent', extractionValues: [{ key: 'b', cssSelector: 'b' }] }, [{ outro: 1 }]);
     expect(r.error?.message).toMatch(/não tem o campo "data"/);
+  });
+
+  it('extrai de um arquivo HTML do item', async () => {
+    const page = toBinary(Buffer.from('<html><body><h1>Preço</h1><a href="/x">link</a></body></html>', 'utf8'), { fileName: 'pagina.html' });
+    const out = await output(
+      'html',
+      { operation: 'extractHtmlContent', sourceData: 'binary', dataPropertyName: 'pagina', extractionValues: [{ key: 'titulo', cssSelector: 'h1' }, { key: 'href', cssSelector: 'a', returnValue: 'attribute', attribute: 'href' }] },
+      [{ json: {}, binary: { pagina: page } }],
+    );
+    expect(out).toEqual([{ titulo: 'Preço', href: '/x' }]);
+    const r = await run('html', { operation: 'extractHtmlContent', sourceData: 'binary', extractionValues: [{ key: 'b', cssSelector: 'b' }] }, [{ data: '<b>1</b>' }]);
+    expect(r.error?.message).toMatch(/não tem arquivo/);
   });
 
   it('htmlToText formata listas numeradas, quebras e links', () => {
@@ -451,9 +478,10 @@ describe('conversores do n8n (formatos)', () => {
     expect(sign.result!.parameters).toEqual({ action: 'sign', dataPropertyName: 'data', value: 'v', algorithm: 'RSA-SHA512', encoding: 'hex', connection: '' });
     expect(sign.warnings.join(' ')).toMatch(/Chave privada/);
     expect(convert('crypto', { action: 'generate', encodingType: 'hex', stringLength: 8 }, 2).result!.parameters).toEqual({ action: 'generate', dataPropertyName: 'data', encodingType: 'hex', stringLength: 8 });
-    const bin = convert('crypto', { action: 'hash', binaryData: true }, 2);
-    expect(bin.result).toBeNull();
-    expect(bin.warnings.join(' ')).toMatch(/binário/);
+    const bin = convert('crypto', { action: 'hash', binaryData: true, binaryPropertyName: 'arquivo' }, 2);
+    expect(bin.result!.parameters).toEqual({ action: 'hash', dataPropertyName: 'data', binaryData: true, binaryPropertyName: 'arquivo', type: 'SHA256', encoding: 'hex' });
+    expect(bin.warnings).toEqual([]);
+    expect(convert('crypto', { action: 'hmac', binaryData: true, secret: 's' }, 1).result!.parameters).toMatchObject({ binaryData: true, binaryPropertyName: 'data', secret: 's' });
     expect(convert('crypto', { action: 'encrypt' }, 2).result).toBeNull();
   });
 
@@ -477,7 +505,7 @@ describe('conversores do n8n (formatos)', () => {
       },
     });
     expect(ex.warnings).toEqual([]);
-    expect(convert('html', { operation: 'extractHtmlContent', sourceData: 'binary' }, 1.2).result).toBeNull();
+    expect(convert('html', { operation: 'extractHtmlContent', sourceData: 'binary' }, 1.2).result!.parameters).toMatchObject({ sourceData: 'binary', dataPropertyName: 'data' });
     expect(convert('html', { operation: 'convertToHtmlTable', options: { capitalize: true, caption: 'C' } }, 1.2).result!.parameters).toEqual({
       operation: 'convertToHtmlTable',
       capitalize: true,

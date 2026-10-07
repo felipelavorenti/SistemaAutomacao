@@ -379,7 +379,10 @@ function httpRequest(ctx: Ctx): Converted {
       out.queryParameters = pairsOf(params.queryParametersUi);
       out.headers = pairsOf(params.headerParametersUi);
       const body = pairsOf(params.bodyParametersUi);
-      if (body.length && contentType === 'form-urlencoded') {
+      if (contentType === 'multipart-form-data') {
+        out.bodyType = 'multipart';
+        out.multipartBody = body.map((p) => ({ parameterType: 'formData', name: p.name, value: p.value }));
+      } else if (body.length && contentType === 'form-urlencoded') {
         out.bodyType = 'form';
         out.formBody = body;
       } else if (body.length) {
@@ -390,7 +393,27 @@ function httpRequest(ctx: Ctx): Converted {
     if (contentType === 'raw' && legacyOpts.bodyContentCustomMimeType) {
       out.headers = [...((out.headers as JsonObject[] | undefined) ?? []), { name: 'content-type', value: String(legacyOpts.bodyContentCustomMimeType) }];
     }
-    if (contentType === 'multipart-form-data') warn('o corpo multipart do n8n não existe aqui');
+    if (params.sendBinaryData) {
+      // "Send Binary Data": no multipart, "campo:propriedade" separados por vírgula; fora dele, o arquivo é o corpo.
+      const spec = String(params.binaryPropertyName ?? 'data');
+      if (contentType === 'multipart-form-data') {
+        if (out.bodyType !== 'multipart') out.multipartBody = [];
+        out.bodyType = 'multipart';
+        for (const entry of spec.split(',').map((e) => e.trim()).filter(Boolean)) {
+          const [field, property] = entry.includes(':') ? entry.split(':').map((e) => e.trim()) : [entry, entry];
+          (out.multipartBody as JsonObject[]).push({ parameterType: 'formBinaryData', name: field || property || 'data', value: property || 'data' });
+        }
+      } else {
+        out.bodyType = 'binary';
+        out.inputDataFieldName = spec.trim() || 'data';
+      }
+    } else if (contentType === 'multipart-form-data' && params.jsonParameters) {
+      warn('o corpo multipart vinha em JSON no n8n; passe os campos para a lista');
+    }
+    if (params.responseFormat === 'file' || params.responseFormat === 'string') {
+      out.responseFormat = params.responseFormat === 'file' ? 'file' : 'text';
+      out.outputPropertyName = String(params.dataPropertyName ?? 'data') || 'data';
+    }
     if (legacyOpts.fullResponse) out.fullResponse = true;
     warn('HTTP Request de versão antiga do n8n: confira método, corpo e autenticação');
   } else {
@@ -415,8 +438,19 @@ function httpRequest(ctx: Ctx): Converted {
         out.bodyType = 'text';
         out.textBody = String(params.body ?? '');
         if (params.rawContentType) out.headers = [...((out.headers as JsonObject[] | undefined) ?? []), { name: 'content-type', value: String(params.rawContentType) }];
+      } else if (contentType === 'multipart-form-data') {
+        out.bodyType = 'multipart';
+        const list = isObject(params.bodyParameters) ? params.bodyParameters.parameters : undefined;
+        out.multipartBody = (Array.isArray(list) ? list : []).filter(isObject).map((p) =>
+          p.parameterType === 'formBinaryData'
+            ? { parameterType: 'formBinaryData', name: String(p.name ?? ''), value: String(p.inputDataFieldName ?? 'data') }
+            : { parameterType: 'formData', name: String(p.name ?? ''), value: p.value === undefined || p.value === null ? '' : String(p.value) },
+        );
+      } else if (contentType === 'binaryData') {
+        out.bodyType = 'binary';
+        out.inputDataFieldName = String(params.inputDataFieldName ?? 'data') || 'data';
       } else {
-        warn(`o corpo "${contentType}" (arquivo ou multipart) não existe aqui`);
+        warn(`o corpo "${contentType}" do n8n não existe aqui`);
       }
     }
   }
@@ -427,6 +461,10 @@ function httpRequest(ctx: Ctx): Converted {
   const response = isObject(opts.response) && isObject(opts.response.response) ? opts.response.response : {};
   if (response.fullResponse) out.fullResponse = true;
   if (response.neverError) out.failOnHttpError = false;
+  if (version >= 3 && typeof response.responseFormat === 'string' && response.responseFormat !== 'autodetect') {
+    out.responseFormat = ['json', 'text', 'file'].includes(response.responseFormat) ? response.responseFormat : 'autodetect';
+    if (out.responseFormat !== 'json') out.outputPropertyName = String(response.outputPropertyName ?? 'data') || 'data';
+  }
   if (isObject(opts.pagination)) warn('a paginação automática do n8n não existe aqui; use um Loop');
   if (isObject(opts.batching)) warn('o envio em lotes do n8n não foi importado');
   return { type: 'httpRequest', parameters: out, settings };
@@ -876,7 +914,16 @@ function gmail({ node, params, warn }: Ctx): Converted | null {
   const text = (value: unknown) => (value === undefined || value === null ? '' : Array.isArray(value) ? value.map(String).join(', ') : String(value));
   warn('escolha a conexão do Gmail');
   if (operation === 'trash') warn('no n8n o e-mail era apagado de vez; aqui ele vai para a lixeira');
-  if (isObject(options.attachmentsUi)) warn('os anexos do n8n vinham de dados binários; passe o conteúdo em base64 para a lista de anexos');
+  // Anexos do n8n: cada linha de attachmentsBinary tem uma ou mais propriedades separadas por vírgula.
+  const attachmentRows = isObject(options.attachmentsUi) && Array.isArray(options.attachmentsUi.attachmentsBinary) ? options.attachmentsUi.attachmentsBinary : [];
+  const propertyRows = attachmentRows
+    .filter(isObject)
+    .map((row) => text(row.property))
+    .filter((p) => p.trim() && p.trim() !== '=');
+  // Com alguma expressão, junta tudo numa expressão só (o texto fixo vale como texto dentro dela).
+  const attachmentProperties = propertyRows.some((p) => p.startsWith('='))
+    ? `=${propertyRows.map((p) => (p.startsWith('=') ? p.slice(1) : p)).join(', ')}`
+    : propertyRows.join(', ');
   if (operation === 'search' && (filters.readStatus || filters.sender || filters.receivedAfter || filters.receivedBefore)) {
     warn('os filtros de lido, remetente e datas do n8n não foram importados; escreva-os na busca (ex.: is:unread from:x after:2026/01/31)');
   }
@@ -894,6 +941,7 @@ function gmail({ node, params, warn }: Ctx): Converted | null {
     senderName: text(options.senderName),
     replyTo: text(options.replyTo),
     attachments: [],
+    attachmentProperties,
     replyAll: options.replyToSenderOnly === false,
     replyToMessageId: '',
     query: text(filters.q),
@@ -901,6 +949,9 @@ function gmail({ node, params, warn }: Ctx): Converted | null {
     includeSpamTrash: filters.includeSpamTrash === true,
     limit: params.returnAll === true ? 500 : Number(params.limit ?? 50),
     downloadAttachments: options.downloadAttachments === true || filters.downloadAttachments === true,
+    attachmentsPrefix: text(options.dataPropertyAttachmentsPrefixName ?? filters.dataPropertyAttachmentsPrefixName) || 'attachment_',
+    // Como no n8n, o conteúdo dos anexos fica só nos arquivos do item.
+    attachmentsBase64InJson: false,
     labels: text(params.labelIds),
   };
   if (operation === 'createDraft' && options.threadId) warn('o rascunho do n8n ia para uma conversa (threadId); informe o ID de um e-mail dela em "Em resposta ao e-mail"');
