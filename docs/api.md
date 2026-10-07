@@ -1001,7 +1001,7 @@ Põe o fluxo na fila e responde na hora, sem esperar ele terminar. Acompanhe o r
 | `id` | caminho | uuid | sim | ID do fluxo |
 | `input` | corpo | lista | não | Itens que entram no primeiro gatilho do fluxo (o Gatilho manual): [{"json": {...}}]. Sem input, o gatilho solta um item vazio |
 | `definition` | corpo | objeto | não | Usado pelo editor da tela para rodar um fluxo ainda não salvo. Exige o perfil Editor |
-| `startNodeId` | corpo | texto | não | ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o primeiro gatilho do fluxo |
+| `startNodeId` | corpo | texto | não | ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o Gatilho manual ou, sem ele, o primeiro gatilho do fluxo |
 
 **Exemplo de chamada**
 

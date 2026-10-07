@@ -310,7 +310,7 @@ const GROUPS: ApiGroup[] = [
           {
             name: 'startNodeId',
             type: 'texto',
-            description: 'ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o primeiro gatilho do fluxo',
+            description: 'ID do gatilho de onde começar, em fluxos com mais de um gatilho. Sem ele, vale o Gatilho manual ou, sem ele, o primeiro gatilho do fluxo',
           },
         ],
         response: 'Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o resultado.',
