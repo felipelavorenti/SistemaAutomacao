@@ -116,22 +116,36 @@ export function escapeHtml(text: string): string {
 /** Bloco de texto do formulário: só tags de formatação simples; scripts, eventos e estilos saem. */
 export function sanitizeHtml(html: string): string {
   const allowed = new Set(['b', 'strong', 'i', 'em', 'u', 'p', 'br', 'hr', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'span', 'div', 'small', 'code', 'pre', 'blockquote', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td']);
-  return html
+  const cleaned = html
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<(script|style|iframe|object|embed|form|input|textarea|select|button)[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<\/?([a-z0-9]+)([^>]*)>/gi, (tag, name: string, attrs: string) => {
-      const lower = name.toLowerCase();
-      if (!allowed.has(lower)) return '';
-      if (tag.startsWith('</')) return `</${lower}>`;
-      const kept: string[] = [];
-      for (const m of attrs.matchAll(/([a-z-]+)\s*=\s*("([^"]*)"|'([^']*)')/gi)) {
-        const attr = m[1]!.toLowerCase();
-        const value = m[3] ?? m[4] ?? '';
-        if ((attr === 'href' || attr === 'src') && /^(https?:|mailto:|\/|#)/i.test(value.trim())) kept.push(`${attr}="${escapeHtml(value)}"`);
-        else if (attr === 'alt' || attr === 'title' || attr === 'target') kept.push(`${attr}="${escapeHtml(value)}"`);
-      }
-      return `<${lower}${kept.length ? ' ' + kept.join(' ') : ''}>`;
-    });
+    .replace(/<(script|style|iframe|object|embed|form|input|textarea|select|button)[\s\S]*?<\/\1\s*>/gi, '');
+  const tag = (whole: string, name: string, attrs: string): string => {
+    const lower = name.toLowerCase();
+    if (!allowed.has(lower)) return '';
+    if (whole.startsWith('</')) return `</${lower}>`;
+    const kept: string[] = [];
+    for (const m of attrs.matchAll(/([a-z-]+)\s*=\s*("([^"]*)"|'([^']*)')/gi)) {
+      const attr = m[1]!.toLowerCase();
+      const value = m[3] ?? m[4] ?? '';
+      if ((attr === 'href' || attr === 'src') && /^(https?:|mailto:|\/|#)/i.test(value.trim())) kept.push(`${attr}="${escapeHtml(value)}"`);
+      else if (attr === 'alt' || attr === 'title' || attr === 'target') kept.push(`${attr}="${escapeHtml(value)}"`);
+    }
+    return `<${lower}${kept.length ? ' ' + kept.join(' ') : ''}>`;
+  };
+  // Só as tags completas viram HTML; qualquer outro < ou > (tag sem fechar, pedaço que sobrou) vira texto.
+  const text = (part: string) => part.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let out = '';
+  let last = 0;
+  for (const m of cleaned.matchAll(/<\/?([a-z0-9]+)([^<>]*)>/gi)) {
+    out += text(cleaned.slice(last, m.index)) + tag(m[0], m[1]!, m[2]!);
+    last = m.index! + m[0].length;
+  }
+  return out + text(cleaned.slice(last));
+}
+
+/** CSS do formulário: nenhum < passa (vira o escape do CSS), então nada fecha o bloco de estilo. */
+export function sanitizeCss(css: string): string {
+  return css.replace(/</g, '\\3c ');
 }
 
 const PAGE_CSS = `
@@ -149,7 +163,7 @@ button:hover{filter:brightness(.95)}.error{background:#ffebe9;border:1px solid #
 `;
 
 function page(title: string, body: string, customCss?: string): string {
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title || 'Formulário')}</title><style>${PAGE_CSS}${customCss ? customCss.replace(/<\/style/gi, '') : ''}</style></head><body>${body}</body></html>`;
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title || 'Formulário')}</title><style>${PAGE_CSS}${customCss ? sanitizeCss(customCss) : ''}</style></head><body>${body}</body></html>`;
 }
 
 /** Nome do campo no HTML: field-0, field-1… (o rótulo pode ter qualquer caractere). */

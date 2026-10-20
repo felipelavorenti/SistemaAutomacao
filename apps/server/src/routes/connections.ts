@@ -4,7 +4,7 @@ import { testConnection, type JsonObject } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
 import { audit } from '../lib/audit.js';
-import { connectionTypes, getConnectionType, mergeData, missingFields, publicData } from '../lib/connection-types.js';
+import { connectionTypes, getConnectionType, mergeData, missingFields, publicData, secretsToRetype } from '../lib/connection-types.js';
 import { decryptJson, encryptJson } from '../lib/crypto.js';
 import { canSeeClient, forbidden, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
 
@@ -138,6 +138,13 @@ export const connectionRoutes =
       const type = getConnectionType(b.type)!;
       const oldData = decryptJson<JsonObject>(config.encryptionKey, existing.data_encrypted);
       const data = mergeData(type, b.data, oldData);
+      const retype = secretsToRetype(
+        type.fields.map((f) => ({ name: f.name, secret: f.secret, label: f.displayName })),
+        b.data,
+        oldData,
+        data,
+      );
+      if (retype.length) throw new HttpError(400, `Ao mudar o servidor, a porta ou a URL, digite de novo: ${retype.join(', ')}`);
       const missing = missingFields(type, data);
       if (missing.length) throw new HttpError(400, `Preencha: ${missing.join(', ')}`);
 

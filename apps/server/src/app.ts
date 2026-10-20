@@ -8,7 +8,7 @@ import type { Db } from './db/db.js';
 import { ExecutionEvents } from './executions/events.js';
 import { createRedis, type ExecutionQueue } from './executions/queue.js';
 import { TriggerManager } from './triggers/manager.js';
-import { authenticate, SESSION_COOKIE } from './lib/auth.js';
+import { authenticate, LoginThrottle, SESSION_COOKIE } from './lib/auth.js';
 import { HttpError, type CurrentUser } from './lib/permissions.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
@@ -32,7 +32,7 @@ export interface AppDeps {
 }
 
 /** Dependências já completas, como as rotas recebem. */
-export type RouteDeps = AppDeps & { triggers: TriggerManager };
+export type RouteDeps = AppDeps & { triggers: TriggerManager; loginThrottle: LoginThrottle };
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -53,11 +53,11 @@ export function currentUser(request: FastifyRequest): CurrentUser {
 }
 
 export async function buildApp(appDeps: AppDeps): Promise<FastifyInstance> {
-  const deps: RouteDeps = { ...appDeps, triggers: appDeps.triggers ?? new TriggerManager(appDeps) };
+  const deps: RouteDeps = { ...appDeps, triggers: appDeps.triggers ?? new TriggerManager(appDeps), loginThrottle: new LoginThrottle() };
   const app = Fastify({
     logger: process.env.NODE_ENV === 'test' ? false : { level: process.env.LOG_LEVEL ?? 'info' },
     bodyLimit: 10 * 1024 * 1024,
-    trustProxy: true,
+    trustProxy: appDeps.config.trustProxy ?? false,
   });
 
   const routes: { method: string; url: string }[] = [];
@@ -68,6 +68,16 @@ export async function buildApp(appDeps: AppDeps): Promise<FastifyInstance> {
 
   await app.register(cookie);
   app.decorateRequest('user', null);
+
+  // Telas e API do Info8n não abrem dentro de outro site (clickjacking). Webhooks e formulários
+  // ficam de fora: são do fluxo e podem ser incorporados.
+  app.addHook('onSend', async (request, reply) => {
+    if (/^\/(webhook|form)(-test|-waiting)?(\/|$)/.test(request.url)) return;
+    reply.header('x-frame-options', 'DENY');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('referrer-policy', 'same-origin');
+    if (!reply.getHeader('content-security-policy')) reply.header('content-security-policy', "frame-ancestors 'none'");
+  });
 
   app.addHook('onRequest', async (request) => {
     const path = request.url.split('?')[0];

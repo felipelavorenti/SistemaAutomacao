@@ -7,6 +7,7 @@ import { currentUser, type RouteDeps } from '../app.js';
 import { activatableTypes, isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution } from '../executions/store.js';
+import { fixedReferences } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { canSeeClient, canSeeFolder, forbidden, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
 
@@ -92,11 +93,9 @@ export const workflowRoutes =
 
     /** Um usuário só pode ligar a um fluxo as conexões que ele mesmo enxerga. */
     const checkConnections = async (user: CurrentUser, definition: WorkflowDefinition) => {
-      const ids = new Set<string>();
-      for (const node of definition.nodes) {
-        const connection = node.parameters.connection;
-        if (typeof connection === 'string' && connection && !connection.startsWith('=')) ids.add(connection);
-      }
+      // Valores fixos; os escolhidos por expressão são conferidos na hora de rodar (lib/access.ts).
+      const { connections: ids, erpClients } = fixedReferences(definition);
+      if ([...ids].some((id) => !z.string().uuid().safeParse(id).success)) throw new HttpError(400, 'O fluxo usa uma conexão que não existe mais');
       if (ids.size) {
         const rows = await many<{ id: string; client_id: string | null }>(db, 'SELECT id, client_id FROM connections WHERE id = ANY($1)', [[...ids]]);
         for (const id of ids) {
@@ -107,11 +106,6 @@ export const workflowRoutes =
       }
 
       // Mesma regra para os cadastros de cliente no ERP usados no modo "API cadastrada".
-      const erpClients = new Set<string>();
-      for (const node of definition.nodes) {
-        const value = node.parameters.erpClient;
-        if (typeof value === 'string' && value && !value.startsWith('=')) erpClients.add(value);
-      }
       if (!erpClients.size) return;
       if ([...erpClients].some((id) => !z.string().uuid().safeParse(id).success)) throw new HttpError(400, 'O fluxo usa um cliente no ERP que não existe');
       const rows = await many<{ id: string; client_id: string }>(db, 'SELECT id, client_id FROM erp_clients WHERE id = ANY($1)', [[...erpClients]]);

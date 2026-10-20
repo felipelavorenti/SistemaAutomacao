@@ -161,7 +161,10 @@ const GROUPS: ApiGroup[] = [
         ],
         response:
           'O cookie sa_session vem no header Set-Cookie e vale SESSION_TTL_HOURS (12 horas por padrão). Mande-o nas chamadas seguintes no lugar do token.',
-        errors: ['401: e-mail ou senha errados, usuário inativo ou bloqueado. 5 senhas erradas seguidas bloqueiam por 15 minutos'],
+        errors: [
+          '401: e-mail ou senha errados, ou usuário inativo. Depois de 50 senhas erradas seguidas, vindas de qualquer computador, o usuário fica bloqueado por 15 minutos',
+          '429: 5 senhas erradas do mesmo usuário vindas do mesmo computador (IP) bloqueiam esse usuário só nesse computador por 15 minutos; 20 tentativas erradas do mesmo computador, com qualquer e-mail, bloqueiam o computador por 15 minutos',
+        ],
         audited: true,
       },
       { method: 'POST', path: '/auth/logout', profile: 'any', summary: 'Encerra a sessão do cookie.' },
@@ -177,7 +180,7 @@ const GROUPS: ApiGroup[] = [
         method: 'POST',
         path: '/auth/change-password',
         profile: 'any',
-        summary: 'Troca a própria senha.',
+        summary: 'Troca a própria senha. As outras sessões do usuário (em outros navegadores) são encerradas; a da chamada continua.',
         body: [
           { name: 'currentPassword', type: 'texto', required: true, description: 'Senha atual' },
           { name: 'newPassword', type: 'texto', required: true, description: 'Senha nova' },
@@ -190,15 +193,23 @@ const GROUPS: ApiGroup[] = [
         path: '/auth/tokens',
         profile: 'any',
         summary: 'Tokens de API do próprio usuário.',
-        response: 'last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). O token em si nunca volta.',
+        response:
+          'last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). expires_at é quando o token deixa de valer (null: não vence). O token em si nunca volta.',
       },
       {
         method: 'POST',
         path: '/auth/tokens',
         profile: 'any',
-        summary: 'Cria um token de API. Ele age como o usuário que o criou e não expira.',
-        body: [{ name: 'name', type: 'texto', required: true, description: 'Nome do token, até 100 caracteres (ex.: ERP interno)' }],
-        response: 'O token só aparece nesta resposta; guarde-o. O Info8n guarda apenas o hash dele.',
+        summary: 'Cria um token de API. Ele age como o usuário que o criou e vale pelos dias escolhidos.',
+        body: [
+          { name: 'name', type: 'texto', required: true, description: 'Nome do token, até 100 caracteres (ex.: ERP interno)' },
+          {
+            name: 'expiresInDays',
+            type: 'número',
+            description: 'Dias até o token deixar de valer, de 1 a 3650. Sem o campo, ou com null, o token não vence. A tela Minha conta sugere 365',
+          },
+        ],
+        response: 'O token só aparece nesta resposta; guarde-o. O Info8n guarda apenas o hash dele. expires_at é quando ele deixa de valer (null: não vence).',
         audited: true,
       },
       {
@@ -575,7 +586,11 @@ const GROUPS: ApiGroup[] = [
         summary: 'Altera uma conexão. Não troca o tipo. A auditoria diz quais segredos mudaram, sem os valores.',
         params: [id('da conexão')],
         body: connectionBody,
-        errors: ['400: troca de tipo ou campo obrigatório vazio', '403: cliente sem acesso'],
+        errors: [
+          '400: troca de tipo ou campo obrigatório vazio',
+          '400: o servidor, a porta ou a URL mudou e algum segredo veio em branco (a mensagem diz quais digitar de novo)',
+          '403: cliente sem acesso',
+        ],
         audited: true,
       },
       {
@@ -846,6 +861,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Altera um ERP.',
         params: [id('do ERP')],
         body: erpBody,
+        errors: ['403: a URL base, o tipo de autenticação ou o header mudou, e o ERP tem clientes cadastrados aos quais o usuário não tem acesso'],
         audited: true,
       },
       {
@@ -902,7 +918,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Altera o cadastro de um cliente no ERP.',
         params: [id('do cadastro')],
         body: erpClientBody,
-        errors: ['403: cliente sem acesso'],
+        errors: ['400: o servidor, a porta ou a URL mudou e algum segredo veio em branco (a mensagem diz quais digitar de novo)', '403: cliente sem acesso'],
         audited: true,
       },
       {
@@ -948,7 +964,7 @@ const GROUPS: ApiGroup[] = [
         method: 'PUT',
         path: '/users/{id}',
         profile: 'admin',
-        summary: 'Altera um usuário. Desativar ou redefinir a senha derruba as sessões dele.',
+        summary: 'Altera um usuário. Desativar ou redefinir a senha derruba as sessões dele; redefinir a senha também tira os bloqueios por senha errada.',
         params: [id('do usuário')],
         body: userBody(false),
         errors: ['400: senha fraca, ou o administrador tirando o próprio acesso'],
@@ -958,7 +974,7 @@ const GROUPS: ApiGroup[] = [
         method: 'POST',
         path: '/users/{id}/unlock',
         profile: 'admin',
-        summary: 'Desbloqueia um usuário que errou a senha demais.',
+        summary: 'Desbloqueia um usuário que errou a senha demais, em todos os computadores.',
         params: [id('do usuário')],
         audited: true,
       },

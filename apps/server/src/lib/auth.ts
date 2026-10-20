@@ -4,8 +4,57 @@ import { randomToken, sha256 } from './crypto.js';
 import type { CurrentUser, Role } from './permissions.js';
 
 export const SESSION_COOKIE = 'sa_session';
-const MAX_FAILED_LOGINS = 5;
+/**
+ * Bloqueio da conta inteira (no banco), de qualquer computador. Fica alto para que errar a senha de
+ * propósito não tranque o dono da conta; o bloqueio do dia a dia é o do LoginThrottle, por computador.
+ */
+const MAX_FAILED_LOGINS = 50;
 const LOCK_MINUTES = 15;
+
+/**
+ * Tentativas erradas de login guardadas na memória da API, por computador (IP): 5 erros para o mesmo
+ * usuário bloqueiam esse usuário só naquele computador, e 20 erros de um computador (para qualquer
+ * usuário) bloqueiam o computador. Tudo por 15 minutos.
+ */
+export class LoginThrottle {
+  static readonly WINDOW_MS = LOCK_MINUTES * 60_000;
+  static readonly MAX_PER_USER = 5;
+  static readonly MAX_PER_IP = 20;
+  private failures = new Map<string, number[]>();
+
+  private recent(key: string, now: number): number[] {
+    const list = (this.failures.get(key) ?? []).filter((t) => now - t < LoginThrottle.WINDOW_MS);
+    if (list.length) this.failures.set(key, list);
+    else this.failures.delete(key);
+    return list;
+  }
+
+  /** Motivo da recusa, ou null se pode tentar. */
+  blocked(ip: string, email: string, now = Date.now()): string | null {
+    if (this.recent(`ip:${ip}`, now).length >= LoginThrottle.MAX_PER_IP) {
+      return 'Muitas tentativas erradas deste computador. Tente de novo em 15 minutos.';
+    }
+    if (this.recent(`user:${email.toLowerCase()}|${ip}`, now).length >= LoginThrottle.MAX_PER_USER) {
+      return 'Usuário bloqueado temporariamente neste computador por tentativas erradas. Tente de novo mais tarde.';
+    }
+    return null;
+  }
+
+  fail(ip: string, email: string, now = Date.now()): void {
+    for (const key of [`ip:${ip}`, `user:${email.toLowerCase()}|${ip}`]) this.failures.set(key, [...this.recent(key, now), now]);
+  }
+
+  /** Login certo: zera os erros desse usuário naquele computador. */
+  succeed(ip: string, email: string): void {
+    this.failures.delete(`user:${email.toLowerCase()}|${ip}`);
+  }
+
+  /** Desbloqueio pelo administrador: zera os erros do usuário em todos os computadores. */
+  clearUser(email: string): void {
+    const prefix = `user:${email.toLowerCase()}|`;
+    for (const key of [...this.failures.keys()]) if (key.startsWith(prefix)) this.failures.delete(key);
+  }
+}
 
 let dummy: Promise<string> | undefined;
 const dummyHash = () => (dummy ??= bcrypt.hash('senha-inexistente', 12));
@@ -31,14 +80,14 @@ interface UserRow {
   must_change_password: boolean;
 }
 
-export type LoginResult = { ok: true; userId: string; token: string } | { ok: false; reason: string; userId?: string };
+export type LoginResult = { ok: true; userId: string; token: string } | { ok: false; reason: string; userId?: string; wrongPassword?: boolean };
 
 export async function login(db: Db, email: string, password: string, ttlHours: number): Promise<LoginResult> {
   const user = await one<UserRow>(db, 'SELECT * FROM users WHERE lower(email) = lower($1)', [email]);
   if (!user || !user.active) {
     // Compara mesmo assim, para o tempo de resposta não revelar se o e-mail existe.
     await bcrypt.compare(password, await dummyHash());
-    return { ok: false, reason: 'E-mail ou senha incorretos' };
+    return { ok: false, reason: 'E-mail ou senha incorretos', wrongPassword: true };
   }
   if (user.locked_until && user.locked_until > new Date()) {
     return { ok: false, reason: 'Usuário bloqueado temporariamente por tentativas erradas. Tente de novo mais tarde.', userId: user.id };
@@ -50,7 +99,7 @@ export async function login(db: Db, email: string, password: string, ttlHours: n
       `UPDATE users SET failed_logins = $2, locked_until = CASE WHEN $3 THEN now() + make_interval(mins => $4) ELSE locked_until END WHERE id = $1`,
       [user.id, lock ? 0 : failed, lock, LOCK_MINUTES],
     );
-    return { ok: false, reason: 'E-mail ou senha incorretos', userId: user.id };
+    return { ok: false, reason: 'E-mail ou senha incorretos', userId: user.id, wrongPassword: true };
   }
 
   await db.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [user.id]);
@@ -76,7 +125,7 @@ export async function authenticate(db: Db, sessionToken?: string, apiToken?: str
   } else if (apiToken) {
     const row = await one<{ user_id: string }>(
       db,
-      'UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1 RETURNING user_id',
+      'UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > now()) RETURNING user_id',
       [sha256(apiToken)],
     );
     userId = row?.user_id;

@@ -36,6 +36,18 @@ const CONFIG_ALLOWED =
 
 const MAX_OUTPUT = 64 * 1024 * 1024;
 
+/**
+ * Variáveis do servidor que o git recebe: só as de sistema, proxy e certificados. As outras
+ * (ENCRYPTION_KEY, DATABASE_URL, senhas) ficam fora do processo do git.
+ */
+const GIT_ENV = /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TMP|TEMP|TZ|LANG|LANGUAGE|SYSTEMROOT|WINDIR|COMSPEC|PATHEXT|USERPROFILE|APPDATA|LOCALAPPDATA|PROGRAMDATA|HOMEDRIVE|HOMEPATH|SSL_CERT_FILE|SSL_CERT_DIR|GIT_SSL_CAINFO|GIT_SSL_CAPATH|NODE_EXTRA_CA_CERTS|SSH_AUTH_SOCK|HTTPS?_PROXY|NO_PROXY|ALL_PROXY)$/i;
+
+export function gitEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(process.env)) if (GIT_ENV.test(name)) env[name] = value;
+  return { ...env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' };
+}
+
 interface GitRun {
   stdout: string;
   stderr: string;
@@ -67,7 +79,7 @@ function git(args: string[], options: { cwd: string; connection: ConnectionData 
         maxBuffer: MAX_OUTPUT,
         signal: options.signal,
         windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', GIT_CONFIG_NOSYSTEM: '1', LC_ALL: 'C' },
+        env: gitEnv(),
       },
       (error, stdout, stderr) => {
         if (!error) return resolve({ stdout: String(stdout), stderr: String(stderr) });

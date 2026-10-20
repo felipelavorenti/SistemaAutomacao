@@ -49,6 +49,7 @@ describe.skipIf(!available)('API', () => {
     workerConcurrency: 2,
     runWorkerInProcess: true,
     secureCookies: false,
+    trustProxy: false,
   };
 
   beforeAll(async () => {

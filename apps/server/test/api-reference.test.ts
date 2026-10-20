@@ -18,6 +18,7 @@ const config: Config = {
   workerConcurrency: 1,
   runWorkerInProcess: false,
   secureCookies: false,
+  trustProxy: false,
 };
 
 describe('Referência da API', () => {

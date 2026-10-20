@@ -322,4 +322,11 @@ CREATE TABLE data_table_rows (
 );
 `,
   },
+  {
+    id: '010_validade_tokens_api',
+    sql: `
+-- Data em que o token de API deixa de valer; NULL: não vence (tokens criados antes valem como antes).
+ALTER TABLE api_tokens ADD COLUMN expires_at timestamptz;
+`,
+  },
 ];

@@ -466,10 +466,11 @@ São registradas fora de `/api`, sem login, com os caminhos do n8n. Têm um leit
 | `GET/POST /form/*` e `/form-test/*` | GET mostra o formulário; POST valida e cria a execução |
 | `GET/POST /form-waiting/:id` | Página de um Form ou Wait por formulário que está esperando |
 
-- O webhook confere IP (`BlockList` do Node, com faixas CIDR), robôs (user-agent) e autenticação (Basic com `WWW-Authenticate`, ou header, pelas conexões `httpBasicAuth` e `httpHeaderAuth`) antes de criar a execução.
+- O webhook confere IP (`BlockList` do Node, com faixas CIDR), robôs (user-agent) e autenticação (Basic com `WWW-Authenticate`, ou header, pelas conexões `httpBasicAuth` e `httpHeaderAuth`) antes de criar a execução. O IP é o da conexão; o `X-Forwarded-For` só conta com `TRUST_PROXY` (veja Segurança).
 - A execução nasce com `mode = 'webhook'` (ou `manual` no teste), `start_node_id` = o nó do gatilho e o item como entrada.
 - Respostas: Logo que receber responde na hora; Quando o último nó terminar e Pelo Respond to Webhook assinam o canal Redis `sa:exec:<id>` antes de enfileirar e esperam `response`, `waiting` ou `finished`, por até 10 minutos (depois, 504 com o ID da execução). O worker só publica quando há alguém assinando (`PUBSUB NUMSUB`).
-- HTML escrito pelo usuário (Respond to Webhook em texto HTML, Tela final em HTML) vai com `Content-Security-Policy: sandbox`, para não rodar script no domínio do Info8n.
+- Toda resposta de webhook (Respond to Webhook, último nó, recusas) vai com `X-Content-Type-Options: nosniff` e `Content-Security-Policy: sandbox allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts allow-top-navigation-by-user-activation`, sem `allow-same-origin`. Um HTML, SVG ou XML devolvido pelo fluxo roda como uma origem à parte, sem a sessão de quem abriu o link; sem isso, um script na resposta chamaria a API do Info8n como quem abriu (um administrador, por exemplo). Só o PDF fica sem o sandbox, porque o leitor de PDF do navegador não abre com ele. A Tela final em HTML do Form usa o mesmo sandbox.
+- As páginas de formulário do próprio Info8n (Form Trigger, Form e mensagens) vão com `Content-Security-Policy: default-src 'none'; style-src 'self' 'unsafe-inline' https:; img-src 'self' https: http: data:; font-src 'self' https: data:; base-uri 'none'`: nenhum script roda nelas. No CSS próprio, todo `<` vira o escape `\3c ` do CSS (`sanitizeCss`), então nada fecha o bloco `<style>`. O Bloco de texto (HTML) só mantém tags completas da lista permitida, com `href`, `src`, `alt`, `title` e `target`; qualquer outro `<` ou `>` vira texto (`sanitizeHtml`, em `packages/engine/src/forms.ts`).
 - Um formulário com Form depois do Form Trigger: o POST da primeira página espera o evento `waiting` e redireciona para `/form-waiting/<id>`. Cada página seguinte faz o mesmo até a Tela final.
 
 **TriggerManager**
@@ -592,7 +593,7 @@ A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas auto
 | --- | --- |
 | `users` | Usuários, perfil, hash da senha, tentativas erradas e bloqueio |
 | `sessions` | Sessões de login (só o hash do token) |
-| `api_tokens` | Tokens de API pessoais (só o hash) |
+| `api_tokens` | Tokens de API pessoais (só o hash) e a validade (`expires_at`, vazio para não vencer) |
 | `folders`, `user_folders` | Pastas de fluxos e quem acessa cada uma |
 | `clients`, `user_clients` | Clientes e quem acessa cada um |
 | `connections` | Conexões, com os segredos criptografados |
@@ -624,10 +625,20 @@ O acesso é por login e senha, e cada perfil libera um conjunto de ações. Past
 **Autenticação**
 
 - Senhas guardadas com bcrypt (custo 12). No primeiro acesso, o sistema obriga a trocar a senha.
-- Depois de 5 senhas erradas, o usuário fica bloqueado por 15 minutos. Um administrador pode desbloquear antes.
+- Senhas erradas contam por computador (IP), na memória da API (`LoginThrottle`, em `apps/server/src/lib/auth.ts`). 5 erros para o mesmo usuário bloqueiam esse usuário naquele computador por 15 minutos; de outro computador, o dono da conta continua entrando. 20 erros de um computador, para quaisquer usuários, bloqueiam o computador por 15 minutos. As duas recusas respondem 429 e vão para a Auditoria como `login_failed`. Reiniciar a API zera essa contagem.
+- 50 erros seguidos, de qualquer computador, bloqueiam a conta inteira por 15 minutos (no banco, `users.locked_until`). O limite é alto de propósito: errar a senha de alguém de propósito não tranca o dono da conta. Desbloquear, ou definir uma Nova senha para o usuário, zera os dois bloqueios.
 - A sessão é um cookie `sa_session` (httpOnly, SameSite=Lax) que vale 12 horas (`SESSION_TTL_HOURS`). O banco guarda só o hash SHA-256 do token.
-- Atrás de HTTPS, use `SECURE_COOKIES=true` para o cookie só trafegar criptografado.
-- Tokens de API pessoais servem para chamar a API sem tela. O banco também guarda só o hash deles.
+- Trocar a própria senha (`POST /api/auth/change-password`) encerra as outras sessões do usuário; a sessão de quem trocou continua. A senha trocada pelo administrador encerra todas.
+- Atrás de HTTPS, use `SECURE_COOKIES=true` para o cookie só trafegar criptografado (o `docker-compose.https.yml` já liga; veja Instalação).
+- Tokens de API pessoais servem para chamar a API sem tela. O banco também guarda só o hash deles. Cada token pode ter validade (`api_tokens.expires_at`): na tela, 30 dias, 90 dias, 1 ano (padrão) ou sem validade; pela API, `expiresInDays` de 1 a 3650, ou sem o campo para não vencer. Vencido, o token deixa de autenticar (401). Os tokens criados antes da validade existir não vencem.
+
+**IP de quem chamou**
+
+O Info8n usa o IP da conexão (no login, na lista de IPs permitidos do webhook e na Auditoria). Com um proxy na frente, `TRUST_PROXY` diz em quem confiar para ler o `X-Forwarded-For`: o IP ou a rede do proxy (ex.: `10.0.0.5` ou `10.0.0.0/24`, separados por vírgula), ou `true`, que confia em qualquer um e só serve com a porta 3000 fechada para a rede (como no `docker-compose.https.yml`). Antes, o servidor confiava sempre, e qualquer um que mandasse `X-Forwarded-For: <IP permitido>` passava pela lista de IPs do webhook.
+
+**Cabeçalhos das telas**
+
+Telas e API vão com `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'`, `X-Content-Type-Options: nosniff` e `Referrer-Policy: same-origin`, para não abrirem dentro de outro site (clickjacking). Webhooks e formulários (`/webhook*`, `/form*`) ficam de fora, porque podem ser incorporados em outras páginas; eles têm os próprios cabeçalhos (veja Gatilhos, webhooks e pausa de execuções).
 
 **Perfis**
 
@@ -641,11 +652,30 @@ O acesso é por login e senha, e cada perfil libera um conjunto de ações. Past
 - Administrar = usuários, pastas, clientes e auditoria.
 - O administrador vê todas as pastas e todos os clientes. Os outros perfis veem só as pastas e os clientes liberados para eles. Conexões sem cliente ficam visíveis para todos.
 
+**Conexões, clientes no ERP e subfluxos escolhidos por expressão**
+
+- Ao salvar, importar ou executar uma versão não salva, o servidor confere os valores fixos (sem expressão) de todo campo do tipo conexão, inclusive a autenticação do webhook (`basicAuthConnection`, `headerAuthConnection`), do cliente no ERP e do fluxo do Execute Workflow (`fixedReferences`, em `apps/server/src/lib/access.ts`). Quem não enxerga o cliente ou a pasta não salva.
+- Um valor que vem de expressão (ex.: `{{ $json.conexao }}`) só se conhece na hora de rodar. O worker, e os gatilhos que escutam (como o Email Trigger), conferem esse valor contra o responsável pela execução (`ExecutionAccess`): quem disparou (Executar, Tentar de novo, escuta de teste), ou, nas execuções automáticas (agendamento, webhook, gatilho, fluxo de erro), quem salvou a versão que roda (`workflow_versions.created_by`; sem versão, `workflows.updated_by`). Um subfluxo usa o responsável dele, pela mesma regra.
+- Conexão de um cliente que o responsável não enxerga, cliente no ERP de outro cliente ou subfluxo de pasta sem acesso fazem o nó falhar com a mensagem dizendo isso. Conexões sem cliente valem para todos, como na tela. Sem um responsável ativo (usuário desativado), o nó que escolhe por expressão falha; salvar o fluxo de novo torna quem salvou o responsável.
+- Sem essa conferência, quem não tem acesso a um cliente usaria a conexão dele escrevendo o ID numa expressão.
+
 **Segredos das conexões**
 
 - Senhas, tokens e chaves das conexões e dos clientes nos ERPs são criptografados com AES-256-GCM usando a `ENCRYPTION_KEY`.
 - A API nunca devolve esses segredos para as telas.
 - Sem a mesma `ENCRYPTION_KEY`, as conexões salvas não podem ser lidas. Guarde-a junto com o backup do banco.
+- Mudar o servidor, a porta ou a URL de uma conexão, ou de um cliente no ERP, exige digitar de novo as senhas e tokens já salvos; deixar em branco responde 400 (`secretsToRetype`, em `apps/server/src/lib/connection-types.ts`). Sem isso, quem edita conexões mandaria a senha salva para outro servidor sem nunca vê-la. Contam como endereço os campos `host`, `hostName`, `port`, `porta`, `url`, `baseUrl`, `connectString`, `servidor` e `endereco`.
+- A URL base e a autenticação de um ERP valem para todos os clientes dele. Só muda quem enxerga todos os clientes cadastrados nesse ERP (os outros recebem 403). Nome, observações, campos e endpoints seguem liberados para quem edita conexões.
+- Limite conhecido, igual ao do n8n: quem edita fluxos usa as conexões que enxerga com qualquer URL (um HTTP Request com a conexão manda o token para o endereço do nó). Dê o perfil Editor só a quem pode conhecer as credenciais dos clientes liberados para ele.
+- O nó Git roda o `git` só com as variáveis de sistema, de proxy e de certificados do servidor (`gitEnv`, em `packages/engine/src/nodes/git.ts`). `ENCRYPTION_KEY`, `DATABASE_URL` e as outras ficam de fora do processo.
+
+**Dependências**
+
+O CI roda `npm audit --omit=dev --audit-level=critical` e falha com uma falha crítica nas bibliotecas de produção. Restam três avisos sem correção publicada, avaliados assim:
+
+- `braces` (dentro do `fast-glob`, nos padrões de arquivo dos nós Read/Write Files from Disk e Local File Trigger): um padrão aninhado demais estoura a pilha e dá erro no nó, sem derrubar o servidor.
+- `showdown` (nó Markdown): o HTML gerado só roda script se for aberto num navegador, e as respostas de webhook já vão isoladas.
+- `uuid` 8 (dentro do `exceljs`): a falha é só nas versões v3, v5 e v6 com buffer, e o `exceljs` usa a v4.
 
 **Login com Google (Gmail)**
 
@@ -689,9 +719,9 @@ Uma máquina com 2 vCPU, 4 GB de RAM e 10 GB livres em disco deve comportar os 7
 | RAM | 2 GB | 4 GB | Parado: app 75 MB, Postgres 41 MB, Redis 6 MB. Cada processo Python pode chegar a 512 MB |
 | Disco livre | 5 GB | 10 GB ou mais | Imagens Docker \~1,5 GB; o primeiro build usa \~4,5 GB com cache. O banco cresce com as execuções guardadas |
 | Sistema | Linux com Docker, ou Windows 10/11 com Docker Desktop e WSL 2 | Linux (servidor) | Testado no Windows 11 Pro com Docker Desktop 4.93 e WSL 2 |
-| Docker | Docker Engine com Compose v2 | Versão atual | Sobe 3 containers: app, postgres e redis |
+| Docker | Docker Engine com Compose v2 (2.24 ou mais novo para o HTTPS) | Versão atual | Sobe 3 containers: app, postgres e redis (4 com o HTTPS) |
 | Rede | Acesso às APIs e aos bancos dos clientes | A mesma rede do n8n atual | A plataforma herda os acessos já liberados; não tem túnel nem VPN embutidos |
-| Porta | 3000 liberada para os usuários | Atrás de um proxy com HTTPS | Com HTTPS, ligue `SECURE_COOKIES=true` |
+| Porta | 3000 liberada para os usuários | 443, com o HTTPS do `docker-compose.https.yml` | Com o HTTPS do compose, a porta 3000 fecha para a rede |
 | Navegador | Chrome ou Edge 111+, Firefox 121+ | Chrome ou Edge atuais | Telas usam CSS moderno |
 
 **Medido na instalação de teste** (6 fluxos, 24 execuções, cerca de 2 horas de uso): imagem do app 680 MB, postgres:16 642 MB, redis:7 170 MB; banco com 9,3 MB; volumes com 50 MB.
@@ -729,7 +759,10 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 | `WORKER_CONCURRENCY` | Não | 5 | Execuções em paralelo por worker |
 | `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk, Local File Trigger e Git podem usar, separadas por vírgula. No Docker Desktop (Windows ou Mac), o Local File Trigger precisa de Verificar por consulta (polling) |
 | `RUN_WORKER_IN_PROCESS` | Não | true | false = worker em processo separado |
-| `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS |
+| `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS (o `docker-compose.https.yml` já liga) |
+| `TRUST_PROXY` | Não | vazio (desligado) | IPs ou redes dos proxies em que o Info8n confia para ler o `X-Forwarded-For`, separados por vírgula, ou `true` (só com a porta 3000 fechada). Veja Segurança, IP de quem chamou |
+| `INFO8N_HOST` | Só com o HTTPS | localhost | Nome pelo qual o Info8n é aberto em HTTPS (ex.: `info8n.empresa.local`) |
+| `INFO8N_TLS` | Não | internal | Certificado do HTTPS: `internal` (gerado pelo Caddy) ou `/certificados/cert.pem /certificados/chave.pem` (certificado da empresa) |
 | `PUBLIC_URL` | Não | endereço aberto na tela; nos endereços de retomada, `http://localhost:<PORT>` | Endereço pelo qual o Info8n é acessado (ex.: `http://info8n.empresa.local:3000`). Define o endereço de retorno do login com Google (precisa ser localhost ou um domínio, não IP), `$execution.resumeUrl`, `$execution.resumeFormUrl`, o `webhookUrl` dos webhooks e o link da execução no fluxo de erro. Configure sempre que usar Wait por webhook ou formulário |
 
 `DATABASE_URL` e `REDIS_URL` são montadas pelo `docker-compose.yml`. Só precisam ser definidas quando a plataforma roda fora do Docker.
@@ -739,6 +772,27 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 1. `git pull` na pasta do projeto.
 2. `docker compose up -d --build`. Só o container do app é refeito; banco e Redis continuam com os dados.
 3. Recarregue a tela com Ctrl+F5.
+
+**HTTPS (opcional)**
+
+O `docker-compose.https.yml` põe um Caddy na frente do Info8n, com HTTPS na porta 443, e fecha a porta 3000 para a rede. Com isso, senhas, cookies de sessão, tokens de API e o Basic dos webhooks deixam de viajar abertos na rede.
+
+1. No `.env`, defina `INFO8N_HOST` com o nome pelo qual o Info8n é aberto (ex.: `info8n.empresa.local`). O nome precisa apontar para o servidor no DNS da empresa (ou no arquivo hosts de cada computador).
+2. Escolha o certificado. Com `INFO8N_TLS=internal` (padrão), o Caddy gera um certificado próprio, e o navegador avisa até a autoridade dele ser instalada nos computadores (arquivo `/data/caddy/pki/authorities/local/root.crt` no volume `caddy-data`; copie com `docker compose cp https:/data/caddy/pki/authorities/local/root.crt .`). Com o certificado da empresa, ponha `cert.pem` e `chave.pem` na pasta `certificados` ao lado do `docker-compose.yml` e use `INFO8N_TLS=/certificados/cert.pem /certificados/chave.pem`.
+3. Suba com `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build`. Use o mesmo comando nas atualizações.
+4. Acesse `https://<INFO8N_HOST>`. O compose liga `SECURE_COOKIES=true`, `TRUST_PROXY=true` e `PUBLIC_URL=https://<INFO8N_HOST>` no app.
+
+- Precisa do Docker Compose 2.24 ou mais novo, que entende o `!reset` usado para fechar a porta 3000.
+- Login com Google: troque o endereço de retorno no Google Cloud para `https://<INFO8N_HOST>/api/oauth/google/callback`.
+- Os sistemas que chamam webhooks passam a usar `https://<INFO8N_HOST>/webhook/...`.
+
+**Trocar a senha do Postgres**
+
+O Postgres do compose grava a senha na primeira subida, dentro do volume. Mudar `POSTGRES_PASSWORD` no `.env` depois disso não muda a senha do banco. Ao subir, o app escreve no log um aviso começando com `ATENÇÃO` quando a senha ainda é a do exemplo (`troque-esta-senha`). Com a senha de exemplo, quem cria uma conexão Postgres para o host `postgres` mexe direto no banco do Info8n. Para trocar:
+
+1. `docker compose exec postgres psql -U automacao -c "ALTER USER automacao PASSWORD 'nova-senha-forte'"`
+2. Ponha a mesma senha em `POSTGRES_PASSWORD` no `.env`.
+3. `docker compose up -d`. O app volta usando a senha nova.
 
 **Backup**
 
@@ -772,7 +826,7 @@ Para desenvolver fora do Docker são precisos Node 22, Postgres 16 e Redis 7. Ca
 
 O arquivo `.github/workflows/ci.yml` tem dois jobs em cada pull request:
 
-- `test`: sobe Postgres 16, Redis 7, SQL Server 2022, Oracle Free 23 e Metabase como serviços e roda todos os testes.
+- `test`: sobe Postgres 16, Redis 7, SQL Server 2022, Oracle Free 23 e Metabase como serviços, confere as dependências com `npm audit --omit=dev --audit-level=critical` e roda todos os testes. Os testes de segurança ficam em `apps/server/test/seguranca.test.ts` e `packages/engine/test/seguranca.test.ts`.
 - `docker`: faz o build da imagem do `Dockerfile`.
 
 **Imagem Docker**

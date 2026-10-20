@@ -1,0 +1,30 @@
+# HTTPS na frente do Info8n (opcional). Suba junto com o docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.https.yml up -d
+# A porta 3000 deixa de ficar aberta para a rede: o acesso passa a ser só por https://INFO8N_HOST.
+services:
+  app:
+    ports: !reset []
+    environment:
+      SECURE_COOKIES: "true"
+      # Só o Caddy alcança a porta 3000 (ela não fica aberta), e ele reescreve o X-Forwarded-For com o IP real.
+      TRUST_PROXY: "true"
+      PUBLIC_URL: https://${INFO8N_HOST:-localhost}
+
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      INFO8N_HOST: ${INFO8N_HOST:-localhost}
+      INFO8N_TLS: ${INFO8N_TLS:-internal}
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certificados:/certificados:ro
+      - caddy-data:/data
+    depends_on:
+      - app
+
+volumes:
+  caddy-data:

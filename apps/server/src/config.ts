@@ -27,6 +27,11 @@ export interface Config {
   /** Roda o worker no mesmo processo da API (útil em instalação pequena). */
   runWorkerInProcess: boolean;
   secureCookies: boolean;
+  /**
+   * Proxies em que o Info8n confia para saber o IP de quem chamou (X-Forwarded-For). Desligado,
+   * vale o IP da conexão; ligado sem um proxy na frente, qualquer um falsifica o IP.
+   */
+  trustProxy: boolean | string[];
   /** Endereço do Info8n que o navegador usa (ex.: https://info8n.empresa.com.br), para o login com Google. */
   publicUrl?: string;
   webDistDir?: string;
@@ -41,6 +46,17 @@ export function parseKey(raw: string): Buffer {
   return key;
 }
 
+/** TRUST_PROXY: vazio ou false (padrão), true, ou IPs e redes dos proxies separados por vírgula. */
+export function parseTrustProxy(raw: string | undefined): boolean | string[] {
+  const value = (raw ?? '').trim();
+  if (!value || value === 'false') return false;
+  if (value === 'true') return true;
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export function loadConfig(): Config {
   return {
     port: int('PORT', 3000),
@@ -53,6 +69,7 @@ export function loadConfig(): Config {
     workerConcurrency: int('WORKER_CONCURRENCY', 5),
     runWorkerInProcess: process.env.RUN_WORKER_IN_PROCESS !== 'false',
     secureCookies: process.env.SECURE_COOKIES === 'true',
+    trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     publicUrl: process.env.PUBLIC_URL?.replace(/\/+$/, '') || undefined,
     webDistDir: process.env.WEB_DIST_DIR,
     filesDirs: (process.env.FILES_DIRS ?? '')
@@ -63,4 +80,24 @@ export function loadConfig(): Config {
       ? { email: process.env.ADMIN_EMAIL, password: required('ADMIN_PASSWORD'), name: process.env.ADMIN_NAME ?? 'Administrador' }
       : undefined,
   };
+}
+
+/** Senhas de exemplo do .env.example que ficaram no .env de verdade. */
+const EXAMPLE_PASSWORDS = new Set(['troque-esta-senha', 'postgres', 'automacao']);
+
+/** Configurações perigosas que valem um aviso no log ao subir o servidor. */
+export function insecureSettings(config: Config): string[] {
+  const warnings: string[] = [];
+  try {
+    const password = decodeURIComponent(new URL(config.databaseUrl).password);
+    if (EXAMPLE_PASSWORDS.has(password)) {
+      warnings.push('a senha do Postgres do Info8n é a do exemplo; troque POSTGRES_PASSWORD no .env (veja a documentação técnica, "Trocar a senha do Postgres")');
+    }
+  } catch {
+    // DATABASE_URL sem o formato de URL: o pg avisa ao conectar.
+  }
+  if (config.trustProxy === true) {
+    warnings.push('TRUST_PROXY=true: use só com o Info8n atrás de um proxy e com a porta 3000 fechada para a rede, senão o IP dos pedidos pode ser falsificado');
+  }
+  return warnings;
 }
