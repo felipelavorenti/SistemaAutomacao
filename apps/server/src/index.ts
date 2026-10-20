@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import type { WorkflowDefinition } from '@sa/engine';
 import { buildApp } from './app.js';
-import { loadConfig } from './config.js';
+import { insecureSettings, loadConfig } from './config.js';
 import { createDb, many, migrate } from './db/db.js';
 import { createRedis, ExecutionQueue } from './executions/queue.js';
 import { startWorker } from './executions/worker.js';
@@ -9,6 +9,7 @@ import { ensureAdmin } from './lib/auth.js';
 import { TriggerManager } from './triggers/manager.js';
 
 const config = loadConfig();
+for (const warning of insecureSettings(config)) console.warn(`ATENÇÃO: ${warning}`);
 const db = createDb(config.databaseUrl);
 
 const applied = await migrate(db);

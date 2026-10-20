@@ -5,6 +5,7 @@ import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
 import { audit } from '../lib/audit.js';
 import { DEFAULT_CLIENT_FIELDS, mergeValues, publicValues, type ClientField } from '../lib/catalog.js';
+import { secretsToRetype } from '../lib/connection-types.js';
 import { decryptJson, encryptJson } from '../lib/crypto.js';
 import { canSeeClient, forbidden, HttpError, notFound, requireCap } from '../lib/permissions.js';
 
@@ -148,6 +149,12 @@ export const catalogRoutes =
       const { id } = idParam.parse(request.params);
       const b = erpBody.parse(request.body);
       const before = await loadErp(id);
+      // O endereço e a autenticação valem para todos os clientes do ERP: só muda quem enxerga todos eles.
+      const routing = b.baseUrl !== before.base_url || b.authType !== before.auth_type || (b.authHeader ?? null) !== (before.auth_header ?? null);
+      if (routing && user.clientIds !== null) {
+        const hidden = await one(db, 'SELECT 1 FROM erp_clients WHERE erp_id = $1 AND NOT (client_id = ANY($2::uuid[])) LIMIT 1', [id, user.clientIds]);
+        if (hidden) throw forbidden('Este ERP tem clientes aos quais você não tem acesso; só quem enxerga todos eles pode mudar a URL base ou a autenticação');
+      }
       await db.query(
         `UPDATE erps SET name = $2, base_url = $3, auth_type = $4, auth_header = $5, client_fields = $6, notes = $7, updated_by = $8, updated_at = now() WHERE id = $1`,
         [id, b.name, b.baseUrl, b.authType, b.authHeader, JSON.stringify(b.clientFields), b.notes, user.id],
@@ -267,6 +274,8 @@ export const catalogRoutes =
       if (!canSeeClient(user, b.clientId)) throw forbidden('Você não tem acesso a esse cliente');
       const old = decryptJson<JsonObject>(config.encryptionKey, existing.values_encrypted);
       const values = mergeValues(existing.client_fields, b.values, old);
+      const retype = secretsToRetype(existing.client_fields, b.values, old, values);
+      if (retype.length) throw new HttpError(400, `Ao mudar o servidor, a porta ou a URL, digite de novo: ${retype.join(', ')}`);
       await db.query(`UPDATE erp_clients SET client_id = $2, label = $3, values_encrypted = $4, updated_by = $5, updated_at = now() WHERE id = $1`, [
         id,
         b.clientId,

@@ -19,6 +19,7 @@ import type { Config } from '../config.js';
 import { one, type Db } from '../db/db.js';
 import { loadApiEndpoint } from '../lib/catalog.js';
 import { decryptJson } from '../lib/crypto.js';
+import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
 import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, QUEUE_NAME, type JobData } from './queue.js';
@@ -35,6 +36,7 @@ interface ExecutionRow {
   id: string;
   triggered_by: string | null;
   workflow_id: string;
+  workflow_version: number | null;
   mode: ExecutionMode;
   status: string;
   definition: WorkflowDefinition;
@@ -116,14 +118,13 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     if (channel === CANCEL_CHANNEL) running.get(executionId)?.abort();
   });
 
-  const getConnection = async (id: string): Promise<ConnectionData> => {
-    const row = await one<{ id: string; type: string; data_encrypted: Buffer }>(db, 'SELECT id, type, data_encrypted FROM connections WHERE id = $1', [id]);
-    if (!row) throw new Error(`Conexão ${id} não existe mais`);
-    return { id: row.id, type: row.type, data: decryptJson<JsonObject>(config.encryptionKey, row.data_encrypted) };
-  };
-
-  /** Dependências de cada execução: auditoria dos comandos SQL e catálogo de APIs. */
-  const executionDeps = (executionId: string, workflowId: string, triggeredBy: string | null) => {
+  /** Dependências de cada execução: conexões e catálogo de APIs (com a conferência de acesso), auditoria dos comandos SQL. */
+  const executionDeps = (
+    executionId: string,
+    execution: { workflowId: string; workflowVersion: number | null; triggeredBy: string | null; definition: WorkflowDefinition },
+  ) => {
+    const { workflowId, triggeredBy } = execution;
+    const access = new ExecutionAccess(db, execution.definition, () => executionOwner(db, execution));
     let workflowName: Promise<string | null> | null = null;
     const connectionInfo = new Map<string, Promise<{ name: string | null; client_id: string | null; client_name: string | null } | null>>();
 
@@ -189,12 +190,30 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       });
     };
 
+    const getConnection = async (id: string): Promise<ConnectionData> => {
+      const row = UUID.test(id)
+        ? await one<{ id: string; type: string; client_id: string | null; data_encrypted: Buffer }>(
+            db,
+            'SELECT id, type, client_id, data_encrypted FROM connections WHERE id = $1',
+            [id],
+          )
+        : undefined;
+      if (!row) throw new Error(`Conexão ${id} não existe mais`);
+      await access.checkConnection(row.id, row.client_id);
+      return { id: row.id, type: row.type, data: decryptJson<JsonObject>(config.encryptionKey, row.data_encrypted) };
+    };
+
     return {
+      access,
+      getConnection,
       onDatabaseCommand,
       onCommand,
       dataTables,
       databases: pools,
-      getApiEndpoint: (erpClientId: string, endpointId: string) => loadApiEndpoint(db, config.encryptionKey, erpClientId, endpointId),
+      getApiEndpoint: async (erpClientId: string, endpointId: string) => {
+        if (UUID.test(erpClientId)) await access.checkErpClient(erpClientId);
+        return loadApiEndpoint(db, config.encryptionKey, erpClientId, endpointId);
+      },
       filesDirs: config.filesDirs,
       getFile: async (id: string): Promise<FileData> => {
         const row = await one<{ id: string; name: string; mime_type: string; content: Buffer }>(db, 'SELECT id, name, mime_type, content FROM files WHERE id = $1', [id]);
@@ -209,19 +228,20 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
    * para não disputar vaga com o próprio pai) e registra a execução filha.
    */
   const subworkflowRunner =
-    (parentId: string, rootMode: ExecutionMode, depth: number, triggeredBy: string | null): ExecuteOptions['executeSubworkflow'] =>
+    (parentId: string, rootMode: ExecutionMode, depth: number, triggeredBy: string | null, access: ExecutionAccess): ExecuteOptions['executeSubworkflow'] =>
     async ({ workflowId, items, signal }) => {
       if (depth > MAX_SUBWORKFLOW_DEPTH) {
         throw new NodeOperationError(`Passou do limite de ${MAX_SUBWORKFLOW_DEPTH} subfluxos chamados um dentro do outro`);
       }
       const wf = UUID.test(workflowId)
-        ? await one<{ id: string; name: string; version: number; definition: WorkflowDefinition }>(
+        ? await one<{ id: string; name: string; folder_id: string; version: number; definition: WorkflowDefinition }>(
             db,
-            'SELECT id, name, version, definition FROM workflows WHERE id = $1',
+            'SELECT id, name, folder_id, version, definition FROM workflows WHERE id = $1',
             [workflowId],
           )
         : null;
       if (!wf) throw new NodeOperationError(`O fluxo ${workflowId} não existe`);
+      await access.checkWorkflow(wf.id, wf.folder_id);
       const start = wf.definition.nodes.find((n) => n.type === 'executeWorkflowTrigger' && !n.disabled);
       if (!start) throw new NodeOperationError(`O fluxo "${wf.name}" não começa pelo gatilho "Chamado por outro fluxo"`);
 
@@ -240,16 +260,16 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       signal.addEventListener('abort', onParentAbort, { once: true });
       running.set(id, controller);
       try {
+        const { access: childAccess, ...deps } = executionDeps(id, { workflowId: wf.id, workflowVersion: wf.version, triggeredBy, definition: wf.definition });
         const result = await executeWorkflow({
           workflow: wf.definition,
           executionId: id,
           mode: 'subworkflow',
           startNodeId: start.id,
           triggerItems: items,
-          getConnection,
           signal: controller.signal,
-          executeSubworkflow: subworkflowRunner(id, rootMode, depth + 1, triggeredBy),
-          ...executionDeps(id, wf.id, triggeredBy),
+          executeSubworkflow: subworkflowRunner(id, rootMode, depth + 1, triggeredBy, childAccess),
+          ...deps,
           publicUrl,
           // O subfluxo roda dentro do worker de quem chamou: não pode pausar.
           canWait: false,
@@ -272,7 +292,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     const claimed = await one<ExecutionRow>(
       db,
       `UPDATE executions SET status = 'running', started_at = coalesce(started_at, now()) WHERE id = $1 AND status = 'queued'
-       RETURNING id, workflow_id, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data`,
+       RETURNING id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data`,
       [executionId],
     );
     if (!claimed) return; // cancelada antes de começar, ou já processada
@@ -280,6 +300,12 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     const controller = new AbortController();
     running.set(executionId, controller);
     let responded = false;
+    const { access, ...deps } = executionDeps(executionId, {
+      workflowId: claimed.workflow_id,
+      workflowVersion: claimed.workflow_version,
+      triggeredBy: claimed.triggered_by,
+      definition: claimed.definition,
+    });
     try {
       const result = await executeWorkflow({
         workflow: claimed.definition,
@@ -288,10 +314,9 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         startNodeId: claimed.start_node_id ?? undefined,
         triggerItems: claimed.input ?? undefined,
         resume: decodeResume(claimed),
-        getConnection,
         signal: controller.signal,
-        executeSubworkflow: subworkflowRunner(executionId, claimed.mode, 1, claimed.triggered_by),
-        ...executionDeps(executionId, claimed.workflow_id, claimed.triggered_by),
+        executeSubworkflow: subworkflowRunner(executionId, claimed.mode, 1, claimed.triggered_by, access),
+        ...deps,
         publicUrl,
         onResponse: (response) => {
           // Só a primeira resposta vale, como no n8n.

@@ -341,6 +341,24 @@ export function mergeData(type: ConnectionTypeDescription, incoming: Record<stri
   return out;
 }
 
+/** Campos que dizem para onde a senha vai (servidor, porta, URL). */
+const ADDRESS_FIELD = /^(host|hostname|port|porta|url|baseurl|connectstring|servidor|endereco)$/i;
+
+/**
+ * Segredos que precisam ser digitados de novo: quem muda o servidor, a porta ou a URL e deixa a senha
+ * em branco (mantendo a salva) mandaria a senha para outro lugar sem nunca tê-la visto.
+ */
+export function secretsToRetype(
+  fields: { name: string; secret: boolean; label: string }[],
+  incoming: Record<string, unknown>,
+  before: JsonObject,
+  after: JsonObject,
+): string[] {
+  const moved = fields.some((f) => !f.secret && ADDRESS_FIELD.test(f.name) && fieldText(before[f.name]) !== fieldText(after[f.name]));
+  if (!moved) return [];
+  return fields.filter((f) => f.secret && before[f.name] && fieldText(incoming[f.name]) === '').map((f) => f.label);
+}
+
 export function missingFields(type: ConnectionTypeDescription, data: JsonObject): string[] {
   const missing = type.fields.filter((f) => f.required && !data[f.name]).map((f) => f.displayName);
   if (type.type === 'oracle' && !data.connectString && !(data.host && data.serviceName)) missing.push('Servidor e service name, ou a connect string');

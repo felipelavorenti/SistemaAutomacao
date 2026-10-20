@@ -6,9 +6,9 @@
 
 O Info8n abre no navegador, no endereço do servidor na porta 3000 (por exemplo `http://localhost:3000`). Entre com o e-mail e a senha que o administrador criou para você.
 
-1. **Login:** digite e-mail e senha e clique em Entrar. Depois de 5 senhas erradas, o acesso fica bloqueado por 15 minutos.
+1. **Login:** digite e-mail e senha e clique em Entrar. Depois de 5 senhas erradas, o seu usuário fica bloqueado por 15 minutos naquele computador; de outro computador, você continua entrando. Um computador que erra 20 senhas, de quaisquer usuários, também fica bloqueado por 15 minutos.
 2. **Senha nova:** no primeiro acesso, o sistema pede uma senha nova antes de mostrar qualquer tela.
-3. **Sessão:** o login vale 12 horas. Depois disso, entre de novo.
+3. **Sessão:** o login vale 12 horas. Depois disso, entre de novo. Quando você troca a senha em Minha conta, as sessões abertas em outros navegadores são encerradas.
 
 **O menu lateral**
 
@@ -44,7 +44,7 @@ Se você abrir um fluxo que usa uma conexão de um cliente que você não enxerg
 
 **Execute Command e SSH.** Esses dois nós rodam comandos em servidores, então só o perfil Administrador pode incluir, alterar ou tirar um deles de um fluxo (salvar, importar ou executar um fluxo com essa mudança). Um Editor ainda pode editar o resto do fluxo, desde que não mexa nesses nós. Cada comando executado vai para a Auditoria.
 
-**Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo.
+**Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo. Ao gerar, escolha a validade: 30 dias, 90 dias, 1 ano (padrão) ou Não vence. A lista mostra quando cada token vence; vencido, ele para de funcionar, e é preciso gerar outro. Os tokens criados antes da validade existir não vencem.
 
 Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...` em cada chamada. Para disparar um fluxo, ele chama `POST /api/workflows/{id}/run` e depois consulta o resultado em `GET /api/executions/{id}`. O menu Referência da API mostra todas as chamadas dentro do Info8n. A mesma lista, com os parâmetros, um exemplo de chamada e um exemplo de resposta de cada uma, está na [documentação da API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9). Para uma integração, crie um usuário só para ela, com o menor perfil que resolve, e gere o token com esse usuário.
 
@@ -205,12 +205,12 @@ Dois fluxos ativos não podem usar o mesmo método e caminho; o sistema recusa a
 - **Quando responder:** Logo que receber (responde `{"message":"Workflow was started"}` e o fluxo segue sozinho), Quando o último nó terminar (responde com o que o último nó devolveu: o JSON do primeiro item, todos os itens, o arquivo do primeiro item ou sem corpo) ou Pelo nó Respond to Webhook. Nos dois últimos, quem chamou espera o fluxo; se ele demorar mais de 10 minutos, recebe 504 e o fluxo continua.
 - **Código, Content-Type e Headers da resposta**, **Responder sem corpo** e **Campo da resposta** (responde só um campo do JSON, ex.: `resultado.total`).
 - **Arquivos recebidos:** um corpo binário (PDF, imagem) vira o arquivo `data` do item (o nome muda em Nome do arquivo recebido). Num envio multipart (form-data), os campos de texto vão para `body` e cada arquivo fica no item com o nome do campo. **Guardar também o corpo cru** guarda o corpo original como arquivo, além do JSON.
-- **IPs permitidos** (IPs ou faixas como 192.168.1.0/24, separados por vírgula), **Ignorar robôs** (recusa prévias de links e buscadores) e **Origens permitidas (CORS)** para chamadas feitas de páginas web.
+- **IPs permitidos** (IPs ou faixas como 192.168.1.0/24, separados por vírgula), **Ignorar robôs** (recusa prévias de links e buscadores) e **Origens permitidas (CORS)** para chamadas feitas de páginas web. O IP conferido é o de quem se conectou ao Info8n; com um proxy na frente, o administrador do servidor configura `TRUST_PROXY` (documentação técnica).
 - O corpo pode ter até 16 MB.
 
 Exemplo: o ERP chama `POST /webhook/pedido-aprovado` com o pedido no corpo; o fluxo grava no banco do cliente e um Respond to Webhook devolve `{"ok": true}`.
 
-**Respond to Webhook.** Define a resposta de um Webhook (ou Form Trigger, ou Wait por webhook) configurado para responder Pelo nó Respond to Webhook. Responde uma vez só, com: o primeiro item que chegou, todos os itens, um JSON que você escreve (aceita expressões), um texto, o arquivo de um campo do item, um redirecionamento para outro endereço ou sem corpo. Tem Código da resposta, Headers e, para primeiro item e todos os itens, Colocar a resposta no campo (ex.: `dados`). Os itens seguem para os próximos nós sem mudança. Se o fluxo terminar sem passar por ele, quem chamou recebe `{"message":"Workflow executed successfully"}` (ou 500 com o erro). Executado pelo botão Executar, ele não tem para quem responder e só repassa os itens.
+**Respond to Webhook.** Define a resposta de um Webhook (ou Form Trigger, ou Wait por webhook) configurado para responder Pelo nó Respond to Webhook. Responde uma vez só, com: o primeiro item que chegou, todos os itens, um JSON que você escreve (aceita expressões), um texto, o arquivo de um campo do item, um redirecionamento para outro endereço ou sem corpo. Tem Código da resposta, Headers e, para primeiro item e todos os itens, Colocar a resposta no campo (ex.: `dados`). Os itens seguem para os próximos nós sem mudança. Se o fluxo terminar sem passar por ele, quem chamou recebe `{"message":"Workflow executed successfully"}` (ou 500 com o erro). Executado pelo botão Executar, ele não tem para quem responder e só repassa os itens. Uma resposta em HTML (ou SVG, XML) abre isolada no navegador: os scripts dela rodam, mas sem acesso ao Info8n nem à sessão de quem abriu o link.
 
 **Form Trigger.** Publica um formulário web no endereço `/form/<caminho>` e inicia o fluxo quando alguém envia. Você define Título, Descrição, o Texto do botão e os **Campos do formulário**, um por linha:
 
@@ -225,7 +225,7 @@ Exemplo: o ERP chama `POST /webhook/pedido-aprovado` com o pedido no corpo; o fl
 | Campo oculto | O Valor, com a chave do Nome; não aparece na tela |
 | Bloco de texto (HTML) | Não chega no item; mostra o HTML do Valor no meio do formulário |
 
-As opções das listas vão uma por linha. O item usa o rótulo de cada campo como chave e leva também `submittedAt` (data e hora do envio, no fuso escolhido) e `formMode` (test ou production). Depois do envio, a pessoa vê a Mensagem (padrão "Sua resposta foi registrada") ou vai para um endereço. Com Quando o último nó terminar, a mensagem só aparece depois do fluxo; com Pelo nó Respond to Webhook, o Respond to Webhook decide a página. O formulário pode pedir usuário e senha (Basic) e aceita CSS próprio. Campos obrigatórios vazios voltam com a mensagem de erro, sem rodar o fluxo.
+As opções das listas vão uma por linha. O item usa o rótulo de cada campo como chave e leva também `submittedAt` (data e hora do envio, no fuso escolhido) e `formMode` (test ou production). Depois do envio, a pessoa vê a Mensagem (padrão "Sua resposta foi registrada") ou vai para um endereço. Com Quando o último nó terminar, a mensagem só aparece depois do fluxo; com Pelo nó Respond to Webhook, o Respond to Webhook decide a página. O formulário pode pedir usuário e senha (Basic) e aceita CSS próprio (sem o caractere `<`, que é trocado pelo escape do CSS). As páginas de formulário não rodam JavaScript, e o Bloco de texto aceita só tags simples de formatação, links e imagens. Campos obrigatórios vazios voltam com a mensagem de erro, sem rodar o fluxo.
 
 **Form.** Continua um formulário iniciado pelo Form Trigger. Na operação **Próxima página do formulário**, a pessoa que enviou a primeira página vê outra página com os campos deste nó, e o fluxo fica Esperando até ela enviar; os valores chegam como itens deste nó. Na operação **Tela final**, define o que a pessoa vê no fim: Título e mensagem, Ir para um endereço, uma Página HTML ou o Arquivo do item (download). Sem Tela final, ela vê a mensagem do Form Trigger. Exemplo: Form Trigger pede o CPF, um nó consulta o cliente no ERP, um Form mostra a segunda página com os dados para confirmar, e a Tela final agradece.
 
@@ -506,7 +506,8 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 | API do Info8n | Token da API (de Minha conta) e endereço do Info8n (vazio é este) | Info8n (API) |
 
 - **Testar conexão:** bancos, Metabase, ClickUp, Gmail, SMTP, FTP, SFTP e SSH têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
-- **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual.
+- **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual. Se você mudar o servidor, a porta ou a URL, digite a senha (ou o token) de novo: o Info8n não deixa levar a senha salva para outro endereço.
+- **Conexão por expressão:** o campo de conexão de um nó também aceita expressão. Na hora de rodar, o Info8n confere se o responsável pela execução tem acesso ao cliente da conexão: quem clicou em Executar ou Tentar de novo, ou, nas execuções automáticas (agendamento, webhook, gatilhos, fluxo de erro), quem salvou o fluxo por último. Sem acesso, o nó falha dizendo isso. A mesma conferência vale para o cliente no ERP e para o subfluxo do Execute Workflow escolhidos por expressão.
 - **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
 
@@ -551,7 +552,7 @@ O catálogo evita montar a mesma chamada à mão em cada fluxo. Você cadastra o
 
 **1. Cadastrar o ERP** (APIs dos ERPs, Novo ERP)
 
-- **URL base:** o começo comum das chamadas, com os campos do cliente entre chaves duplas. Ex.: http://{{host}}:{{porta}}/api
+- **URL base:** o começo comum das chamadas, com os campos do cliente entre chaves duplas. Ex.: http://{{host}}:{{porta}}/api. Depois que o ERP tem clientes, só quem enxerga todos eles muda a URL base e a autenticação, porque elas valem para todos os clientes. No cadastro do cliente, mudar host, porta ou URL pede a senha de novo.
 - **Autenticação dos endpoints:** sem autenticação, Bearer token vindo do login, usuário e senha (Basic) ou token num header próprio (você informa o nome do header).
 - **Campos que cada cliente preenche:** por exemplo host, porta, usuario, senha. Marque como secretos os que forem senhas; eles ficam criptografados. Para Basic, use os campos usuario e senha.
 
@@ -638,7 +639,7 @@ Estas telas aparecem só para administradores.
 
 ### Usuários
 
-A lista mostra nome, e-mail, perfil e situação: **Ativo**, **Desativado** ou **Bloqueado** (depois de 5 senhas erradas seguidas).
+A lista mostra nome, e-mail, perfil e situação: **Ativo**, **Desativado** ou **Bloqueado** (depois de 50 senhas erradas seguidas, de qualquer computador). O bloqueio de um computador só, depois de 5 senhas erradas, não aparece na lista.
 
 **Criar um usuário**
 
@@ -650,7 +651,7 @@ A lista mostra nome, e-mail, perfil e situação: **Ativo**, **Desativado** ou *
 **Manutenção**
 
 - **Esqueceu a senha:** edite o usuário e preencha Nova senha. Isso também desbloqueia o usuário e encerra as sessões abertas dele, e ele terá de trocar a senha no próximo acesso.
-- **Bloqueado:** o bloqueio some sozinho em 15 minutos, ou na hora pelo link Desbloquear na lista.
+- **Bloqueado:** o bloqueio some sozinho em 15 minutos, ou na hora pelo link Desbloquear na lista. Para liberar quem foi bloqueado num computador (que não aparece como Bloqueado), defina uma Nova senha para ele; Desbloquear e Nova senha liberam o usuário em todos os computadores.
 - **Saiu da empresa:** desmarque Usuário ativo. Ele não entra mais, e os tokens de API dele param de funcionar. O histórico de execuções e da auditoria continua com o nome dele.
 - **Mudou de função:** troque o perfil, as pastas e os clientes. Vale a partir da próxima ação dele.
 

@@ -1,0 +1,8 @@
+# HTTPS na frente do Info8n (opcional): veja docker-compose.https.yml e a documentação técnica.
+# INFO8N_HOST: nome pelo qual o Info8n é aberto (ex.: info8n.empresa.local).
+# INFO8N_TLS: "internal" (certificado do próprio Caddy) ou "/certificados/cert.pem /certificados/chave.pem"
+# (certificado da empresa, na pasta ./certificados ao lado do docker-compose.yml).
+{$INFO8N_HOST:localhost} {
+	tls {$INFO8N_TLS:internal}
+	reverse_proxy app:3000
+}

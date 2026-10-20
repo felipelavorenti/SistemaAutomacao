@@ -31,9 +31,9 @@ Toda chamada, menos `GET /api/health` e `POST /api/auth/login`, leva um token no
 Authorization: Bearer sa_seu_token_aqui
 ```
 
-- **Gerar o token:** em Minha conta, na parte Tokens de API, dê um nome e clique em Criar. O token começa com `sa_` e só aparece nessa hora; o Info8n guarda apenas o hash dele. Pela API, é `POST /api/auth/tokens`.
+- **Gerar o token:** em Minha conta, na parte Tokens de API, dê um nome, escolha a validade e clique em Gerar token. O token começa com `sa_` e só aparece nessa hora; o Info8n guarda apenas o hash dele. Pela API, é `POST /api/auth/tokens`.
 - **Quem o token é:** ele age como o usuário que o criou, com o mesmo perfil, as mesmas pastas e os mesmos clientes. Uma rota acima do perfil devolve 403; um fluxo ou uma conexão fora das pastas e dos clientes do usuário devolve 404, como se não existisse.
-- **Validade:** o token não expira. Ele para de valer quando é revogado (em Minha conta ou em `DELETE /api/auth/tokens/{id}`) ou quando o usuário é desativado. Se um administrador redefinir a senha do usuário, o token passa a devolver 403 até o usuário entrar e trocar a senha.
+- **Validade:** o token vale pelos dias escolhidos ao criá-lo (30, 90 ou 365 dias na tela, ou `expiresInDays` de 1 a 3650 pela API), ou não vence, se você escolher assim. `GET /api/auth/tokens` mostra em `expires_at` quando cada um vence. Vencido, ele devolve 401; crie outro e troque no sistema que o usa. Ele também para de valer quando é revogado (em Minha conta ou em `DELETE /api/auth/tokens/{id}`) ou quando o usuário é desativado. Se um administrador redefinir a senha do usuário, o token passa a devolver 403 até o usuário entrar e trocar a senha.
 - **Usuário da integração:** crie um usuário só para ela, com o menor perfil que resolve. Entre uma vez com ele para trocar a senha inicial e gere o token logado como ele: enquanto a senha inicial não é trocada, o Info8n não deixa criar tokens.
 
 Cada rota diz o menor perfil que pode chamá-la; os perfis acima também podem.
@@ -46,6 +46,10 @@ Cada rota diz o menor perfil que pode chamá-la; os perfis acima também podem.
 | Administrador | `admin` | Tudo, inclusive usuários, pastas, clientes, auditoria e os nós Execute Command e SSH, em todas as pastas e clientes |
 
 A tela usa um cookie de sessão criado por `POST /api/auth/login`. Outro sistema deve usar o token, que não depende de senha nem vence em 12 horas.
+
+- **Senha errada no login:** 5 senhas erradas do mesmo usuário vindas do mesmo computador bloqueiam esse usuário só naquele computador por 15 minutos (429); quem entra de outro computador continua entrando. 20 tentativas erradas do mesmo computador, com qualquer e-mail, bloqueiam o computador por 15 minutos (429). O bloqueio do usuário em todos os computadores só vem depois de 50 senhas erradas seguidas (401). Um administrador tira os bloqueios em Usuários, com Desbloquear ou redefinindo a senha.
+- **Trocar a senha:** `POST /api/auth/change-password` encerra as outras sessões do usuário; os tokens continuam valendo.
+- **IP de quem chama:** o Info8n usa o IP de quem abriu a conexão com ele. Atrás de um proxy reverso (como o HTTPS do `docker-compose.https.yml`), ele só lê o `X-Forwarded-For` se `TRUST_PROXY` estiver ligado no `.env`; sem isso, o header é ignorado, para ninguém fingir outro IP. O IP vale para o bloqueio por senha errada, para a auditoria e para a lista de IPs permitidos dos webhooks.
 
 ## Erros
 
@@ -69,11 +73,12 @@ Todo erro devolve um JSON com `error`, a mensagem em português, e às vezes `de
 | Status | Quando acontece | Exemplo de `error` |
 | --- | --- | --- |
 | 400 | Dados inválidos (`details` lista cada campo com problema, com o caminho em `path`) ou regra de negócio, como senha fraca | Dados inválidos |
-| 401 | Sem token, token errado ou revogado, ou usuário desativado | Faça login para continuar |
+| 401 | Sem token, token errado, revogado ou vencido, ou usuário desativado | Faça login para continuar |
 | 403 | Perfil sem permissão, pasta ou cliente sem acesso, usuário que ainda não trocou a senha inicial, ou nó Execute Command ou SSH incluído, alterado ou tirado por quem não é Administrador | Você não tem permissão para esta ação |
 | 404 | Registro que não existe ou está numa pasta ou cliente que o usuário não enxerga, ou rota que não existe | Fluxo não encontrado |
 | 409 | Nome repetido, registro em uso ou fluxo salvo por outra pessoa depois da versão editada | Já existe uma pasta com esse nome |
 | 413 | Corpo maior que o limite (veja Limites) | Request body is too large |
+| 429 | Login bloqueado por senhas erradas daquele computador (veja Autenticação) | Muitas tentativas erradas deste computador. Tente de novo em 15 minutos. |
 | 500 | Erro interno; o detalhe fica só no log do servidor | Erro interno no servidor |
 
 - **Senha inicial:** o 403 de quem ainda não trocou a senha traz `"details": {"code": "must_change_password"}`.
@@ -139,7 +144,7 @@ Saída:
 ## Limites
 
 - **Tamanho do corpo:** até 10 MB por chamada, e até 50 MB na importação do n8n. Acima disso, a resposta é 413 `Request body is too large`.
-- **Chamadas por minuto:** não há limite. O que limita é quantos fluxos rodam ao mesmo tempo (5 por padrão, em `WORKER_CONCURRENCY`); os disparos a mais esperam na fila.
+- **Chamadas por minuto:** não há limite, menos no login, que bloqueia depois de tentativas erradas (veja Autenticação). O que limita é quantos fluxos rodam ao mesmo tempo (5 por padrão, em `WORKER_CONCURRENCY`); os disparos a mais esperam na fila.
 - **Webhooks e formulários:** os endereços públicos (`/webhook/...`, `/form/...`) aceitam corpo de até 16 MB e não pedem token; a segurança é a do nó (usuário e senha, header, IPs permitidos).
 
 ## Webhooks e formulários
@@ -155,6 +160,8 @@ Além da API com token, o Info8n tem os endereços públicos do n8n, criados pel
 | `/form-waiting/<id da execução>` | GET e POST | A execução está parada num Form ou Wait por formulário |
 
 Caminho vazio no nó vale o ID do nó. Partes com dois pontos (`pedidos/:id`) aceitam qualquer valor, que chega em `params`.
+
+**Respostas isoladas.** O que um fluxo devolve por esses endereços não roda como se fosse o Info8n. As respostas do webhook (menos PDF) vêm com `Content-Security-Policy: sandbox ...` e `X-Content-Type-Options: nosniff`: uma página HTML devolvida pelo fluxo ainda abre no navegador e roda os scripts dela, mas como um site à parte, sem o login de quem está no Info8n e sem acesso à API. As páginas de formulário vêm com uma CSP que não deixa rodar script nenhum; o HTML e o CSS escritos no nó passam por um filtro que mantém só a formatação. Já as telas e a API do Info8n não podem ser abertas dentro de outro site (`X-Frame-Options: DENY`).
 
 **Corpo aceito:** JSON, `application/x-www-form-urlencoded`, `multipart/form-data` (campos em `body`, arquivos no item com o nome do campo), texto e binário (o arquivo vai para `data`, ou o nome escolhido no nó). Até 16 MB.
 
@@ -329,7 +336,8 @@ O cookie sa_session vem no header Set-Cookie e vale SESSION_TTL_HOURS (12 horas 
 
 **Erros próprios**
 
-- 401: e-mail ou senha errados, usuário inativo ou bloqueado. 5 senhas erradas seguidas bloqueiam por 15 minutos
+- 401: e-mail ou senha errados, ou usuário inativo. Depois de 50 senhas erradas seguidas, vindas de qualquer computador, o usuário fica bloqueado por 15 minutos
+- 429: 5 senhas erradas do mesmo usuário vindas do mesmo computador (IP) bloqueiam esse usuário só nesse computador por 15 minutos; 20 tentativas erradas do mesmo computador, com qualquer e-mail, bloqueiam o computador por 15 minutos
 
 ### POST /api/auth/logout
 
@@ -389,7 +397,7 @@ permissions resume o que o perfil permite: editar fluxos, disparar fluxos, edita
 
 ### POST /api/auth/change-password
 
-Troca a própria senha.
+Troca a própria senha. As outras sessões do usuário (em outros navegadores) são encerradas; a da chamada continua.
 
 **Perfil:** Qualquer perfil · registra na auditoria
 
@@ -436,7 +444,7 @@ curl "$INFO8N/api/auth/tokens" \
 
 **Exemplo de resposta**
 
-last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). O token em si nunca volta.
+last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). expires_at é quando o token deixa de valer (null: não vence). O token em si nunca volta.
 
 ```json
 [
@@ -444,14 +452,15 @@ last_used_at é a hora da última chamada feita com o token (null se ele ainda n
     "id": "c98636d8-680c-4755-9a5e-432a48add76b",
     "name": "ERP interno",
     "created_at": "2026-09-30T12:42:14.884Z",
-    "last_used_at": "2026-09-30T12:44:51.065Z"
+    "last_used_at": "2026-09-30T12:44:51.065Z",
+    "expires_at": "2027-09-30T12:42:14.884Z"
   }
 ]
 ```
 
 ### POST /api/auth/tokens
 
-Cria um token de API. Ele age como o usuário que o criou e não expira.
+Cria um token de API. Ele age como o usuário que o criou e vale pelos dias escolhidos.
 
 **Perfil:** Qualquer perfil · registra na auditoria
 
@@ -460,6 +469,7 @@ Cria um token de API. Ele age como o usuário que o criou e não expira.
 | Campo | Onde | Tipo | Obrigatório | Descrição |
 | --- | --- | --- | --- | --- |
 | `name` | corpo | texto | sim | Nome do token, até 100 caracteres (ex.: ERP interno) |
+| `expiresInDays` | corpo | número | não | Dias até o token deixar de valer, de 1 a 3650. Sem o campo, ou com null, o token não vence. A tela Minha conta sugere 365 |
 
 **Exemplo de chamada**
 
@@ -467,18 +477,19 @@ Cria um token de API. Ele age como o usuário que o criou e não expira.
 curl -X POST "$INFO8N/api/auth/tokens" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name": "ERP interno"}'
+  -d '{"name": "ERP interno", "expiresInDays": 365}'
 ```
 
 **Exemplo de resposta**
 
-O token só aparece nesta resposta; guarde-o. O Info8n guarda apenas o hash dele.
+O token só aparece nesta resposta; guarde-o. O Info8n guarda apenas o hash dele. expires_at é quando ele deixa de valer (null: não vence).
 
 ```json
 {
   "id": "c98636d8-680c-4755-9a5e-432a48add76b",
   "name": "ERP interno",
-  "token": "sa_Q2x9Lm4TzR7vN1bY8cK3pW6hJ0sD5fGa_e7uXoB2iVk"
+  "token": "sa_Q2x9Lm4TzR7vN1bY8cK3pW6hJ0sD5fGa_e7uXoB2iVk",
+  "expires_at": "2027-09-30T12:42:14.884Z"
 }
 ```
 
@@ -2367,6 +2378,7 @@ curl -X PUT "$INFO8N/api/connections/06382b0a-066f-4230-b288-053f93bd9af9" \
 **Erros próprios**
 
 - 400: troca de tipo ou campo obrigatório vazio
+- 400: o servidor, a porta ou a URL mudou e algum segredo veio em branco (a mensagem diz quais digitar de novo)
 - 403: cliente sem acesso
 
 ### DELETE /api/connections/{id}
@@ -3340,6 +3352,10 @@ curl -X PUT "$INFO8N/api/erps/6662ff1e-00be-44d4-b113-b44184345f8f" \
 }
 ```
 
+**Erros próprios**
+
+- 403: a URL base, o tipo de autenticação ou o header mudou, e o ERP tem clientes cadastrados aos quais o usuário não tem acesso
+
 ### DELETE /api/erps/{id}
 
 Exclui um ERP e os endpoints dele.
@@ -3576,7 +3592,12 @@ curl -X PUT "$INFO8N/api/erp-clients/00f9b5a4-4cda-4f65-b58f-21fd892f87c5" \
   -d '{
   "clientId": "bbac4429-0366-4778-957c-0c1d0e6d7c10",
   "label": "Produção",
-  "values": {"host": "10.0.0.16", "porta": "8080", "usuario": "integracao", "senha": ""}
+  "values": {
+    "host": "10.0.0.15",
+    "porta": "8080",
+    "usuario": "integracao.vendas",
+    "senha": ""
+  }
 }'
 ```
 
@@ -3586,8 +3607,11 @@ curl -X PUT "$INFO8N/api/erp-clients/00f9b5a4-4cda-4f65-b58f-21fd892f87c5" \
 {"ok": true}
 ```
 
+_A senha em branco mantém a salva. Se o host ou a porta mudassem, a senha teria de vir preenchida._
+
 **Erros próprios**
 
+- 400: o servidor, a porta ou a URL mudou e algum segredo veio em branco (a mensagem diz quais digitar de novo)
 - 403: cliente sem acesso
 
 ### DELETE /api/erp-clients/{id}
@@ -3787,7 +3811,7 @@ curl -X POST "$INFO8N/api/users" \
 
 ### PUT /api/users/{id}
 
-Altera um usuário. Desativar ou redefinir a senha derruba as sessões dele.
+Altera um usuário. Desativar ou redefinir a senha derruba as sessões dele; redefinir a senha também tira os bloqueios por senha errada.
 
 **Perfil:** Administrador · registra na auditoria
 
@@ -3842,7 +3866,7 @@ curl -X PUT "$INFO8N/api/users/285956ee-c429-4eb0-abec-16015696d860" \
 
 ### POST /api/users/{id}/unlock
 
-Desbloqueia um usuário que errou a senha demais.
+Desbloqueia um usuário que errou a senha demais, em todos os computadores.
 
 **Perfil:** Administrador · registra na auditoria
 

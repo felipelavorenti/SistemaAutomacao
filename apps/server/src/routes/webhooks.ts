@@ -168,26 +168,55 @@ function corsHeaders(request: FastifyRequest, allowed: JsonValue): Record<string
   return list.includes(origin) ? { 'access-control-allow-origin': origin, vary: 'Origin' } : {};
 }
 
+/**
+ * O que o fluxo devolve roda isolado do Info8n: sem isso, um HTML (ou SVG, XML) com script aberto
+ * no navegador usaria a sessão de quem abriu o link. O PDF fica de fora porque o leitor de PDF
+ * do navegador não abre com esse isolamento.
+ */
+export const RESPONSE_SANDBOX =
+  'sandbox allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts allow-top-navigation-by-user-activation';
+
+function isolate(reply: FastifyReply): void {
+  const type = String(reply.getHeader('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+  reply.header('x-content-type-options', 'nosniff');
+  if (type !== 'application/pdf') reply.header('content-security-policy', RESPONSE_SANDBOX);
+}
+
 function send(reply: FastifyReply, response: WebhookResponse, extraHeaders: Record<string, string> = {}): FastifyReply {
   reply.status(response.statusCode);
   for (const [k, v] of Object.entries({ ...extraHeaders, ...response.headers })) reply.header(k, v);
   const body = response.body;
-  if (!body || reply.request.method === 'HEAD') return reply.send();
+  if (!body || reply.request.method === 'HEAD') {
+    isolate(reply);
+    return reply.send();
+  }
   if (body.kind === 'json') {
     if (!response.headers['content-type']) reply.type('application/json; charset=utf-8');
+    isolate(reply);
     return reply.send(JSON.stringify(body.value));
   }
   if (body.kind === 'text') {
     if (!response.headers['content-type']) reply.type('text/plain; charset=utf-8');
+    isolate(reply);
     return reply.send(body.value);
   }
   if (!response.headers['content-type']) reply.type(body.mimeType);
   if (body.fileName && !response.headers['content-disposition']) reply.header('content-disposition', `inline; filename*=UTF-8''${encodeURIComponent(body.fileName)}`);
+  isolate(reply);
   return reply.send(Buffer.from(body.data, 'base64'));
 }
 
+/** Páginas de formulário do Info8n: só estilos e imagens, nenhum script (o CSS e os blocos HTML vêm do fluxo). */
+export const FORM_PAGE_CSP = "default-src 'none'; style-src 'self' 'unsafe-inline' https:; img-src 'self' https: http: data:; font-src 'self' https: data:; base-uri 'none'";
+
 function html(reply: FastifyReply, status: number, page: string): FastifyReply {
-  return reply.status(status).type('text/html; charset=utf-8').header('cache-control', 'no-store').send(page);
+  return reply
+    .status(status)
+    .type('text/html; charset=utf-8')
+    .header('cache-control', 'no-store')
+    .header('x-content-type-options', 'nosniff')
+    .header('content-security-policy', FORM_PAGE_CSP)
+    .send(page);
 }
 
 /** HTML do próprio fluxo (Form "Página HTML"): roda isolado, sem acesso à sessão do Info8n. */

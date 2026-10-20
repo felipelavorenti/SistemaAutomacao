@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { currentUser, type AppDeps } from '../app.js';
+import { currentUser, type RouteDeps } from '../app.js';
 import { many, one, transaction } from '../db/db.js';
 import { audit } from '../lib/audit.js';
 import { checkPasswordStrength, hashPassword } from '../lib/auth.js';
@@ -37,7 +37,7 @@ const USER_SELECT = `
   FROM users u`;
 
 export const adminRoutes =
-  ({ db }: AppDeps): FastifyPluginAsync =>
+  ({ db, loginThrottle }: RouteDeps): FastifyPluginAsync =>
   async (app) => {
     // ---------- Usuários ----------
     app.get('/users', async (request) => {
@@ -98,6 +98,8 @@ export const adminRoutes =
           ]);
         }
         if (!body.active || body.password) await tx.query('DELETE FROM sessions WHERE user_id = $1', [id]);
+        // Senha nova também libera o usuário nos computadores onde ele errou a senha.
+        if (body.password) loginThrottle.clearUser(before.email);
         await setAccess(tx, id, body.folderIds, body.clientIds);
         const { password, ...safe } = body;
         await audit(tx, {
@@ -118,7 +120,8 @@ export const adminRoutes =
       const me = currentUser(request);
       requireCap(me, 'admin');
       const { id } = idParam.parse(request.params);
-      await db.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [id]);
+      const row = await one<{ email: string }>(db, 'UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1 RETURNING email', [id]);
+      if (row) loginThrottle.clearUser(row.email);
       await audit(db, { userId: me.id, action: 'unlock', entityType: 'user', entityId: id, ip: request.ip });
       return { ok: true };
     });

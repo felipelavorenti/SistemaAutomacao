@@ -50,12 +50,18 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
         name: 'ERP interno',
         created_at: '2026-09-30T12:42:14.884Z',
         last_used_at: '2026-09-30T12:44:51.065Z',
+        expires_at: '2027-09-30T12:42:14.884Z',
       },
     ],
   },
   'POST /auth/tokens': {
-    body: { name: 'ERP interno' },
-    response: { id: 'c98636d8-680c-4755-9a5e-432a48add76b', name: 'ERP interno', token: 'sa_Q2x9Lm4TzR7vN1bY8cK3pW6hJ0sD5fGa_e7uXoB2iVk' },
+    body: { name: 'ERP interno', expiresInDays: 365 },
+    response: {
+      id: 'c98636d8-680c-4755-9a5e-432a48add76b',
+      name: 'ERP interno',
+      token: 'sa_Q2x9Lm4TzR7vN1bY8cK3pW6hJ0sD5fGa_e7uXoB2iVk',
+      expires_at: '2027-09-30T12:42:14.884Z',
+    },
   },
   'DELETE /auth/tokens/{id}': { path: '/auth/tokens/92e0ad54-f3e8-40d1-9c04-ed65cc13faca', response: { ok: true } },
   'GET /workflows': {
@@ -1100,9 +1106,10 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
     body: {
       clientId: 'bbac4429-0366-4778-957c-0c1d0e6d7c10',
       label: 'Produção',
-      values: { host: '10.0.0.16', porta: '8080', usuario: 'integracao', senha: '' },
+      values: { host: '10.0.0.15', porta: '8080', usuario: 'integracao.vendas', senha: '' },
     },
     response: { ok: true },
+    note: 'A senha em branco mantém a salva. Se o host ou a porta mudassem, a senha teria de vir preenchida.',
   },
   'DELETE /erp-clients/{id}': { path: '/erp-clients/676240ab-80ca-4f5d-b22d-ad47fd05fb3f', response: { ok: true } },
   'GET /api-catalog': {

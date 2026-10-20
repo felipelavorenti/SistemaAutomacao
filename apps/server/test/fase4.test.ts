@@ -45,6 +45,7 @@ describe.skipIf(!available)('Fase 4: tabelas de dados, comandos e nós só do Ad
     workerConcurrency: 2,
     runWorkerInProcess: true,
     secureCookies: false,
+    trustProxy: false,
   };
 
   let admin = '';

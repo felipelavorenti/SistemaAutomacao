@@ -59,6 +59,7 @@ describe.skipIf(!available)('Gatilhos: webhook, formulário, pausa e fluxo de er
     workerConcurrency: 4,
     runWorkerInProcess: true,
     secureCookies: false,
+    trustProxy: false,
     publicUrl: 'https://info8n.teste',
   };
 

@@ -16,6 +16,7 @@ import type { Config } from '../config.js';
 import { one, many, type Db } from '../db/db.js';
 import type { ExecutionQueue } from '../executions/queue.js';
 import { createExecution } from '../executions/store.js';
+import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { decryptJson } from '../lib/crypto.js';
 
 /**
@@ -434,6 +435,10 @@ export class TriggerManager {
     const row = test ? null : await one<{ data: JsonObject }>(this.deps.db, 'SELECT data FROM workflow_static_data WHERE workflow_id = $1 AND node_id = $2', [wf.id, node.id]);
     const staticData: JsonObject = row?.data ?? {};
     const params = nodeParams(node);
+    // Conexão escolhida por expressão: confere o acesso de quem abriu a escuta ou de quem salvou o fluxo.
+    const access = new ExecutionAccess(this.deps.db, test ? test.definition : wf.definition, () =>
+      executionOwner(this.deps.db, { triggeredBy: test?.userId ?? null, workflowId: wf.id, workflowVersion: test ? null : wf.version }),
+    );
     return {
       node,
       workflowId: wf.id,
@@ -449,7 +454,14 @@ export class TriggerManager {
           scope.release();
         }
       },
-      getConnection: (id) => this.getConnection(id),
+      getConnection: async (id) => {
+        const row = /^[0-9a-f-]{36}$/i.test(id)
+          ? await one<{ client_id: string | null }>(this.deps.db, 'SELECT client_id FROM connections WHERE id = $1', [id])
+          : undefined;
+        if (!row) throw new Error(`Conexão ${id} não existe mais`);
+        await access.checkConnection(id, row.client_id);
+        return this.getConnection(id);
+      },
       saveStaticData: async () => {
         if (test) return;
         await this.deps.db.query(
