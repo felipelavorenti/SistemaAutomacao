@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { MemoryDataTableStore } from '../src/data-tables.js';
+import type { DatabasePools } from '../src/database/drivers.js';
 import { executeWorkflow } from '../src/executor.js';
-import type { SubworkflowResult } from '../src/node-types.js';
-import type { Connection, Item, NodeInstance, WorkflowDefinition } from '../src/types.js';
+import type { DatabaseSession, DataTableStore, NodeExecuteContext, NodeType, SubworkflowResult } from '../src/node-types.js';
+import { dataTable } from '../src/nodes/data-table.js';
+import { manualTrigger } from '../src/nodes/triggers.js';
+import { NodeRegistry } from '../src/registry.js';
+import type { Connection, Item, JsonObject, NodeInstance, WorkflowDefinition } from '../src/types.js';
 
 const node = (id: string, type: string, parameters: NodeInstance['parameters'] = {}, name = id): NodeInstance => ({
   id,
@@ -273,5 +278,144 @@ describe('Execute Workflow', () => {
       triggerItems: items({ a: 1 }),
     });
     expect(result.lastOutput).toEqual(items({ a: 1 }));
+  });
+});
+
+describe('nó encerrado (cancelado ou fora do tempo) com o código dele ainda rodando', () => {
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const many = Array.from({ length: 50 }, (_, i) => ({ json: { i } }));
+  const testNode = (type: string, execute: NodeType['execute']): NodeType => ({
+    description: { type, displayName: type, group: 'action', inputs: 1, outputs: 1, properties: [] },
+    execute,
+  });
+  function runNodeType(type: NodeType, extra: Partial<Parameters<typeof executeWorkflow>[0]> = {}, settings?: NodeInstance['settings']) {
+    const registry = new NodeRegistry([manualTrigger, dataTable, type]);
+    const n: NodeInstance = { ...node('n', type.description.type, { fixo: 'a' }), ...(settings ? { settings } : {}) };
+    return run({ nodes: [trigger, n], connections: [link('t', 'n')] }, many, { registry, ...extra });
+  }
+
+  // Cada caso: um laço por item que não olha o cancelamento (como Database, Send Email e Data Table) e
+  // um efeito contado; o cancelamento chega no 5º efeito, e nenhum outro pode acontecer depois.
+  const cases: {
+    name: string;
+    act: (ctx: NodeExecuteContext, i: number, effect: () => void, memo: { db?: DatabaseSession }) => Promise<unknown>;
+    options?: (effect: () => void) => Partial<Parameters<typeof executeWorkflow>[0]>;
+  }[] = [
+    // Parâmetro fixo: não passa pelo isolate das expressões, que já foi liberado.
+    { name: 'lê parâmetro e grava', act: async (ctx, i, effect) => (await ctx.getParam('fixo', i), effect()) },
+    {
+      name: 'grava no banco',
+      act: async (ctx, _i, _effect, memo) => (memo.db ??= await ctx.database('pg')).query('INSERT', {}),
+      options: (effect) => ({
+        getConnection: async () => ({ id: 'pg', type: 'postgres', data: {} }),
+        databases: {
+          acquire: () => ({
+            client: { dialect: 'postgres', query: async () => (effect(), { rows: [], rowsAffected: 1 }), procedure: async () => ({ rows: [], rowsAffected: 0 }), close: async () => {} },
+            release: () => {},
+          }),
+        } as unknown as DatabasePools,
+      }),
+    },
+    {
+      name: 'grava na tabela de dados',
+      act: (ctx) => ctx.dataTables.insertRows('t1', [{}]),
+      options: (effect) => ({ dataTables: { insertRows: async () => (effect(), []) } as unknown as DataTableStore }),
+    },
+    {
+      name: 'chama outro fluxo',
+      act: (ctx) => ctx.executeWorkflow('wf-9', []),
+      options: (effect) => ({ executeSubworkflow: async () => (effect(), { executionId: 'sub', status: 'success', output: [] }) }),
+    },
+    {
+      name: 'busca a conexão',
+      act: (ctx) => ctx.getConnection('c1'),
+      options: (effect) => ({ getConnection: async () => (effect(), { id: 'c1', type: 'smtp', data: {} }) }),
+    },
+    {
+      name: 'responde ao webhook',
+      act: async (ctx) => ctx.sendResponse({ statusCode: 200, headers: {}, body: '' } as never),
+      options: (effect) => ({ onResponse: effect }),
+    },
+  ];
+
+  it.each(cases)('cancelada no meio de um laço que $name: o laço para no item seguinte', async ({ act, options }) => {
+    const controller = new AbortController();
+    let effects = 0;
+    const effect = () => {
+      effects++;
+      if (effects === 5) controller.abort();
+    };
+    const loop = testNode('laco', async (ctx) => {
+      const input = ctx.inputs[0] ?? [];
+      const memo = {};
+      for (let i = 0; i < input.length; i++) {
+        await act(ctx, i, effect, memo);
+        await tick(2);
+      }
+      return [input];
+    });
+    const result = await runNodeType(loop, { signal: controller.signal, ...options?.(effect) });
+    expect(result.status).toBe('canceled');
+    await tick(100);
+    expect(effects).toBe(5);
+  });
+
+  it('cancelada na espera entre tentativas: não começa outra tentativa', async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+    const flaky = testNode('instavel', async () => {
+      attempts++;
+      if (attempts === 1) setTimeout(() => controller.abort(), 20);
+      throw new Error('falhou');
+    });
+    const result = await runNodeType(flaky, { signal: controller.signal }, { retryOnFail: true, maxTries: 3, waitBetweenTriesMs: 200 });
+    expect(result.status).toBe('canceled');
+    await tick(300);
+    expect(attempts).toBe(1);
+  });
+
+  it('nó que falha depois de encerrado não derruba o processo (rejeição sem tratamento)', async () => {
+    const controller = new AbortController();
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    try {
+      // Cancela antes de a tentativa começar a esperar o nó, e falha depois.
+      const late = testNode('tardio', async () => {
+        controller.abort();
+        await tick(5);
+        throw new Error('falhou depois do cancelamento');
+      });
+      const result = await runNodeType(late, { signal: controller.signal });
+      expect(result.status).toBe('canceled');
+      await tick(50);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+    }
+  });
+
+  it('passou do tempo com "Tentar de novo": a tentativa encerrada para de gravar e não grava junto com a seguinte', async () => {
+    class SlowStore extends MemoryDataTableStore {
+      override async insertRows(tableId: string, rows: JsonObject[]): Promise<JsonObject[]> {
+        await tick(5);
+        return super.insertRows(tableId, rows);
+      }
+    }
+    const store = new SlowStore();
+    const table = await store.create('clientes', [{ name: 'i', type: 'number' }]);
+    const registry = new NodeRegistry([manualTrigger, dataTable]);
+    const insert: NodeInstance = {
+      ...node('d', 'dataTable', { resource: 'row', operation: 'insert', dataTable: 'clientes', mappingMode: 'autoMapInputData' }),
+      settings: { timeoutMs: 60, retryOnFail: true, maxTries: 2, waitBetweenTriesMs: 10 },
+    };
+    const result = await run({ nodes: [trigger, insert], connections: [link('t', 'd')] }, many, { registry, dataTables: store });
+    expect(result.status).toBe('error');
+    expect(result.error?.message).toMatch(/tempo limite/);
+    const settled = (await store.getRows(table.id, {})).length;
+    await tick(400);
+    const rows = (await store.getRows(table.id, {})).map((r) => r.i);
+    // Só o item que já estava sendo gravado quando o tempo acabou pode chegar depois.
+    expect(rows.length).toBeLessThanOrEqual(settled + 1);
+    expect(rows.length).toBeLessThan(many.length);
   });
 });

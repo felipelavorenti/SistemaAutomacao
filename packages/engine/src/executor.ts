@@ -351,6 +351,8 @@ async function runNode(
 
   let lastError: NodeError = { message: 'Erro desconhecido' };
   for (let attempt = 1; attempt <= maxTries; attempt++) {
+    // Cancelada na espera entre tentativas: não começa outra.
+    if (options.signal?.aborted) throw new ExecutionCanceled();
     const scope = await sandbox.createScope({
       nodeOutputs,
       execution: { id: options.executionId, mode: options.mode, resumeUrl: urls.resumeUrl, resumeFormUrl: urls.resumeFormUrl },
@@ -360,6 +362,12 @@ async function runNode(
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     // Pools de banco usados nesta tentativa: devolvidos no fim, para a troca da conexão não fechar um em uso.
     const leases = new Leases();
+    // Cancelada ou passou do tempo: o nó já foi dado como encerrado, mas o código dele (um laço por item)
+    // pode continuar rodando. Daí em diante ele não lê mais parâmetros nem mexe em banco, tabela,
+    // conexão, resposta ou subfluxo; o laço para no item seguinte.
+    const live = () => {
+      if (signal.aborted) throw new ExecutionCanceled();
+    };
     try {
       const output = await withAbort(
         type.execute({
@@ -367,10 +375,12 @@ async function runNode(
           inputs,
           signal,
           getParam: (name, itemIndex = 0) => {
+            live();
             const value: JsonValue = node.parameters[name] !== undefined ? node.parameters[name] : (defaults[name] ?? null);
             return scope.resolve(value, inputs[0] ?? [], itemIndex);
           },
           getConnection: async (id) => {
+            live();
             if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
             return options.getConnection(id);
           },
@@ -379,7 +389,7 @@ async function runNode(
             if (!options.getFile) throw new NodeOperationError('Arquivos não estão disponíveis nesta execução');
             return options.getFile(id);
           },
-          database: (connectionId) => openDatabase(connectionId, node, options, pools, leases),
+          database: (connectionId) => openDatabase(connectionId, node, options, pools, leases, live),
           getApiEndpoint: async (erpClientId, endpointId) => {
             if (!options.getApiEndpoint) throw new NodeOperationError('O catálogo de APIs não está disponível nesta execução');
             return options.getApiEndpoint(erpClientId, endpointId);
@@ -398,9 +408,7 @@ async function runNode(
             }),
           executeWorkflow: async (workflowId, items) => {
             if (!options.executeSubworkflow) throw new NodeOperationError('Não é possível executar outro fluxo nesta execução');
-            // Cancelada: o nó já foi dado como encerrado, mas o código dele (um laço por item) pode continuar
-            // rodando; ele não começa mais nenhum subfluxo.
-            if (signal.aborted) throw new ExecutionCanceled();
+            live();
             return options.executeSubworkflow({ workflowId, items, signal });
           },
           state,
@@ -410,7 +418,10 @@ async function runNode(
           canWait: options.canWait !== false,
           putToWait: pause.putToWait,
           resumeData: pause.resumeData,
-          sendResponse: (response) => options.onResponse?.(response),
+          sendResponse: (response) => {
+            live();
+            options.onResponse?.(response);
+          },
           logCommand: async (entry) => {
             try {
               await options.onCommand?.({ ...entry, nodeName: node.name, nodeType: node.type });
@@ -418,7 +429,7 @@ async function runNode(
               // A auditoria não pode derrubar a execução.
             }
           },
-          dataTables: options.dataTables!,
+          dataTables: guardedDataTables(options.dataTables!, live),
         }),
         signal,
       );
@@ -462,7 +473,9 @@ async function openDatabase(
   options: ExecuteOptions,
   pools: DatabasePools,
   leases: Leases,
+  live: () => void,
 ): Promise<DatabaseSession> {
+  live();
   if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
   const connection = await options.getConnection(connectionId);
   const lease = pools.acquire(connection);
@@ -475,6 +488,7 @@ async function openDatabase(
     params: JsonValue,
     run: () => Promise<T>,
   ): Promise<T> => {
+    live();
     const started = Date.now();
     const entry = { nodeName: node.name, connectionId, connectionType: connection.type, operation, sql, params };
     const report = async (fields: Pick<DatabaseCommandLog, 'rows' | 'rowsAffected' | 'error'>) => {
@@ -510,7 +524,24 @@ function toNodeError(err: unknown, timedOutAfterMs?: number): NodeError {
   return { message: String(err) };
 }
 
+/** Tabelas de dados que recusam qualquer operação depois que a tentativa do nó foi encerrada. */
+function guardedDataTables(store: DataTableStore, live: () => void): DataTableStore {
+  return new Proxy(store, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop);
+      if (typeof value !== 'function') return value;
+      return async (...args: unknown[]) => {
+        live();
+        return value.apply(target, args);
+      };
+    },
+  });
+}
+
 function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  // O nó pode falhar depois de a tentativa ser encerrada (cancelada ou fora do tempo); sem quem a
+  // observe, essa falha derrubaria o processo (unhandledRejection).
+  promise.catch(() => undefined);
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
     const onAbort = () => reject(signal.reason);
