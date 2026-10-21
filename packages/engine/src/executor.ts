@@ -404,6 +404,7 @@ async function runNode(
           meta,
           mode: options.mode,
           ...urls,
+          canWait: options.canWait !== false,
           putToWait: pause.putToWait,
           resumeData: pause.resumeData,
           sendResponse: (response) => options.onResponse?.(response),

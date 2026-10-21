@@ -204,11 +204,21 @@ export const executionRoutes =
             return true;
           }
         }
-        // Com o worker vivo, é ele que encerra. O pedido fica gravado: se ela pausar mesmo assim (o aviso
-        // chegou depois do último nó), a pausa vira cancelamento.
-        const requested = await one(db, `UPDATE executions SET cancel_requested = true WHERE id = $1 AND status = 'running' RETURNING id`, [id]);
-        if (requested) await queue.requestCancel(id);
-        return !!requested;
+        // Com o worker vivo, é ele que encerra. O pedido fica gravado nela e nos subfluxos que ela está
+        // rodando: se ela pausar mesmo assim (o aviso chegou depois do último nó), a pausa vira cancelamento;
+        // se o worker parar antes de encerrá-la, ela fica cancelada (e não erro) quando a parada for notada.
+        const requested = await many<{ id: string }>(
+          db,
+          `WITH RECURSIVE tree AS (
+             SELECT id FROM executions WHERE id = $1 AND status = 'running'
+             UNION ALL SELECT e.id FROM executions e JOIN tree t ON e.parent_execution_id = t.id WHERE e.status = 'running'
+           )
+           UPDATE executions SET cancel_requested = true WHERE id IN (SELECT id FROM tree) AND status = 'running' RETURNING id`,
+          [id],
+        );
+        if (!requested.some((r) => r.id === id)) return false;
+        await queue.requestCancel(id);
+        return true;
       }
       // Esperando.
       const canceled = await one(

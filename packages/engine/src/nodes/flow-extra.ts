@@ -574,6 +574,8 @@ function waitAmountMs(raw: JsonValue, unit: string): number {
   return amount * UNIT_MS[unit]!;
 }
 
+const SUBFLOW_WAIT_ERROR = 'Esperar um webhook ou formulário não funciona dentro de um subfluxo; ponha o Wait no fluxo principal';
+
 /** Campos do webhook de retomada que o servidor usa (já com as expressões resolvidas). */
 const WAIT_WEBHOOK_FIELDS = [
   'httpMethod',
@@ -716,6 +718,8 @@ export const wait: NodeType = {
     }
 
     if (resume === 'webhook' || resume === 'form') {
+      // Antes de olhar o limite: num subfluxo, um limite que já passou não pode fazer o Wait funcionar só às vezes.
+      if (!ctx.canWait) throw new NodeOperationError(SUBFLOW_WAIT_ERROR);
       let until: number | undefined;
       if ((await ctx.getParam('limitWaitTime', 0)) === true) {
         if ((await ctx.getParam('limitType', 0)) === 'atSpecifiedTime') {
@@ -742,7 +746,7 @@ export const wait: NodeType = {
       }
       ctx.meta.resumeUrl = resume === 'webhook' ? ctx.resumeUrl : ctx.resumeFormUrl;
       if (!ctx.putToWait({ kind: resume, until, config })) {
-        throw new NodeOperationError('Esperar um webhook ou formulário não funciona dentro de um subfluxo; ponha o Wait no fluxo principal');
+        throw new NodeOperationError(SUBFLOW_WAIT_ERROR);
       }
       return [input];
     }

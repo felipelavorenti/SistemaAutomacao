@@ -24,6 +24,19 @@ export const HEARTBEAT_TTL_MS = 60_000;
 const STALE_CONNECTION_SECONDS = 300;
 const workerKey = (workerId: string) => `sa:worker:${workerId}`;
 const resumeJobId = (executionId: string, at: number) => `resume-${executionId}-${at}`;
+/**
+ * Jobs que falharam ficam guardados por 2 horas (em segundos), e não pelos N últimos: o limite por
+ * quantidade vale para a fila toda, e uma queda do banco com mais de N jobs esperando apagaria as falhas
+ * que a procura de execuções sem job usa (ela olha até 1 hora para trás).
+ */
+const KEEP_FAILED = { age: 2 * 60 * 60 };
+
+export interface FailedJob {
+  /** Quando o job entrou na fila (ms). */
+  added: number;
+  /** Quando ele falhou (ms). */
+  failed: number;
+}
 
 export interface LiveWorkers {
   ids: Set<string>;
@@ -47,7 +60,7 @@ export class ExecutionQueue {
   }
 
   async enqueueRun(executionId: string): Promise<void> {
-    await this.queue.add('run', { kind: 'run', executionId }, { jobId: executionId, removeOnComplete: 1000, removeOnFail: 1000 });
+    await this.queue.add('run', { kind: 'run', executionId }, { jobId: executionId, removeOnComplete: 1000, removeOnFail: KEEP_FAILED });
   }
 
   /**
@@ -55,7 +68,7 @@ export class ExecutionQueue {
    * primeira rodada ainda pode estar guardado.
    */
   async enqueueResumed(executionId: string): Promise<void> {
-    await this.queue.add('run', { kind: 'run', executionId }, { jobId: `${executionId}-${Date.now()}`, removeOnComplete: 1000, removeOnFail: 1000 });
+    await this.queue.add('run', { kind: 'run', executionId }, { jobId: `${executionId}-${Date.now()}`, removeOnComplete: 1000, removeOnFail: KEEP_FAILED });
   }
 
   /**
@@ -93,7 +106,7 @@ export class ExecutionQueue {
     const jobId = resumeJobId(executionId, at);
     // Sobra de uma tentativa que falhou com o mesmo horário: sem tirar, a fila ignoraria o job novo.
     await this.removeOnce(jobId);
-    await this.queue.add('resume', { kind: 'resume', executionId, at }, { jobId, delay: Math.max(0, at - Date.now()), removeOnComplete: true, removeOnFail: 1000 });
+    await this.queue.add('resume', { kind: 'resume', executionId, at }, { jobId, delay: Math.max(0, at - Date.now()), removeOnComplete: true, removeOnFail: KEEP_FAILED });
   }
 
   /** Tira o job da volta de uma pausa que acabou antes da hora (webhook, formulário, cancelamento). */
@@ -166,16 +179,16 @@ export class ExecutionQueue {
   }
 
   /**
-   * Quando falharam os jobs de cada execução que ainda estão guardados entre os que falharam (run e
-   * resume; a fila guarda os 1000 últimos de cada tipo).
+   * Jobs de cada execução (run e resume) que estão guardados entre os que falharam: quando cada um entrou
+   * na fila e quando falhou. A fila guarda os que falharam nas últimas 2 horas.
    */
-  async failedJobs(): Promise<Map<string, number[]>> {
-    const failed = new Map<string, number[]>();
+  async failedJobs(): Promise<Map<string, FailedJob[]>> {
+    const failed = new Map<string, FailedJob[]>();
     for (const job of await this.queue.getJobs(['failed'], 0, -1, true)) {
       const data = job?.data;
       if (data?.kind !== 'run' && data?.kind !== 'resume') continue;
-      const at = job.finishedOn ?? job.processedOn ?? job.timestamp;
-      failed.set(data.executionId, [...(failed.get(data.executionId) ?? []), at]);
+      const entry = { added: job.timestamp, failed: job.finishedOn ?? job.processedOn ?? job.timestamp };
+      failed.set(data.executionId, [...(failed.get(data.executionId) ?? []), entry]);
     }
     return failed;
   }
@@ -211,7 +224,7 @@ export class ExecutionQueue {
     await this.queue.upsertJobScheduler(schedulerId, repeat.kind === 'cron' ? { pattern: repeat.pattern, tz: repeat.tz } : { every: repeat.every }, {
       name: 'scheduled',
       data: { kind: 'scheduled', workflowId: workflow.id },
-      opts: { removeOnComplete: 1000, removeOnFail: 1000 },
+      opts: { removeOnComplete: 1000, removeOnFail: KEEP_FAILED },
     });
   }
 

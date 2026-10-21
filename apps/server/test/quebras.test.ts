@@ -11,7 +11,7 @@ import { createDb, migrate, one, type Db } from '../src/db/db.js';
 import { ExecutionEvents } from '../src/executions/events.js';
 import { CANCEL_CHANNEL, createRedis, ExecutionQueue, QUEUE_NAME } from '../src/executions/queue.js';
 import { cleanupOldExecutions } from '../src/executions/store.js';
-import { startWorker, workerOptions, type WorkerHandle } from '../src/executions/worker.js';
+import { joblessMs, startWorker, workerOptions, type WorkerHandle } from '../src/executions/worker.js';
 import { ensureAdmin } from '../src/lib/auth.js';
 import { TriggerManager } from '../src/triggers/manager.js';
 
@@ -430,11 +430,15 @@ describe.skipIf(!available)('Correções de quebra', () => {
       listener.disconnect();
     }
 
-    // Execução de um worker vivo: só pede o cancelamento, quem roda é que encerra.
+    // Execução de um worker vivo: só pede o cancelamento, quem roda é que encerra. O pedido fica gravado
+    // nela e nos subfluxos que ela está rodando.
     const alive = await insertExecution(wf, { status: 'running', workerId: 'outro-worker' });
+    const aliveChild = await insertExecution(wf, { mode: 'subworkflow', status: 'running', workerId: 'outro-worker', parentId: alive });
     expect((await call(admin, 'POST', `/api/executions/${alive}/cancel`)).status).toBe(200);
     expect((await status(alive)).status).toBe('running');
-    await db.query(`UPDATE executions SET status = 'success' WHERE id = $1`, [alive]);
+    const flags = await db.query<{ id: string; cancel_requested: boolean }>('SELECT id, cancel_requested FROM executions WHERE id = ANY($1::uuid[])', [[alive, aliveChild]]);
+    expect(flags.rows.every((r) => r.cancel_requested)).toBe(true);
+    await db.query(`UPDATE executions SET status = 'success' WHERE id = ANY($1::uuid[])`, [[alive, aliveChild]]);
 
     // O worker_id é interno: não aparece na API.
     expect((await call(admin, 'GET', `/api/executions/${parent}`)).body).not.toHaveProperty('worker_id');
@@ -550,6 +554,105 @@ describe.skipIf(!available)('Correções de quebra', () => {
 
     await job.promote();
     await until(async () => (await waitTill()).status === 'success', 'a execução terminar');
+  });
+
+  it('cancelada com o worker ainda vivo, mas ele para antes de encerrá-la: fica cancelada, sem fluxo de erro', async () => {
+    const errorFlow = await createFlow('Avisa cancelada', flow([{ id: 'e', name: 'Erro', type: 'errorTrigger' }]));
+    const wf = await createFlow('Worker vai cair', flow([schedule], [], { errorWorkflowId: errorFlow }));
+    // O worker acabou de cair: o aviso de vida ainda vale, então o cancelamento só fica pedido.
+    await redis.set('sa:worker:vai-cair', '1', 'PX', 60_000);
+    const parent = await insertExecution(wf, { mode: 'schedule', status: 'running', workerId: 'vai-cair' });
+    const child = await insertExecution(wf, { mode: 'subworkflow', status: 'running', workerId: 'vai-cair', parentId: parent });
+    // Sem o pedido de cancelar: continua virando erro, com o fluxo de erro.
+    const other = await insertExecution(wf, { mode: 'schedule', status: 'running', workerId: 'vai-cair' });
+    const listener = createRedis(REDIS_URL);
+    const events = new ExecutionEvents(listener);
+    const sweeper = newWorker(200);
+    try {
+      const sub = await events.subscribe(parent);
+      expect((await call(admin, 'POST', `/api/executions/${parent}/cancel`)).status).toBe(200);
+      expect((await status(parent)).status).toBe('running');
+      // O aviso de vida vence (o worker não o renova mais): a procura nota a parada.
+      await redis.del('sa:worker:vai-cair');
+      const message = 'Cancelada; o worker que a rodava tinha parado';
+      await until(async () => (await status(parent)).status === 'canceled', 'a execução cancelada ser encerrada');
+      expect(await status(parent)).toEqual({ status: 'canceled', error_message: message });
+      expect(await status(child)).toEqual({ status: 'canceled', error_message: message });
+      expect(await sub.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'canceled', error: message });
+      await sub.close();
+      await until(async () => (await status(other)).status === 'error', 'a outra execução virar erro');
+      const errorRuns = await until(async () => {
+        const rows = (await db.query<{ input: { json: { execution: { id: string } } }[] }>(`SELECT input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow])).rows;
+        return rows.length > 0 && rows;
+      }, 'o fluxo de erro rodar para a que virou erro');
+      await new Promise((r) => setTimeout(r, 500));
+      expect(errorRuns.map((r) => r.input[0].json.execution.id)).toEqual([other]);
+    } finally {
+      listener.disconnect();
+      await sweeper.close();
+    }
+  });
+
+  it('cancelada no instante em que o servidor começa a desligar: fica cancelada, não interrompida', async () => {
+    const wf = await createFlow('Cancela e desliga', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['t', 'h']]));
+    await worker!.close();
+    // O servidor começa a desligar logo depois de o worker receber o pedido de cancelar, antes de a execução gravar o fim.
+    const subscriber = createRedis(REDIS_URL);
+    const handle = startWorker({ db, config, redis: createRedis(REDIS_URL), subscriber });
+    worker = handle;
+    let closing: Promise<void> | null = null;
+    subscriber.on('message', (channel) => {
+      if (channel === CANCEL_CHANNEL) closing ??= handle.close();
+    });
+    const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
+    await until(async () => (await status(executionId)).status === 'running', 'a execução começar');
+    expect((await call(admin, 'POST', `/api/executions/${executionId}/cancel`)).status).toBe(200);
+    await until(async () => closing !== null, 'o worker começar a desligar');
+    await closing;
+    worker = newWorker();
+    expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
+  });
+
+  it('execução na fila que perdeu o job: só conta para a 1 hora o tempo em que ficou sem job', () => {
+    const min = 60_000;
+    const t0 = Date.parse('2026-10-21T10:00:00Z');
+    // Falhou ao entrar, voltou para a fila 3 minutos depois, esperou a vez 55 minutos e falhou de novo.
+    const failures = [
+      { added: t0 + 3 * min, failed: t0 + 58 * min },
+      { added: t0, failed: t0 + 1000 },
+    ];
+    expect(joblessMs(failures, t0, t0 + 61 * min)).toBe(3 * min - 1000 + 3 * min);
+    // Sem falha guardada: desde a entrada na fila.
+    expect(joblessMs([], t0, t0 + 61 * min)).toBe(61 * min);
+  });
+
+  it('uma queda do banco com mais de 1000 jobs esperando não apaga as falhas que a procura usa', async () => {
+    const probeRedis = createRedis(REDIS_URL.replace(/\/\d+$/, '/14'));
+    await probeRedis.flushdb();
+    const probe = new ExecutionQueue(probeRedis);
+    const ids = Array.from({ length: 1100 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    for (const id of ids) await probe.enqueueRun(id);
+    // Cada job falha ao pegar a execução, como com o Postgres reiniciando.
+    const connection = createRedis(REDIS_URL.replace(/\/\d+$/, '/14'));
+    const failing = new Worker(
+      QUEUE_NAME,
+      async () => {
+        throw new Error('Connection terminated unexpectedly');
+      },
+      { connection, concurrency: 50 },
+    );
+    try {
+      await until(async () => (await probe.queue.getJobCountByTypes('wait', 'active')) === 0, 'todos os jobs falharem');
+      const failed = await probe.failedJobs();
+      expect(failed.size).toBe(1100);
+      expect(failed.has(ids[0])).toBe(true);
+    } finally {
+      await failing.close();
+      connection.disconnect();
+      await probe.queue.obliterate({ force: true });
+      await probe.close();
+      probeRedis.disconnect();
+    }
   });
 
   // ---------- Q4: limpeza em lotes ----------

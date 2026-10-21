@@ -51,6 +51,7 @@ function fakeCtx(type: NodeType, parameters: JsonObject, inputs: Item[][], signa
     publicUrl: 'http://localhost:3000',
     internalUrl: 'http://localhost:3000',
     // Como num subfluxo: não pode pausar, então espera no próprio worker.
+    canWait: false,
     putToWait: () => false,
     sendResponse: () => undefined,
   };
@@ -333,6 +334,10 @@ describe('Wait', () => {
       const result = await executeWorkflow({ workflow, executionId: 'abc', mode: 'manual', triggerItems: [{ json: { a: 1 } }], registry });
       expect(result.status).toBe('success');
       expect(result.lastOutput).toEqual([{ json: { a: 1 } }]);
+      // Num subfluxo, o webhook e o formulário são recusados mesmo com o limite vencido, como com o limite no futuro.
+      const sub = await executeWorkflow({ workflow, executionId: 'abc', mode: 'subworkflow', triggerItems: [{ json: { a: 1 } }], registry, canWait: false });
+      expect(sub.status).toBe('error');
+      expect(sub.error?.message).toMatch(/não funciona dentro de um subfluxo/);
     }
   });
 
