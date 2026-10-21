@@ -62,7 +62,9 @@ const SWEEP_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = HEARTBEAT_TTL_MS / 4;
 /** Execução na fila ou com a hora de voltar vencida, sem job, há mais que isto: perdeu o job. */
 const ORPHAN_GRACE_SECONDS = 120;
-const NOT_QUEUED_MESSAGE = 'Execução interrompida: não chegou a entrar na fila';
+/** Execução na fila sem job que entrou na fila há mais que isto não roda mais: vira erro. */
+const ORPHAN_REQUEUE_LIMIT_SECONDS = 60 * 60;
+const ORPHAN_MESSAGE = 'Execução interrompida: ficou mais de 1 hora na fila sem o job que a rodaria';
 /**
  * Tempo sem renovar a trava do job até a fila achar que o worker travou. Renovada a cada metade
  * disso; um nó que segura o processador por menos que isso não derruba mais a execução.
@@ -463,14 +465,21 @@ export function startWorker(deps: {
       } else if (data.kind === 'resume') {
         // O tempo de espera acabou: volta para a fila sem dados de retomada (segue com os itens de antes).
         // Job de uma pausa que já acabou (retomada antes da hora, ou outra pausa depois dela) não faz nada.
-        const resumed = await one(
-          db,
-          `UPDATE executions SET status = 'queued', resume_data = NULL
-           WHERE id = $1 AND status = 'waiting' AND ($2::double precision IS NULL OR abs(extract(epoch FROM wait_till) * 1000 - $2) < 1)
-           RETURNING id`,
-          [data.executionId, data.at ?? null],
-        );
-        if (resumed) await run(data.executionId);
+        const resumeIfDue = () =>
+          one(
+            db,
+            `UPDATE executions SET status = 'queued', queued_at = now(), resume_data = NULL
+             WHERE id = $1 AND status = 'waiting' AND ($2::double precision IS NULL OR abs(extract(epoch FROM wait_till) * 1000 - $2) < 1)
+             RETURNING id`,
+            [data.executionId, data.at ?? null],
+          );
+        let resumed = await resumeIfDue();
+        while (resumed) {
+          await run(data.executionId);
+          // A pausa seguinte com a mesma hora, que já passou (dois Waits com o mesmo limite "Numa data e
+          // hora"), teria o ID deste job, e a fila ignora o job novo enquanto este roda: volta aqui mesmo.
+          resumed = data.at !== undefined && data.at <= Date.now() ? await resumeIfDue() : undefined;
+        }
       } else if (data.kind === 'cleanup' && config.executionRetentionDays > 0) {
         const removed = await cleanupOldExecutions(db, config.executionRetentionDays);
         if (removed.executions || removed.dbCommands) {
@@ -487,6 +496,16 @@ export function startWorker(deps: {
   const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
   heartbeatTimer.unref();
 
+  const failedColumns = `e.id, e.workflow_id, e.workflow_version, e.mode, e.status, e.definition, e.input, e.triggered_by, e.start_node_id,
+    e.retry_of, NULL AS resume_state, NULL AS resume_data`;
+  /** Execuções que o worker não encerrou e viraram erro: avisa quem chamou por HTTP e roda o fluxo de erro de cada uma. */
+  const notifyFailed = async (rows: ExecutionRow[], message: string) => {
+    for (const row of rows) {
+      await publish(row.id, { type: 'finished', status: 'error', error: message, lastOutput: [] });
+      await runErrorWorkflow(row, { message }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
+    }
+  };
+
   /** Marca como erro as execuções abandonadas e roda o fluxo de erro de cada uma (agendadas, webhooks, gatilhos). */
   const failAbandoned = async (rows: { id: string; worker_id: string | null }[]) => {
     if (!rows.length) return;
@@ -496,15 +515,11 @@ export function startWorker(deps: {
       `UPDATE executions e SET status = 'error', finished_at = now(), error_message = $3, error = $4
        FROM unnest($1::uuid[], $2::text[]) AS a(id, worker_id)
        WHERE e.id = a.id AND e.worker_id IS NOT DISTINCT FROM a.worker_id AND e.status = 'running'
-       RETURNING e.id, e.workflow_id, e.workflow_version, e.mode, e.status, e.definition, e.input, e.triggered_by, e.start_node_id, e.retry_of,
-         NULL AS resume_state, NULL AS resume_data`,
+       RETURNING ${failedColumns}`,
       [rows.map((r) => r.id), rows.map((r) => r.worker_id), ABANDONED_MESSAGE, JSON.stringify({ message: ABANDONED_MESSAGE })],
     );
-    for (const row of failed) {
-      console.warn(`Execução ${row.id} estava abandonada e foi marcada como erro`);
-      await publish(row.id, { type: 'finished', status: 'error', error: ABANDONED_MESSAGE, lastOutput: [] });
-      await runErrorWorkflow(row, { message: ABANDONED_MESSAGE }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
-    }
+    for (const row of failed) console.warn(`Execução ${row.id} estava abandonada e foi marcada como erro`);
+    await notifyFailed(failed, ABANDONED_MESSAGE);
   };
 
   /**
@@ -533,22 +548,23 @@ export function startWorker(deps: {
   };
 
   /**
-   * Execução que perdeu o job. Na fila sem job para rodá-la: se nunca começou, quem a criou não conseguiu
-   * pô-la na fila (e recebeu o erro, ou caiu no meio), então vira erro em vez de rodar depois de quem pediu
-   * já ter tentado de novo; se já tinha rodado e voltou de uma pausa (webhook ou formulário), volta para a
-   * fila, porque os dados da retomada já foram aceitos. Pausada com a hora de voltar vencida e sem o job da
-   * volta: volta na hora. Sem isto, ela ficaria parada para sempre (e, com "Pular este horário", travaria o
-   * agendamento). Só o que aparecer assim em duas procuras seguidas, para não pegar quem está no meio da
-   * passagem para a fila.
+   * Execução que perdeu o job: na fila sem job para rodá-la (o job falhou antes de ela começar, com o
+   * banco fora do ar; o Redis perdeu o job; a volta de uma pausa não chegou à fila), ou pausada com a hora
+   * de voltar vencida e sem o job da volta. A que entrou na fila há menos de 1 hora volta para a fila,
+   * porque quem a pediu ouviu que ela foi aceita (a que nem chegou à fila já virou erro com o erro do
+   * Redis, em failQueued); a mais antiga vira erro, em vez de rodar muito depois do que se esperava. A
+   * pausada volta na hora. Sem isto, ela ficaria parada para sempre (e, com "Pular este horário",
+   * travaria o agendamento). Só o que aparecer assim em duas procuras seguidas, para não pegar quem está
+   * no meio da passagem para a fila.
    */
   let orphanSuspects = new Set<string>();
   const sweepOrphans = async () => {
-    const rows = await many<{ id: string; status: 'queued' | 'waiting'; started: boolean; wait_till: Date | null }>(
+    const rows = await many<{ id: string; status: 'queued' | 'waiting'; recent: boolean; wait_till: Date | null }>(
       db,
-      `SELECT id, status, started_at IS NOT NULL AS started, wait_till FROM executions
-       WHERE (status = 'queued' AND created_at < now() - make_interval(secs => $1))
+      `SELECT id, status, wait_till, coalesce(queued_at, created_at) > now() - make_interval(secs => $2) AS recent FROM executions
+       WHERE (status = 'queued' AND coalesce(queued_at, created_at) < now() - make_interval(secs => $1))
           OR (status = 'waiting' AND wait_till < now() - make_interval(secs => $1))`,
-      [ORPHAN_GRACE_SECONDS],
+      [ORPHAN_GRACE_SECONDS, ORPHAN_REQUEUE_LIMIT_SECONDS],
     );
     if (!rows.length) {
       orphanSuspects = new Set();
@@ -559,22 +575,30 @@ export function startWorker(deps: {
     const orphans = rows.filter((r) => !withJobs.has(r.id));
     const confirmed = orphans.filter((r) => orphanSuspects.has(key(r)));
     orphanSuspects = new Set(orphans.map(key));
+    const old: string[] = [];
     for (const r of confirmed) {
       if (r.status === 'waiting') {
         console.warn(`Execução ${r.id} esperava sem o job da volta; volta agora`);
         // Se o job aparecer de novo, não roda duas vezes: só um tira a execução de 'waiting'.
         await queue.scheduleResume(r.id, r.wait_till!.getTime());
-      } else if (r.started) {
-        console.warn(`Execução ${r.id} voltou de uma pausa sem job na fila; volta para a fila`);
+      } else if (r.recent) {
+        console.warn(`Execução ${r.id} estava na fila sem job; volta para a fila`);
         await queue.enqueueResumed(r.id);
       } else {
-        console.warn(`Execução ${r.id} nunca entrou na fila; marcada como erro`);
-        await db.query(
-          `UPDATE executions SET status = 'error', started_at = now(), finished_at = now(), error_message = $2, error = $3 WHERE id = $1 AND status = 'queued'`,
-          [r.id, NOT_QUEUED_MESSAGE, JSON.stringify({ message: NOT_QUEUED_MESSAGE })],
-        );
+        old.push(r.id);
       }
     }
+    if (!old.length) return;
+    const failed = await many<ExecutionRow>(
+      db,
+      `UPDATE executions e SET status = 'error', started_at = coalesce(started_at, now()), finished_at = now(), error_message = $2, error = $3,
+         resume_state = NULL, resume_data = NULL
+       WHERE e.id = ANY($1::uuid[]) AND e.status = 'queued'
+       RETURNING ${failedColumns}`,
+      [old, ORPHAN_MESSAGE, JSON.stringify({ message: ORPHAN_MESSAGE })],
+    );
+    for (const row of failed) console.warn(`Execução ${row.id} ficou mais de 1 hora na fila sem job; marcada como erro`);
+    await notifyFailed(failed, ORPHAN_MESSAGE);
   };
 
   let sweeping: Promise<void> | null = null;
@@ -597,20 +621,12 @@ export function startWorker(deps: {
   const sweepTimer = setInterval(() => void sweep(false), deps.sweepIntervalMs ?? SWEEP_INTERVAL_MS);
   sweepTimer.unref();
 
-  // Job que falhou (travado porque o worker parou, ou erro antes de começar a execução): execução que
-  // ficou na fila vira erro, e a procura acha a que ficou 'running' sem ninguém rodando (inclusive a do
-  // agendamento, que nasce rodando).
-  worker.on('failed', (job, err) => {
-    if (stopping) return;
-    const data = job?.data;
-    const done = data?.kind === 'run' || data?.kind === 'resume'
-      ? db.query(
-          `UPDATE executions SET status = 'error', finished_at = now(), started_at = coalesce(started_at, now()), error_message = $2, error = $3
-           WHERE id = $1 AND status = 'queued'`,
-          [data.executionId, `Execução interrompida: ${err.message}`, JSON.stringify({ message: `Execução interrompida: ${err.message}` })],
-        )
-      : Promise.resolve();
-    void done.then(() => sweep(true)).catch((e) => console.error('Falha do job não foi registrada:', e));
+  // Job que falhou (travado porque o worker parou, ou erro do banco antes de a execução começar): a
+  // procura acha na hora a que ficou 'running' sem ninguém rodando (inclusive a do agendamento, que nasce
+  // rodando). A que ficou na fila sem começar não rodou nada: a procura de execuções sem job a põe de
+  // novo na fila depois de uns minutos (sem repetir sem parar enquanto o banco estiver fora do ar).
+  worker.on('failed', () => {
+    if (!stopping) void sweep(true);
   });
 
   return {

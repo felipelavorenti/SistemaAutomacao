@@ -178,6 +178,8 @@ export const executionRoutes =
         );
         // O worker não vai pegá-la: quem chamou por webhook ou formulário fica sabendo por aqui.
         if (canceled) await queue.publishFinished(id, 'canceled', 'Cancelada antes de começar').catch(() => undefined);
+        // Um worker a pegou nesse meio-tempo: o cancelamento vai para ele, como no caso de 'running'.
+        else await queue.requestCancel(id);
       } else if (row.status === 'running') {
         // Ninguém está rodando (o worker parou): cancela na hora, com os subfluxos que ela chamou.
         const live = await queue.liveWorkers([row.worker_id]).catch(() => null);

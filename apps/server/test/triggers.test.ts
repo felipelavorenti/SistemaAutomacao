@@ -281,17 +281,17 @@ describe.skipIf(!available)('Gatilhos: webhook, formulário, pausa e fluxo de er
     expect(paused.status).toBe('waiting');
     expect(Date.parse(paused.wait_till) - Date.now()).toBeGreaterThan(3_600_000);
     // Cada pausa tem o seu job da volta, marcado para a hora da pausa (wait_till).
-    const job = await queue.queue.getJob(`resume-${run1.executionId}-${Date.parse(paused.wait_till)}`);
-    expect(job).toBeTruthy();
+    // O job entra na fila logo depois de a pausa ser gravada.
+    const job = await waitFor(() => queue.queue.getJob(`resume-${run1.executionId}-${Date.parse(paused.wait_till)}`), 'o job da volta');
     // Adianta o relógio: o job da retomada roda agora.
-    await job!.promote();
+    await job.promote();
     const done = await finished(run1.executionId, ['success', 'error']);
     expect(done.status).toBe('success');
     expect(done.runs.at(-1).output[0]).toEqual([{ json: { a: 1 } }]);
 
     const run2 = (await call('POST', `/api/workflows/${wf.id}/run`, {})).body;
     const paused2 = await finished(run2.executionId);
-    expect(await queue.queue.getJob(`resume-${run2.executionId}-${Date.parse(paused2.wait_till)}`)).toBeTruthy();
+    await waitFor(() => queue.queue.getJob(`resume-${run2.executionId}-${Date.parse(paused2.wait_till)}`), 'o job da volta');
     expect((await call('POST', `/api/executions/${run2.executionId}/cancel`)).status).toBe(200);
     expect((await call('GET', `/api/executions/${run2.executionId}`)).body.status).toBe('canceled');
     expect(await queue.queue.getJob(`resume-${run2.executionId}-${Date.parse(paused2.wait_till)}`)).toBeFalsy();

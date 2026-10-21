@@ -394,7 +394,7 @@ export function webhookRoutes(deps: WebhookDeps) {
     const resume = async (id: string, data: ResumeData): Promise<boolean> => {
       const row = await one<{ wait_till: Date | null }>(
         deps.db,
-        `UPDATE executions SET status = 'queued', resume_data = $2 WHERE id = $1 AND status = 'waiting' RETURNING wait_till`,
+        `UPDATE executions SET status = 'queued', queued_at = now(), resume_data = $2 WHERE id = $1 AND status = 'waiting' RETURNING wait_till`,
         [id, encodeJson(data)],
       );
       if (!row) return false;

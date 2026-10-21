@@ -339,4 +339,14 @@ ALTER TABLE executions ADD COLUMN worker_id text;
 CREATE INDEX executions_retry_idx ON executions (retry_of) WHERE retry_of IS NOT NULL;
 `,
   },
+  {
+    id: '012_entrada_na_fila',
+    sql: `
+-- Quando a execução entrou na fila pela última vez (criada, ou de volta de uma pausa). A procura de
+-- execuções sem job põe de novo na fila só a que entrou há pouco; a antiga vira erro. As execuções de
+-- antes ficam sem a hora (o default vem depois do ADD COLUMN), e vale a created_at delas.
+ALTER TABLE executions ADD COLUMN queued_at timestamptz;
+ALTER TABLE executions ALTER COLUMN queued_at SET DEFAULT now();
+`,
+  },
 ];
