@@ -258,6 +258,14 @@ describe.skipIf(!available)('Correções de quebra', () => {
 
     await db.query(`UPDATE executions SET status = 'success' WHERE workflow_id = $1 AND status = 'running'`, [always]);
 
+    // Execução única nunca é pulada: o fluxo se desativa ao disparar e o horário não voltaria.
+    await db.query(`UPDATE executions SET status = 'running', worker_id = 'outro-worker' WHERE id = $1`, [previous]);
+    const once = await queue.queue.add('scheduled', { kind: 'scheduled', workflowId: skip, once: Date.now() });
+    await until(async () => ['completed', 'failed'].includes(await once.getState()), 'o job da execução única terminar');
+    expect(await scheduledRuns(skip)).toEqual(['running', 'success', 'success']);
+    expect((await call(admin, 'GET', `/api/workflows/${skip}`)).body.active).toBe(false);
+    await db.query(`UPDATE executions SET status = 'success' WHERE id = $1`, [previous]);
+
     // Dois horários pegos ao mesmo tempo: só um passa.
     const both = await createFlow('Dois de uma vez', flow([schedule, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['s', 'h']], { skipIfRunning: true }));
     expect((await call(admin, 'POST', `/api/workflows/${both}/activate`)).status).toBe(200);

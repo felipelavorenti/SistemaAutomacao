@@ -56,7 +56,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 
 **apps/server/src**
 
-- `index.ts`: sobe a API e, por padrão, o worker no mesmo processo. `worker-main.ts` roda só o worker.
+- `index.ts`: sobe a API e, com `RUN_WORKER_IN_PROCESS` diferente de `false`, o worker no mesmo processo. `worker-main.ts` roda só o worker (no `docker-compose.yml`, é o serviço `worker`).
 - `config.ts`: lê as variáveis de ambiente.
 - `api-reference.ts` e `api-examples.ts`: a referência da API e um exemplo de chamada e de resposta de cada rota. `api-markdown.ts` monta com eles a parte das rotas de `docs/api.md` (`npm run docs:api -w @sa/server`).
 - `triggers/manager.ts`: liga os gatilhos dos fluxos ativos (webhooks, formulários, IMAP, RSS, pasta, SSE, n8n Trigger) e a escuta de teste.
@@ -81,15 +81,28 @@ Toda execução passa pela fila: a API grava a execução como "na fila", e um w
 
 - A fila é o BullMQ sobre o Redis. Cada fluxo ativo com gatilho Agendamento vira um agendador no Redis. `packages/engine/src/schedule.ts` (`scheduleRepeat`) converte os campos do nó: Todo dia, Toda semana e Todo mês viram cron de 6 campos (com segundos) no fuso do nó (padrão America/Sao\_Paulo); A cada intervalo vira `every` em milissegundos (segundos, minutos ou horas); Expressão cron aceita 5 ou 6 campos. Ao subir, o servidor refaz os agendadores a partir dos fluxos ativos do banco.
 - A execução única (Uma vez, numa data e hora) não usa agendador: vira um job atrasado com id `once-{id do fluxo}`. O campo Data e hora aceita `aaaa-mm-dd hh:mm`, `aaaa-mm-dd hh:mm:ss` ou `aaaa-mm-dd hh:mm:ss.mmm` (1 a 3 dígitos de milissegundos, `.5` vale 500 ms); `parseLocalDateTime` converte no fuso do nó e o atraso do job é calculado em milissegundos. Ao disparar, o worker desativa o fluxo (auditoria `deactivate` sem usuário) e roda a execução. Uma data que já passou não é agendada, nem quando o servidor volta depois do horário; ativar ou salvar um fluxo ativo com data passada é recusado.
-- O worker roda até 5 execuções ao mesmo tempo (`WORKER_CONCURRENCY`). Por padrão ele roda no mesmo processo da API. Com `RUN_WORKER_IN_PROCESS=false`, sobe separado com `npm run start:worker -w @sa/server`, e podem existir vários.
-- A fila não repete execuções que falham. Se o worker cair no meio, a execução é marcada como erro ("Execução interrompida"), sem rodar de novo sozinha.
+- O worker roda até 5 execuções ao mesmo tempo (`WORKER_CONCURRENCY`). No `docker-compose.yml` ele é um serviço separado (`worker`, com `node apps/server/dist/worker-main.js`), e o app sobe com `RUN_WORKER_IN_PROCESS=false`: um fluxo pesado não deixa a tela e os webhooks lentos. Fora do Docker, por padrão ele roda no mesmo processo da API; com `RUN_WORKER_IN_PROCESS=false`, sobe separado com `npm run start:worker -w @sa/server`, e podem existir vários. O worker separado conversa com o app só pelo Postgres e pelo Redis (cancelamento, resposta dos webhooks e formulários, retomada das pausas).
+- A trava de cada job na fila dura 5 minutos (`lockDuration`) e é renovada a cada 2,5 minutos. Um nó que segura o processador por menos que isso (planilha grande, JSON grande) não faz a fila achar que o worker travou. A compactação do log da execução roda fora da thread principal (gzip assíncrono).
+- A fila não repete execuções que falham (`maxStalledCount: 0`): job travado vai direto para falha, sem rodar de novo sozinho.
 - O cancelamento é avisado por um canal do Redis. O worker aborta a execução no nó em andamento.
+- Agendamento com **Pular este horário** (`settings.skipIfRunning` na definição do fluxo): ao disparar, o worker abre uma transação com `pg_advisory_xact_lock(1105, hashtext(id do fluxo))` e procura uma execução `mode = 'schedule'` do mesmo fluxo com status `queued`, `running` ou `waiting`. Se achar, o horário é pulado sem gravar execução (só uma linha no log do worker); senão, grava a execução dentro da transação. A trava faz dois horários pegos ao mesmo tempo passarem um de cada vez pela conferência. A execução única (`once`) nunca é pulada, porque o fluxo já foi desativado ao disparar. Sem a opção (padrão), nada muda.
+
+**Execuções interrompidas (reinício, queda, desligamento)**
+
+- Cada processo de worker tem um id aleatório (`randomUUID`), que vira o nome dele no BullMQ (a conexão no Redis se chama `bull:<fila em base64>:w:<id>`). O worker grava esse id em `executions.worker_id` quando pega a execução, e os subfluxos herdam o id de quem chamou.
+- `ExecutionQueue.liveWorkers()` lê `CLIENT LIST` do Redis (pelo `queue.getWorkers()` do BullMQ) e devolve os workers conectados agora. Uma execução `running` está abandonada quando o worker dela não está conectado. As gravadas por uma versão anterior (`worker_id` vazio) só contam como abandonadas se nenhum worker sem nome (versão anterior) estiver conectado. Se o Redis não listar as conexões, nada é marcado.
+- O worker procura execuções abandonadas ao subir, quando um job falha e a cada 60 segundos. Na subida e na falha de um job, basta o worker não estar conectado; na procura de cada minuto, a execução precisa aparecer abandonada duas vezes seguidas, para uma queda curta do Redis não derrubar execução viva. Também entra a execução que é do próprio worker mas já saiu da lista do que ele roda (quando falhou ao gravar o fim), sempre com duas observações.
+- A execução abandonada vira `error` com "Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela", o aviso de fim é publicado (o webhook que esperava responde) e o fluxo de erro roda nos modos agendado, webhook e gatilho. Job que falhou antes de a execução começar deixa a execução `queued`, que vira `error`.
+- Ao desligar (SIGTERM), o worker aborta as execuções em andamento e as grava como `error` com "Execução interrompida porque o servidor foi desligado" (não como canceladas), e roda o fluxo de erro nos mesmos modos. O `index.ts` fecha o worker antes da API, para os webhooks que esperam uma resposta receberem o aviso antes de o servidor parar.
+- Cancelar uma execução `running` abandonada (`POST /executions/{id}/cancel`) a encerra na hora como `canceled`, com os subfluxos `running` dela; com o worker vivo, só pede o cancelamento pelo Redis.
+- Execuções `waiting` não dependem de worker e continuam esperando.
 
 **Como um fluxo roda**
 
 - Os dados andam como lista de itens: cada nó recebe N itens e devolve N itens em uma ou mais saídas.
 - Uma resposta vazia (sem corpo, 204 ou `[]`) não gera item, e os nós seguintes não rodam. A execução termina com sucesso.
 - Subfluxos (Execute Workflow) viram execuções filhas, com até 10 níveis de fluxo chamando fluxo.
+- Bancos dos clientes: o worker mantém um pool por conexão cadastrada (`DatabasePools`, em `database/drivers.ts`), dividido entre as execuções. Cada tentativa de um nó pega o pool emprestado (`acquire`) e devolve no fim (`release`). Se a conexão for alterada, as próximas tentativas abrem um pool novo, e o antigo só fecha quando a última tentativa que o usa devolver; um pool sem uso há 10 minutos também fecha, nunca com alguém usando.
 
 **Tentativas e limites**
 
@@ -599,7 +612,7 @@ A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas auto
 | `connections` | Conexões, com os segredos criptografados |
 | `workflows` | Fluxos: definição em JSON, pasta, ativo, versão e ID de origem no n8n |
 | `workflow_versions` | Uma versão por salvamento |
-| `executions` | Execuções: modo, status, erro, resumo, dados comprimidos, execução pai, nó de início e, nas que estão esperando, até quando, o que esperam e o estado para retomar |
+| `executions` | Execuções: modo, status, erro, resumo, dados comprimidos, execução pai, nó de início, o worker que está rodando (`worker_id`) e, nas que estão esperando, até quando, o que esperam e o estado para retomar |
 | `workflow_static_data` | Estado dos gatilhos por fluxo e nó (último e-mail lido, data do último item do RSS) |
 | `db_commands` | Cada comando SQL executado nos bancos dos clientes |
 | `audit_log` | Quem fez o quê, com antes e depois |
@@ -615,7 +628,7 @@ A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas auto
 - Cada nó guarda até 256 KB de dados, e cada execução até 16 MB. Acima disso fica só a contagem de itens.
 - Arquivos dos itens: o conteúdo só é guardado nas execuções manuais e reexecuções (tabela `execution_files`, até 64 MB por execução, arquivos iguais contam uma vez). Nas outras, o histórico fica só com nome, tipo e tamanho.
 - Comandos SQL guardam até 32 KB do texto e 8 KB dos parâmetros.
-- Por padrão nada é apagado. Com `EXECUTION_RETENTION_DAYS` maior que 0, uma limpeza diária às 03:30 UTC (00:30 em Brasília) apaga execuções e comandos SQL mais antigos que esse número de dias.
+- Por padrão nada é apagado. Com `EXECUTION_RETENTION_DAYS` maior que 0, uma limpeza diária às 03:30 UTC (00:30 em Brasília) apaga execuções e comandos SQL mais antigos que esse número de dias (`cleanupOldExecutions`, em `executions/store.ts`). Ela apaga em lotes de 5.000 linhas, cada lote num comando, para não segurar o banco na primeira limpeza com meses de histórico. Só apaga execuções terminadas (`success`, `error`, `canceled`); as que estão na fila, rodando ou esperando ficam. O índice `executions_retry_idx` deixa rápido limpar o `retry_of` das reexecuções de uma execução apagada.
 - Referência medida: 24 execuções ocuparam 199 KB de dados comprimidos, e o banco inteiro tinha 9,3 MB.
 
 ## Segurança
@@ -719,7 +732,7 @@ Uma máquina com 2 vCPU, 4 GB de RAM e 10 GB livres em disco deve comportar os 7
 | RAM | 2 GB | 4 GB | Parado: app 75 MB, Postgres 41 MB, Redis 6 MB. Cada processo Python pode chegar a 512 MB |
 | Disco livre | 5 GB | 10 GB ou mais | Imagens Docker \~1,5 GB; o primeiro build usa \~4,5 GB com cache. O banco cresce com as execuções guardadas |
 | Sistema | Linux com Docker, ou Windows 10/11 com Docker Desktop e WSL 2 | Linux (servidor) | Testado no Windows 11 Pro com Docker Desktop 4.93 e WSL 2 |
-| Docker | Docker Engine com Compose v2 (2.24 ou mais novo para o HTTPS) | Versão atual | Sobe 3 containers: app, postgres e redis (4 com o HTTPS) |
+| Docker | Docker Engine com Compose v2 (2.24 ou mais novo para o HTTPS) | Versão atual | Sobe 4 containers: app, worker, postgres e redis (5 com o HTTPS) |
 | Rede | Acesso às APIs e aos bancos dos clientes | A mesma rede do n8n atual | A plataforma herda os acessos já liberados; não tem túnel nem VPN embutidos |
 | Porta | 3000 liberada para os usuários | 443, com o HTTPS do `docker-compose.https.yml` | Com o HTTPS do compose, a porta 3000 fecha para a rede |
 | Navegador | Chrome ou Edge 111+, Firefox 121+ | Chrome ou Edge atuais | Telas usam CSS moderno |
@@ -758,7 +771,7 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 | `KEEP_SUCCESS_DATA` | Não | false | Guarda dados também das agendadas com sucesso |
 | `WORKER_CONCURRENCY` | Não | 5 | Execuções em paralelo por worker |
 | `FILES_DIRS` | Não | /files no docker-compose; vazio fora dele | Pastas do servidor que os nós Read/Write Files from Disk, Local File Trigger e Git podem usar, separadas por vírgula. No Docker Desktop (Windows ou Mac), o Local File Trigger precisa de Verificar por consulta (polling) |
-| `RUN_WORKER_IN_PROCESS` | Não | true | false = worker em processo separado |
+| `RUN_WORKER_IN_PROCESS` | Não | true; false no app do docker-compose | false = a API não roda execuções; elas ficam com o worker separado (`worker-main.ts`, o serviço `worker` do compose) |
 | `SECURE_COOKIES` | Não | false | true quando estiver atrás de HTTPS (o `docker-compose.https.yml` já liga) |
 | `TRUST_PROXY` | Não | vazio (desligado) | IPs ou redes dos proxies em que o Info8n confia para ler o `X-Forwarded-For`, separados por vírgula, ou `true` (só com a porta 3000 fechada). Veja Segurança, IP de quem chamou |
 | `INFO8N_HOST` | Só com o HTTPS | localhost | Nome pelo qual o Info8n é aberto em HTTPS (ex.: `info8n.empresa.local`) |
@@ -770,7 +783,7 @@ A instalação é um `docker compose up`. O container do app compila tudo no bui
 **Atualizar**
 
 1. `git pull` na pasta do projeto.
-2. `docker compose up -d --build`. Só o container do app é refeito; banco e Redis continuam com os dados.
+2. `docker compose up -d --build`. Só os containers do app e do worker são refeitos; banco e Redis continuam com os dados. As execuções que estavam rodando ficam como Erro ("Execução interrompida porque o servidor foi desligado"); as que estavam esperando num Wait continuam.
 3. Recarregue a tela com Ctrl+F5.
 
 **HTTPS (opcional)**
@@ -780,7 +793,7 @@ O `docker-compose.https.yml` põe um Caddy na frente do Info8n, com HTTPS na por
 1. No `.env`, defina `INFO8N_HOST` com o nome pelo qual o Info8n é aberto (ex.: `info8n.empresa.local`). O nome precisa apontar para o servidor no DNS da empresa (ou no arquivo hosts de cada computador).
 2. Escolha o certificado. Com `INFO8N_TLS=internal` (padrão), o Caddy gera um certificado próprio, e o navegador avisa até a autoridade dele ser instalada nos computadores (arquivo `/data/caddy/pki/authorities/local/root.crt` no volume `caddy-data`; copie com `docker compose cp https:/data/caddy/pki/authorities/local/root.crt .`). Com o certificado da empresa, ponha `cert.pem` e `chave.pem` na pasta `certificados` ao lado do `docker-compose.yml` e use `INFO8N_TLS=/certificados/cert.pem /certificados/chave.pem`.
 3. Suba com `docker compose -f docker-compose.yml -f docker-compose.https.yml up -d --build`. Use o mesmo comando nas atualizações.
-4. Acesse `https://<INFO8N_HOST>`. O compose liga `SECURE_COOKIES=true`, `TRUST_PROXY=true` e `PUBLIC_URL=https://<INFO8N_HOST>` no app.
+4. Acesse `https://<INFO8N_HOST>`. O compose liga `SECURE_COOKIES=true`, `TRUST_PROXY=true` e `PUBLIC_URL=https://<INFO8N_HOST>` no app, e o mesmo `PUBLIC_URL` no worker.
 
 - Precisa do Docker Compose 2.24 ou mais novo, que entende o `!reset` usado para fechar a porta 3000.
 - Login com Google: troque o endereço de retorno no Google Cloud para `https://<INFO8N_HOST>/api/oauth/google/callback`.
@@ -826,7 +839,7 @@ Para desenvolver fora do Docker são precisos Node 22, Postgres 16 e Redis 7. Ca
 
 O arquivo `.github/workflows/ci.yml` tem dois jobs em cada pull request:
 
-- `test`: sobe Postgres 16, Redis 7, SQL Server 2022, Oracle Free 23 e Metabase como serviços, confere as dependências com `npm audit --omit=dev --audit-level=critical` e roda todos os testes. Os testes de segurança ficam em `apps/server/test/seguranca.test.ts` e `packages/engine/test/seguranca.test.ts`.
+- `test`: sobe Postgres 16, Redis 7, SQL Server 2022, Oracle Free 23 e Metabase como serviços, confere as dependências com `npm audit --omit=dev --audit-level=critical` e roda todos os testes. Os testes de segurança ficam em `apps/server/test/seguranca.test.ts` e `packages/engine/test/seguranca.test.ts`; os das correções de quebra da revisão de 2026-10-20 (execuções interrompidas, limpeza em lotes, pular agendado, pools de banco) em `apps/server/test/quebras.test.ts` e `packages/engine/test/pools.test.ts`.
 - `docker`: faz o build da imagem do `Dockerfile`.
 
 **Imagem Docker**

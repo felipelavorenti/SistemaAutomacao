@@ -171,6 +171,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
           },
         ],
         connections: [{ from: 'agenda', fromOutput: 0, to: 'baixo', toInput: 0 }],
+        settings: { skipIfRunning: true },
       },
     },
     response: {
@@ -200,6 +201,7 @@ export const API_EXAMPLES: Record<string, ApiExample> = {
             },
           },
         ],
+        settings: { skipIfRunning: true },
         connections: [{ to: 'baixo', from: 'agenda', toInput: 0, fromOutput: 0 }],
       },
       version: 1,

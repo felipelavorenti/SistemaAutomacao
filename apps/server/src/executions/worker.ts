@@ -390,7 +390,8 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           definition: wf.definition,
           startNodeId: wf.definition.nodes.find((n) => n.type === 'scheduleTrigger' && !n.disabled)?.id ?? null,
         };
-        const id = wf.definition.settings?.skipIfRunning
+        // A execução única não é pulada: o fluxo já foi desativado e o horário não voltaria.
+        const id = wf.definition.settings?.skipIfRunning && !data.once
           ? await transaction(db, async (client) => {
               // Trava por fluxo: dois horários pegos ao mesmo tempo não passam juntos pela conferência.
               await client.query('SELECT pg_advisory_xact_lock(1105, hashtext($1))', [wf.id]);

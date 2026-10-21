@@ -84,7 +84,12 @@ Um fluxo pode ter mais de um gatilho, como no n8n: por exemplo, um Agendamento e
 
 **Configurações do fluxo**
 
-O botão Configurações, na barra do editor, tem o **Fluxo de erro**: o fluxo que roda quando uma execução automática deste falha (veja o Error Trigger). A mudança vale depois de salvar.
+O botão Configurações, na barra do editor, tem:
+
+- **Fluxo de erro:** o fluxo que roda quando uma execução automática deste falha (veja o Error Trigger).
+- **Se a execução agendada anterior ainda não terminou:** Rodar mesmo assim (padrão) ou Pular este horário. Com Pular, quando chega a hora do Agendamento e a execução agendada anterior deste fluxo ainda está na fila, rodando ou Esperando num Wait, o horário é pulado e não roda depois; o próximo horário roda normalmente se a anterior já tiver terminado. O horário pulado não aparece em Execuções, para não ocupar espaço. Só conta a execução agendada: testes manuais, webhooks e chamadas por outro fluxo não impedem o agendamento. A execução única (Uma vez, numa data e hora) nunca é pulada. Use quando duas execuções do mesmo fluxo ao mesmo tempo dariam problema (ex.: enviar o mesmo e-mail duas vezes).
+
+As mudanças valem depois de salvar.
 
 **Versões**
 
@@ -171,7 +176,7 @@ Todo fluxo começa por pelo menos um gatilho.
 - **Todo dia:** escolha o horário, com hora, minuto e segundo (ex.: 08:30:00).
 - **Toda semana:** marque os dias da semana e escolha o horário. Ex.: Seg, Qua e Sex às 07:00:00.
 - **Todo mês:** escolha o dia do mês (1 a 31) e o horário. Nos meses que não têm o dia escolhido (ex.: 31 em abril), não roda.
-- **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico.
+- **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico. Se uma execução pode demorar mais que o intervalo, veja Pular este horário nas Configurações do fluxo.
 - **Uma vez, numa data e hora:** roda uma única vez no momento escolhido, com dia, hora, minuto, segundo e milissegundo (ex.: 05/10/2026 14:30:00,250), e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
 - **Expressão cron:** para casos que as opções acima não cobrem. São 5 campos (minuto, hora, dia do mês, mês, dia da semana), ou 6 com os segundos no começo. `*` é qualquer valor, `*/15` é a cada 15, `1-5` é um intervalo e `8,12,18` é uma lista; no dia da semana, 0 é domingo. Exemplos: `0 8 * * *` todo dia às 8h; `*/15 * * * *` a cada 15 minutos; `0 8-18 * * 1-5` de hora em hora das 8h às 18h, de segunda a sexta; `*/30 * * * * *` a cada 30 segundos.
 
@@ -508,6 +513,7 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 - **Testar conexão:** bancos, Metabase, ClickUp, Gmail, SMTP, FTP, SFTP e SSH têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
 - **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual. Se você mudar o servidor, a porta ou a URL, digite a senha (ou o token) de novo: o Info8n não deixa levar a senha salva para outro endereço.
 - **Conexão por expressão:** o campo de conexão de um nó também aceita expressão. Na hora de rodar, o Info8n confere se o responsável pela execução tem acesso ao cliente da conexão: quem clicou em Executar ou Tentar de novo, ou, nas execuções automáticas (agendamento, webhook, gatilhos, fluxo de erro), quem salvou o fluxo por último. Sem acesso, o nó falha dizendo isso. A mesma conferência vale para o cliente no ERP e para o subfluxo do Execute Workflow escolhidos por expressão.
+- **Alterar com fluxos rodando:** mudar uma conexão de banco não derruba quem está usando. O nó Banco de dados que já começou termina com os dados antigos (todos os itens dele); os nós que começarem depois usam os dados novos.
 - **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
 
@@ -597,7 +603,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 | Executando | Em andamento |
 | Esperando | Parada num Wait ou num Form; a tela da execução diz em qual nó, o que espera e até quando |
 | Sucesso | Terminou sem erro |
-| Erro | Parou num nó; a coluna Erro diz qual e por quê |
+| Erro | Parou num nó; a coluna Erro diz qual e por quê. Também quando o servidor foi desligado ou reiniciado no meio (veja abaixo) |
 | Cancelada | Alguém cancelou |
 
 | Tipo | Origem |
@@ -613,7 +619,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 **A tela da execução** mostra quem disparou, quando começou, quanto durou e a versão do fluxo que rodou. Se houve erro, o painel vermelho diz em qual nó, a mensagem e os detalhes (por exemplo, a resposta da API ou o código do erro do banco). Abaixo, a lista Nós executados traz cada nó na ordem em que rodou, com a quantidade de itens e o tempo. Clique num nó para ver a entrada e a saída dele, as tentativas, os logs do código e os links para os subfluxos que ele chamou. Um nó dentro de um Loop aparece uma vez por volta.
 
 - **Executar de novo:** roda outra vez a mesma versão do fluxo, com a mesma entrada. A nova execução aponta para a original.
-- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando.
+- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando. Se a execução estava com um worker que parou (por exemplo, o servidor caiu e ainda não voltou), ela é encerrada na hora, junto com os subfluxos que chamou.
 - **Abrir fluxo** e **ver quem chamou** (em subfluxos) levam ao fluxo e à execução de origem.
 
 **O que fica guardado.** Para os logs ocuparem pouco espaço:
@@ -621,7 +627,9 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 - Execuções agendadas que terminam com sucesso, e os subfluxos chamados por elas, guardam só o resumo: cada nó, o status, a quantidade de itens e o tempo, sem os dados. As que dão erro, as manuais e as reexecuções (com os subfluxos que elas chamam) guardam tudo. O administrador pode mudar isso para guardar tudo sempre.
 - Arquivos dos itens: nas execuções manuais e nas reexecuções, o conteúdo fica guardado (até 64 MB por execução; arquivos iguais contam uma vez) e a lista Arquivos de cada nó tem Abrir e Baixar. Nas outras, só o nome, o tipo e o tamanho ficam no histórico.
 - A entrada e a saída de um nó que passam de 256 KB são trocadas por um aviso com a quantidade de itens (campo \_truncado). Passados 16 MB na execução, os nós seguintes guardam só a contagem (campo \_naoGuardado).
-- Se o administrador configurou um prazo de retenção, execuções mais antigas que ele são apagadas uma vez por dia.
+- Se o administrador configurou um prazo de retenção, execuções mais antigas que ele são apagadas uma vez por dia (às 3h30), aos poucos, para não pesar no banco. Execuções que ainda estão na fila, rodando ou esperando não são apagadas, mesmo antigas.
+
+**Servidor reiniciado ou desligado no meio de uma execução.** Ao desligar o Info8n (atualização, `docker compose restart`), as execuções em andamento são interrompidas e ficam como Erro, com a mensagem "Execução interrompida porque o servidor foi desligado". Se o servidor caiu de repente (queda de energia, travamento), na volta o Info8n acha as execuções que ficaram como Executando sem ninguém rodando e as marca como Erro, com a mensagem "Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela"; isso vale também para os subfluxos que elas chamavam. Nos dois casos, se o fluxo tem Fluxo de erro e a execução era agendada, por webhook ou por gatilho, o fluxo de erro roda. Execuções Esperando num Wait não são afetadas: continuam esperando e seguem na hora certa. A execução interrompida não roda de novo sozinha; use Executar de novo se precisar.
 
 ### Comandos SQL
 
@@ -727,3 +735,5 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | O Google recusou o acesso salvo na conexão do Gmail | Acesso revogado, senha trocada ou app Externo em Teste há mais de 7 dias | Abra a conexão e clique em Conectar com Google de novo. Para não vencer, publique o app no Google Cloud |
 | A conexão do Gmail ainda não foi conectada | Salvou a conexão sem clicar em Conectar com Google | Abra a conexão e clique em Conectar com Google |
 | A execução fica Na fila | O servidor já está rodando o máximo de execuções ao mesmo tempo (5, por padrão) | Aguarde, ou peça ao administrador para aumentar esse limite |
+| Execução com erro "Execução interrompida" | O servidor foi desligado, reiniciado ou caiu enquanto ela rodava | Confira o que ela já tinha feito (dados gravados, e-mails enviados) e use Executar de novo se precisar |
+| O agendamento não rodou num horário | Pular este horário está ligado e a execução agendada anterior ainda não tinha terminado | É o esperado com essa opção. Veja a duração das execuções e, se for o caso, aumente o intervalo |
