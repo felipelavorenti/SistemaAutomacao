@@ -468,7 +468,7 @@ const GROUPS: ApiGroup[] = [
           limit,
         ],
         response:
-          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu fica com status error e error_message começando por "Execução interrompida".',
+          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".',
       },
       {
         method: 'GET',
@@ -508,7 +508,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).',
         params: [id('da execução')],
         response:
-          'Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado". Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.',
+          'Na fila, ela fica canceled na hora, com error_message "Cancelada antes de começar"; se um worker a pegou no mesmo instante, ele a interrompe como abaixo. Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado". Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.',
         errors: ['400: a execução já terminou'],
         audited: true,
       },
