@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Queue, Worker } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
@@ -9,7 +10,7 @@ import { parseKey, type Config } from '../src/config.js';
 import { createDb, migrate, one, type Db } from '../src/db/db.js';
 import { createRedis, ExecutionQueue, QUEUE_NAME } from '../src/executions/queue.js';
 import { cleanupOldExecutions } from '../src/executions/store.js';
-import { startWorker, type WorkerHandle } from '../src/executions/worker.js';
+import { startWorker, workerOptions, type WorkerHandle } from '../src/executions/worker.js';
 import { ensureAdmin } from '../src/lib/auth.js';
 import { TriggerManager } from '../src/triggers/manager.js';
 
@@ -66,7 +67,7 @@ describe.skipIf(!available)('Correções de quebra', () => {
     secureCookies: false,
     trustProxy: false,
   };
-  const newWorker = () => startWorker({ db, config, redis: createRedis(REDIS_URL), subscriber: createRedis(REDIS_URL) });
+  const newWorker = (sweepIntervalMs?: number) => startWorker({ db, config, redis: createRedis(REDIS_URL), subscriber: createRedis(REDIS_URL), sweepIntervalMs });
 
   async function call(cookie: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: unknown) {
     const res = await app.inject({ method, url, payload: payload as never, headers: { cookie } });
@@ -166,6 +167,9 @@ describe.skipIf(!available)('Correções de quebra', () => {
     // Gravada por uma versão anterior do Info8n, sem worker_id.
     const legacy = await insertExecution(scheduled, { status: 'running', workerId: null });
     const alive = await insertExecution(scheduled, { status: 'running', workerId: 'outro-worker' });
+    // Worker sem a conexão da fila (fechando, ou reconectando ao Redis), mas com o aviso de vida em dia.
+    const beating = await insertExecution(scheduled, { status: 'running', workerId: 'vivo-pelo-aviso' });
+    await redis.set('sa:worker:vivo-pelo-aviso', '1', 'PX', 60_000);
 
     // Um worker novo subindo (como depois de reiniciar o servidor).
     const restarted = newWorker();
@@ -176,6 +180,7 @@ describe.skipIf(!available)('Correções de quebra', () => {
       expect((await status(legacy)).status).toBe('error');
       // O outro worker continua conectado: a execução dele segue rodando.
       expect((await status(alive)).status).toBe('running');
+      expect((await status(beating)).status).toBe('running');
 
       const errorRun = await until(
         () => one<{ status: string; input: { json: { execution: { id: string; mode: string } } }[] }>(db, `SELECT status, input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow]),
@@ -184,7 +189,83 @@ describe.skipIf(!available)('Correções de quebra', () => {
       expect(errorRun.input[0].json.execution).toMatchObject({ id: lost, mode: 'schedule' });
     } finally {
       await restarted.close();
-      await db.query(`UPDATE executions SET status = 'success' WHERE id = $1`, [alive]);
+      await redis.del('sa:worker:vivo-pelo-aviso');
+      await db.query(`UPDATE executions SET status = 'success' WHERE id = ANY($1::uuid[])`, [[alive, beating]]);
+    }
+  });
+
+  it('o worker que ainda rodava não grava por cima de uma execução já encerrada', async () => {
+    const wf = await createFlow('Encerrada por fora', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['t', 'h']]));
+    const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
+    await until(async () => (await status(executionId)).status === 'running', 'a execução começar');
+    // Como o cancelamento de uma execução cujo worker parecia parado.
+    await db.query(`UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada por fora' WHERE id = $1`, [executionId]);
+    const job = (await queue.queue.getJob(executionId))!;
+    await until(async () => (await job.getState()) === 'completed', 'o worker terminar a rodada');
+    expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Cancelada por fora' });
+  });
+
+  it('job de agendamento travado (worker morreu no meio) falha em vez de rodar o fluxo de novo', async () => {
+    const name = 'teste-travado';
+    const q = new Queue(name, { connection: redis });
+    // Trava curta, para o teste não esperar os 5 minutos de verdade.
+    const opts = (id: string) => ({ ...workerOptions(config, id), lockDuration: 1000, stalledInterval: 300 });
+    const connections = [createRedis(REDIS_URL), createRedis(REDIS_URL)];
+    let started = 0;
+    const dying = new Worker(name, () => (started++, new Promise(() => undefined)), { connection: connections[0], ...opts('morre') });
+    const calls: string[] = [];
+    let next: Worker | null = null;
+    try {
+      await q.upsertJobScheduler('wf:travado', { every: 60_000 }, { name: 'scheduled', data: { kind: 'scheduled', workflowId: 'x' } });
+      await until(async () => started === 1, 'o primeiro worker pegar o job');
+      await dying.close(true); // morre sem terminar nem renovar a trava
+
+      next = new Worker(name, async (job) => void calls.push(job.id!), { connection: connections[1], ...opts('sobe') });
+      const reason = await new Promise<string>((resolve) => next!.on('failed', (_job, err) => resolve(err.message)));
+      expect(reason).toBe('job started more than allowable limit');
+      expect(calls).toEqual([]);
+      // O agendamento segue: o próximo horário continua marcado.
+      expect(await q.getJobCountByTypes('delayed')).toBe(1);
+    } finally {
+      await next?.close();
+      await q.obliterate({ force: true });
+      await q.close();
+      connections.forEach((c) => c.disconnect());
+    }
+  });
+
+  it('execução que perdeu o job volta para a fila (na fila sem job, ou pausada sem a volta)', async () => {
+    const sweeper = newWorker(200);
+    try {
+      const quick = await createFlow('Sem job', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }]));
+      // Ficou na fila, mas o job nunca chegou ao Redis (falha entre gravar e enfileirar).
+      const queued = await insertExecution(quick, { status: 'queued', daysAgo: 1 });
+      await until(async () => (await status(queued)).status === 'success', 'a execução sem job rodar');
+
+      const paused = await createFlow(
+        'Espera sem volta',
+        flow(
+          [
+            { id: 't', name: 'Início', type: 'manualTrigger' },
+            { id: 'e', name: 'Esperar', type: 'wait', parameters: { resume: 'timeInterval', amount: 2, unit: 'hours' } },
+          ],
+          [['t', 'e']],
+        ),
+      );
+      const { executionId } = (await call(admin, 'POST', `/api/workflows/${paused}/run`, {})).body;
+      await until(async () => (await status(executionId)).status === 'waiting', 'a execução pausar');
+      // O job da volta sumiu e a hora já passou (ex.: a volta falhou com o Postgres fora do ar).
+      await queue.cancelResume(executionId);
+      await db.query(`UPDATE executions SET wait_till = now() - interval '10 minutes' WHERE id = $1`, [executionId]);
+      await until(async () => (await status(executionId)).status === 'success', 'a execução pausada voltar');
+
+      // Pausada sem hora para voltar (espera o webhook) não é mexida.
+      const webhookWait = await insertExecution(quick, { status: 'waiting', daysAgo: 1 });
+      await new Promise((r) => setTimeout(r, 1000));
+      expect((await status(webhookWait)).status).toBe('waiting');
+      await db.query(`UPDATE executions SET status = 'canceled' WHERE id = $1`, [webhookWait]);
+    } finally {
+      await sweeper.close();
     }
   });
 
@@ -271,6 +352,8 @@ describe.skipIf(!available)('Correções de quebra', () => {
     expect((await call(admin, 'POST', `/api/workflows/${both}/activate`)).status).toBe(200);
     await Promise.all([queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both }), queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both })]);
     await until(async () => (await scheduledRuns(both)).length === 1, 'um dos dois horários rodar');
+    // A execução agendada nasce rodando, já com o worker: se ele parar, a procura de abandonadas a acha.
+    expect(await one(db, `SELECT status, worker_id IS NOT NULL AS owned FROM executions WHERE workflow_id = $1`, [both])).toEqual({ status: 'running', owned: true });
     await new Promise((r) => setTimeout(r, 500));
     expect(await scheduledRuns(both)).toHaveLength(1);
     await until(async () => (await scheduledRuns(both)).join() === 'success', 'a execução terminar');
@@ -282,8 +365,12 @@ describe.skipIf(!available)('Correções de quebra', () => {
     const wf = await createFlow('Demorado', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['t', 'h']]));
     const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
     await until(async () => (await status(executionId)).status === 'running', 'a execução começar');
+    const { worker_id } = (await one<{ worker_id: string }>(db, 'SELECT worker_id FROM executions WHERE id = $1', [executionId]))!;
+    expect(await redis.exists(`sa:worker:${worker_id}`)).toBe(1);
     await worker!.close();
     worker = null;
     expect(await status(executionId)).toEqual({ status: 'error', error_message: 'Execução interrompida porque o servidor foi desligado' });
+    // Desligado, o worker apaga o aviso de vida: as execuções dele param de contar como em andamento.
+    expect(await redis.exists(`sa:worker:${worker_id}`)).toBe(0);
   });
 });

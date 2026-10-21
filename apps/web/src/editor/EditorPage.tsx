@@ -201,7 +201,7 @@ function Editor() {
   };
 
   const removeNode = (nodeId: string) => {
-    update((d) => ({ nodes: d.nodes.filter((n) => n.id !== nodeId), connections: d.connections.filter((c) => c.from !== nodeId && c.to !== nodeId) }));
+    update((d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== nodeId), connections: d.connections.filter((c) => c.from !== nodeId && c.to !== nodeId) }));
     setSelectedId((s) => (s === nodeId ? null : s));
     setOpenId((s) => (s === nodeId ? null : s));
   };
@@ -226,6 +226,7 @@ function Editor() {
       parameters: {},
     };
     update((d) => ({
+      ...d,
       nodes: [...d.nodes, node],
       // Liga automaticamente ao nó selecionado, como no n8n.
       connections: selected && desc.inputs > 0 ? [...d.connections, { from: selected.id, fromOutput: 0, to: node.id, toInput: 0 }] : d.connections,

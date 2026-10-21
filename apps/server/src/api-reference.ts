@@ -504,7 +504,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).',
         params: [id('da execução')],
         response:
-          'Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".',
+          'Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".',
         errors: ['400: a execução já terminou'],
         audited: true,
       },

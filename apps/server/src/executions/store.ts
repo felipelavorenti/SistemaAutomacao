@@ -175,7 +175,11 @@ export function stripBinaries(runs: NodeRun[], keepFiles: boolean): { runs: Node
   return { runs: stripped, files: [...files.values()] };
 }
 
-export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false): Promise<void> {
+/**
+ * Grava o fim da execução. `owner`: só grava se ela ainda é deste worker e está rodando; devolve false
+ * quando outro já a encerrou (cancelada ou marcada como interrompida), e aí nada muda.
+ */
+export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false, owner?: string): Promise<boolean> {
   const stripped = stripBinaries(result.runs, keepData && keepFiles);
   const data = keepData ? await gzipAsync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
   for (const file of stripped.files) {
@@ -187,11 +191,11 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
   }
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
   const waiting = result.status === 'waiting';
-  await db.query(
+  const res = await db.query(
     `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,
        error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
        wait_till = $14, wait_info = $15, resume_state = $16, resume_data = NULL
-     WHERE id = $1`,
+     WHERE id = $1 AND ($17::text IS NULL OR (status = 'running' AND worker_id = $17))`,
     [
       id,
       result.status,
@@ -209,8 +213,10 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
       waiting ? (result.wait?.until ?? null) : null,
       waiting && result.wait ? JSON.stringify(result.wait) : null,
       waiting && result.resumeState ? encodeJson(result.resumeState) : null,
+      owner ?? null,
     ],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 export function encodeJson(value: unknown): Buffer {
@@ -238,21 +244,24 @@ export function customData(runs: NodeRun[]): string | null {
   return Object.keys(merged).length ? JSON.stringify(merged) : null;
 }
 
-export async function failExecution(db: Queryable, id: string, message: string): Promise<void> {
-  await db.query(
+/** Marca a execução como erro. `owner`: como no saveResult, só a que ainda é deste worker; devolve se gravou. */
+export async function failExecution(db: Queryable, id: string, message: string, owner?: string): Promise<boolean> {
+  const res = await db.query(
     `UPDATE executions SET status = 'error', finished_at = now(), started_at = coalesce(started_at, now()),
        error_message = $2, error = $3, resume_state = NULL, resume_data = NULL, wait_till = NULL
-     WHERE id = $1 AND status IN ('queued', 'running')`,
-    [id, message, JSON.stringify({ message })],
+     WHERE id = $1 AND CASE WHEN $4::text IS NULL THEN status IN ('queued', 'running') ELSE status = 'running' AND worker_id = $4 END`,
+    [id, message, JSON.stringify({ message }), owner ?? null],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 /** Quantas linhas cada comando da limpeza apaga: tudo de uma vez seguraria o banco com meses de histórico. */
 export const CLEANUP_BATCH = 5000;
 
 /**
- * Apaga, em lotes, as execuções terminadas e os comandos SQL mais antigos que o prazo. Execuções na
- * fila, rodando ou esperando ficam, mesmo antigas.
+ * Apaga, em lotes, os comandos SQL e as execuções terminadas mais antigos que o prazo. Execuções na
+ * fila, rodando ou esperando ficam, mesmo antigas. Os comandos saem primeiro: apagar a execução antes
+ * faria o banco limpar a referência de cada comando dela (milhares por execução) dentro do mesmo lote.
  */
 export async function cleanupOldExecutions(db: Queryable, days: number, batch = CLEANUP_BATCH): Promise<{ executions: number; dbCommands: number }> {
   const deleteAll = async (sql: string) => {
@@ -263,11 +272,11 @@ export async function cleanupOldExecutions(db: Queryable, days: number, batch = 
       if ((res.rowCount ?? 0) < batch) return total;
     }
   };
+  const dbCommands = await deleteAll(`DELETE FROM db_commands WHERE id IN (SELECT id FROM db_commands WHERE at < now() - make_interval(days => $1) LIMIT $2)`);
   const executions = await deleteAll(
     `DELETE FROM executions WHERE id IN (
        SELECT id FROM executions WHERE created_at < now() - make_interval(days => $1) AND status IN ('success', 'error', 'canceled') LIMIT $2)`,
   );
-  const dbCommands = await deleteAll(`DELETE FROM db_commands WHERE id IN (SELECT id FROM db_commands WHERE at < now() - make_interval(days => $1) LIMIT $2)`);
   return { executions, dbCommands };
 }
 

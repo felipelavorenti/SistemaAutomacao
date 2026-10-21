@@ -33,6 +33,7 @@ interface RunOptions {
   dataTables?: MemoryDataTableStore;
   commands?: CommandLog[];
   publicUrl?: string;
+  internalUrl?: string;
 }
 
 async function run(type: string, parameters: JsonObject, o: RunOptions = {}) {
@@ -52,6 +53,7 @@ async function run(type: string, parameters: JsonObject, o: RunOptions = {}) {
     filesDirs: o.filesDirs ?? [],
     dataTables: o.dataTables,
     publicUrl: o.publicUrl,
+    internalUrl: o.internalUrl,
     onCommand: (entry) => {
       o.commands?.push(entry);
     },
@@ -503,6 +505,11 @@ describe('Info8n (API)', () => {
     expect(calls.at(-1)!.url).toBe('/api/executions?workflowId=w1&status=error&limit=5');
     expect(await failure('info8n', { connection: 'api', resource: 'workflow', operation: 'get', workflowId: 'zzz' }, { connections, publicUrl: base })).toMatch(/status 404/);
     expect(await failure('info8n', { connection: 'api', resource: 'execution', operation: 'delete', executionId: 'e1' }, { connections, publicUrl: base })).toMatch(/não tem a operação/);
+  });
+
+  it('sem endereço na conexão, chama o Info8n pelo endereço interno (worker em outro container)', async () => {
+    const out = await output('info8n', { connection: 'api', resource: 'workflow', operation: 'getAll', returnAll: true }, { connections, publicUrl: 'http://localhost:1', internalUrl: base });
+    expect(out.map((i) => i.json.id)).toEqual(['w1', 'w2']);
   });
 });
 

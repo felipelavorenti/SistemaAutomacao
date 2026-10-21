@@ -49,6 +49,7 @@ function fakeCtx(type: NodeType, parameters: JsonObject, inputs: Item[][], signa
     resumeUrl: 'http://localhost:3000/webhook-waiting/x',
     resumeFormUrl: 'http://localhost:3000/form-waiting/x',
     publicUrl: 'http://localhost:3000',
+    internalUrl: 'http://localhost:3000',
     // Como num subfluxo: não pode pausar, então espera no próprio worker.
     putToWait: () => false,
     sendResponse: () => undefined,

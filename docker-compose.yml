@@ -2,6 +2,8 @@ x-ambiente: &ambiente
   DATABASE_URL: postgres://automacao:${POSTGRES_PASSWORD}@postgres:5432/automacao
   REDIS_URL: redis://redis:6379
   FILES_DIRS: ${FILES_DIRS:-/files}
+  # Como o worker chama o próprio Info8n (nó Info8n (API) sem endereço): no container dele, localhost não é o app.
+  INTERNAL_URL: http://app:3000
 
 services:
   # Telas, API, webhooks, formulários e gatilhos.
@@ -29,6 +31,9 @@ services:
     build: .
     command: ["node", "apps/server/dist/worker-main.js"]
     restart: unless-stopped
+    # Ao desligar, o worker interrompe as execuções e grava cada uma como erro; o tempo é para isso
+    # terminar antes de o Docker matar o processo.
+    stop_grace_period: 30s
     env_file: .env
     environment: *ambiente
     volumes:

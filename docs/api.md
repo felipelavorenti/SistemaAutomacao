@@ -1940,7 +1940,7 @@ curl -X POST "$INFO8N/api/executions/6add9343-6e56-49d2-b8ef-81a3a3021946/cancel
 
 **Exemplo de resposta**
 
-Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".
+Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".
 
 ```json
 {"ok": true}

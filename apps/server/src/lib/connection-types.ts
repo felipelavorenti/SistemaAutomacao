@@ -265,7 +265,7 @@ export const connectionTypes: ConnectionTypeDescription[] = [
         required: true,
         hint: 'Crie em Minha conta > Tokens de API. O nó faz só o que o dono do token pode fazer.',
       },
-      { name: 'baseUrl', displayName: 'Endereço do Info8n (opcional)', secret: false, required: false, placeholder: 'http://info8n:3000', hint: 'Vazio: este Info8n (PUBLIC_URL).' },
+      { name: 'baseUrl', displayName: 'Endereço do Info8n (opcional)', secret: false, required: false, placeholder: 'https://info8n.empresa.com.br', hint: 'Vazio: este Info8n.' },
     ],
   },
   {

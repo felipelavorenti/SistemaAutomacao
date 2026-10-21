@@ -61,6 +61,11 @@ export interface ExecuteOptions {
   python?: PythonRunner;
   /** Endereço público do Info8n, para $execution.resumeUrl e as URLs de webhook e formulário. */
   publicUrl?: string;
+  /**
+   * Endereço pelo qual o worker chama o próprio Info8n (nó Info8n (API) sem endereço). Sem ele, vale
+   * o publicUrl. No Docker o worker roda num container separado e localhost não é o Info8n.
+   */
+  internalUrl?: string;
   /** A execução pode pausar (Wait, Form)? Subfluxos não podem: esperam no próprio worker. */
   canWait?: boolean;
   /** Continua uma execução pausada. */
@@ -295,9 +300,15 @@ function findStartNode(workflow: WorkflowDefinition, registry: NodeRegistry, sta
   return trigger;
 }
 
-export function executionUrls(options: Pick<ExecuteOptions, 'publicUrl' | 'executionId'>): { resumeUrl: string; resumeFormUrl: string; publicUrl: string } {
+export function executionUrls(options: Pick<ExecuteOptions, 'publicUrl' | 'internalUrl' | 'executionId'>): {
+  resumeUrl: string;
+  resumeFormUrl: string;
+  publicUrl: string;
+  internalUrl: string;
+} {
   const publicUrl = (options.publicUrl ?? 'http://localhost:3000').replace(/\/+$/, '');
-  return { publicUrl, resumeUrl: `${publicUrl}/webhook-waiting/${options.executionId}`, resumeFormUrl: `${publicUrl}/form-waiting/${options.executionId}` };
+  const internalUrl = options.internalUrl?.replace(/\/+$/, '') || publicUrl;
+  return { publicUrl, internalUrl, resumeUrl: `${publicUrl}/webhook-waiting/${options.executionId}`, resumeFormUrl: `${publicUrl}/form-waiting/${options.executionId}` };
 }
 
 async function runNode(

@@ -174,20 +174,20 @@ export const executionRoutes =
         await db.query(`UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada antes de começar' WHERE id = $1 AND status = 'queued'`, [id]);
       } else if (row.status === 'running') {
         // Ninguém está rodando (o worker parou): cancela na hora, com os subfluxos que ela chamou.
-        const live = await queue.liveWorkers().catch(() => null);
+        const live = await queue.liveWorkers([row.worker_id]).catch(() => null);
         if (live && isAbandoned(row.worker_id, live)) {
           await db.query(
             `WITH RECURSIVE tree AS (
-               SELECT id FROM executions WHERE id = $1
+               SELECT id FROM executions WHERE id = $1 AND worker_id IS NOT DISTINCT FROM $2
                UNION ALL SELECT e.id FROM executions e JOIN tree t ON e.parent_execution_id = t.id WHERE e.status = 'running'
              )
              UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada; o worker que a rodava tinha parado'
              WHERE id IN (SELECT id FROM tree) AND status = 'running'`,
-            [id],
+            [id, row.worker_id],
           );
-        } else {
-          await queue.requestCancel(id);
         }
+        // Pede sempre: se o worker estiver vivo, é ele que encerra (e não grava por cima do cancelamento).
+        await queue.requestCancel(id);
       } else if (row.status === 'waiting') {
         await db.query(
           `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',

@@ -14,12 +14,16 @@ export type JobData =
   /** Execução pausada cujo tempo de espera acabou. */
   | { kind: 'resume'; executionId: string };
 
+/** Quanto tempo o aviso de vida de um worker vale no Redis sem ser renovado. */
+export const HEARTBEAT_TTL_MS = 60_000;
+const workerKey = (workerId: string) => `sa:worker:${workerId}`;
+
 export interface LiveWorkers {
   ids: Set<string>;
   unnamed: boolean;
 }
 
-/** Execução 'running' que nenhum worker conectado está rodando (o worker parou ou o servidor reiniciou). */
+/** Execução 'running' que nenhum worker vivo está rodando (o worker parou ou o servidor reiniciou). */
 export function isAbandoned(workerId: string | null, live: LiveWorkers): boolean {
   return workerId === null ? !live.unnamed : !live.ids.has(workerId);
 }
@@ -39,7 +43,10 @@ export class ExecutionQueue {
     await this.queue.add('run', { kind: 'run', executionId }, { jobId: executionId, removeOnComplete: 1000, removeOnFail: 1000 });
   }
 
-  /** Execução pausada que voltou para a fila: outro ID de job, porque o da primeira rodada ainda pode estar guardado. */
+  /**
+   * Execução pausada que voltou para a fila (ou que perdeu o job): outro ID de job, porque o da
+   * primeira rodada ainda pode estar guardado.
+   */
   async enqueueResumed(executionId: string): Promise<void> {
     await this.queue.add('run', { kind: 'run', executionId }, { jobId: `${executionId}-${Date.now()}`, removeOnComplete: 1000, removeOnFail: 1000 });
   }
@@ -88,12 +95,24 @@ export class ExecutionQueue {
     await this.redis.publish(CANCEL_CHANNEL, executionId);
   }
 
+  /** Avisa que este worker está vivo. Vale por HEARTBEAT_TTL_MS; o worker renova bem antes disso. */
+  async heartbeat(workerId: string): Promise<void> {
+    await this.redis.set(workerKey(workerId), '1', 'PX', HEARTBEAT_TTL_MS);
+  }
+
+  /** Apaga o aviso de vida; o worker chama só depois de terminar as execuções que estava rodando. */
+  async clearHeartbeat(workerId: string): Promise<void> {
+    await this.redis.del(workerKey(workerId));
+  }
+
   /**
-   * Workers conectados ao Redis agora, pelo nome da conexão (`bull:<fila>:w:<id>`). `unnamed`: há worker
-   * sem nome (versão anterior do Info8n), que roda execuções sem worker_id. Null quando o Redis não
-   * lista as conexões; aí não dá para saber quem está vivo.
+   * Quais destes workers estão vivos: com o aviso de vida no Redis, ou com a conexão da fila aberta
+   * (`bull:<fila>:w:<id>`). A conexão sozinha não basta: a fila a fecha antes de o worker terminar as
+   * execuções ao desligar, e ela cai por instantes quando reconecta. `unnamed`: há worker sem nome
+   * (versão anterior do Info8n), que roda execuções sem worker_id. Null quando o Redis não lista as
+   * conexões; aí não dá para saber quem está vivo.
    */
-  async liveWorkers(): Promise<LiveWorkers | null> {
+  async liveWorkers(candidates: Iterable<string | null>): Promise<LiveWorkers | null> {
     const ids = new Set<string>();
     let unnamed = false;
     for (const client of await this.queue.getWorkers()) {
@@ -103,7 +122,22 @@ export class ExecutionQueue {
       if (at === -1) unnamed = true;
       else ids.add(name.slice(at + 3));
     }
+    const asked = [...new Set([...candidates].filter((id): id is string => !!id && !ids.has(id)))];
+    if (asked.length) {
+      const beats = await this.redis.mget(asked.map(workerKey));
+      asked.forEach((id, i) => beats[i] !== null && ids.add(id));
+    }
     return { ids, unnamed };
+  }
+
+  /** Execuções que têm job na fila (esperando vaga, rodando ou com hora marcada para voltar). */
+  async executionsWithJobs(): Promise<Set<string>> {
+    const ids = new Set<string>();
+    for (const job of await this.queue.getJobs(['active', 'wait', 'prioritized', 'paused', 'delayed', 'waiting-children'], 0, -1, true)) {
+      const data = job?.data;
+      if (data?.kind === 'run' || data?.kind === 'resume') ids.add(data.executionId);
+    }
+    return ids;
   }
 
   /** Cria, atualiza ou remove o agendamento de um fluxo. */

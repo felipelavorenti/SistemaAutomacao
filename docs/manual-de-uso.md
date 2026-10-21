@@ -438,7 +438,7 @@ Por segurança, os ganchos (hooks) do repositório não rodam, e Adicionar confi
 
 **RSS Read.** Lê os itens de um feed RSS ou Atom, uma vez por item que chega, como o nó RSS Read do n8n. Informe a URL do feed; Ignorar erros de certificado (SSL) serve para feeds internos. Cada notícia vira um item, com title, link, pubDate, isoDate, content, contentSnippet, creator e guid. Para disparar um fluxo quando sai notícia nova, use o gatilho RSS Feed Trigger.
 
-**Info8n (API).** Usa a API do próprio Info8n de dentro de um fluxo, como o nó n8n do n8n. Use uma conexão API do Info8n, com um token criado em Minha conta, Tokens de API; o nó faz só o que o dono do token pode fazer. Endereço do Info8n vazio usa este Info8n (PUBLIC_URL). Recursos e operações:
+**Info8n (API).** Usa a API do próprio Info8n de dentro de um fluxo, como o nó n8n do n8n. Use uma conexão API do Info8n, com um token criado em Minha conta, Tokens de API; o nó faz só o que o dono do token pode fazer. Endereço do Info8n vazio usa este Info8n. Recursos e operações:
 
 - **Fluxo:** Listar (Só os ativos, Nome contém, Trazer todos ou Quantidade), Buscar, Criar e Alterar (Fluxo em JSON, com name, folderId e definition; no Alterar, o que ficar de fora mantém o atual), Excluir, Ativar, Desativar e Executar (Itens de entrada em JSON, uma lista de objetos; devolve o ID da execução, que roda na fila).
 - **Execução:** Listar (Do fluxo e Situação), Buscar, Executar de novo e Cancelar.
@@ -619,7 +619,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 **A tela da execução** mostra quem disparou, quando começou, quanto durou e a versão do fluxo que rodou. Se houve erro, o painel vermelho diz em qual nó, a mensagem e os detalhes (por exemplo, a resposta da API ou o código do erro do banco). Abaixo, a lista Nós executados traz cada nó na ordem em que rodou, com a quantidade de itens e o tempo. Clique num nó para ver a entrada e a saída dele, as tentativas, os logs do código e os links para os subfluxos que ele chamou. Um nó dentro de um Loop aparece uma vez por volta.
 
 - **Executar de novo:** roda outra vez a mesma versão do fluxo, com a mesma entrada. A nova execução aponta para a original.
-- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando. Se a execução estava com um worker que parou (por exemplo, o servidor caiu e ainda não voltou), ela é encerrada na hora, junto com os subfluxos que chamou.
+- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando. Se o worker que a rodava parou há mais de um minuto (por exemplo, o servidor caiu e ainda não voltou), ela é encerrada na hora, junto com os subfluxos que chamou.
 - **Abrir fluxo** e **ver quem chamou** (em subfluxos) levam ao fluxo e à execução de origem.
 
 **O que fica guardado.** Para os logs ocuparem pouco espaço:
@@ -629,7 +629,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 - A entrada e a saída de um nó que passam de 256 KB são trocadas por um aviso com a quantidade de itens (campo \_truncado). Passados 16 MB na execução, os nós seguintes guardam só a contagem (campo \_naoGuardado).
 - Se o administrador configurou um prazo de retenção, execuções mais antigas que ele são apagadas uma vez por dia (às 3h30), aos poucos, para não pesar no banco. Execuções que ainda estão na fila, rodando ou esperando não são apagadas, mesmo antigas.
 
-**Servidor reiniciado ou desligado no meio de uma execução.** Ao desligar o Info8n (atualização, `docker compose restart`), as execuções em andamento são interrompidas e ficam como Erro, com a mensagem "Execução interrompida porque o servidor foi desligado". Se o servidor caiu de repente (queda de energia, travamento), na volta o Info8n acha as execuções que ficaram como Executando sem ninguém rodando e as marca como Erro, com a mensagem "Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela"; isso vale também para os subfluxos que elas chamavam. Nos dois casos, se o fluxo tem Fluxo de erro e a execução era agendada, por webhook ou por gatilho, o fluxo de erro roda. Execuções Esperando num Wait não são afetadas: continuam esperando e seguem na hora certa. A execução interrompida não roda de novo sozinha; use Executar de novo se precisar.
+**Servidor reiniciado ou desligado no meio de uma execução.** Ao desligar o Info8n (atualização, `docker compose restart`), as execuções em andamento são interrompidas e ficam como Erro, com a mensagem "Execução interrompida porque o servidor foi desligado". Se o servidor caiu de repente (queda de energia, travamento), na volta o Info8n acha as execuções que ficaram como Executando sem ninguém rodando e, em até uns 3 minutos, as marca como Erro, com a mensagem "Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela"; isso vale também para os subfluxos que elas chamavam. Nos dois casos, se o fluxo tem Fluxo de erro e a execução era agendada, por webhook ou por gatilho, o fluxo de erro roda. Execuções Esperando num Wait não são afetadas: continuam esperando e seguem na hora certa (ou logo que o servidor volta, se a hora passou com ele fora do ar). Se uma execução Na fila ou Esperando perdeu o lugar na fila numa falha, o Info8n a coloca de volta em poucos minutos. A execução interrompida não roda de novo sozinha, nem a agendada; use Executar de novo se precisar.
 
 ### Comandos SQL
 
@@ -736,4 +736,5 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | A conexão do Gmail ainda não foi conectada | Salvou a conexão sem clicar em Conectar com Google | Abra a conexão e clique em Conectar com Google |
 | A execução fica Na fila | O servidor já está rodando o máximo de execuções ao mesmo tempo (5, por padrão) | Aguarde, ou peça ao administrador para aumentar esse limite |
 | Execução com erro "Execução interrompida" | O servidor foi desligado, reiniciado ou caiu enquanto ela rodava | Confira o que ela já tinha feito (dados gravados, e-mails enviados) e use Executar de novo se precisar |
+| HTTP Request para `http://localhost:3000` (o próprio Info8n) dá erro de conexão | No Docker, as execuções rodam no container do worker, onde localhost não é o Info8n | Use `http://app:3000` no lugar de `http://localhost:3000` |
 | O agendamento não rodou num horário | Pular este horário está ligado e a execução agendada anterior ainda não tinha terminado | É o esperado com essa opção. Veja a duração das execuções e, se for o caso, aumente o intervalo |

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Worker, type Job } from 'bullmq';
+import { Worker, type Job, type WorkerOptions } from 'bullmq';
 import type { Redis } from 'ioredis';
 import {
   closeDefaultPythonRunner,
@@ -24,7 +24,7 @@ import { decryptJson } from '../lib/crypto.js';
 import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
-import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, isAbandoned, QUEUE_NAME, type JobData } from './queue.js';
+import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, QUEUE_NAME, type JobData } from './queue.js';
 import { cleanupOldExecutions, createExecution, decodeResume, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
@@ -58,6 +58,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** De quanto em quanto tempo o worker procura execuções abandonadas por um worker que parou. */
 const SWEEP_INTERVAL_MS = 60_000;
+/** De quanto em quanto tempo o worker renova o aviso de que está vivo (vale HEARTBEAT_TTL_MS). */
+const HEARTBEAT_INTERVAL_MS = HEARTBEAT_TTL_MS / 4;
+/** Execução na fila ou com a hora de voltar vencida, sem job, há mais que isto: perdeu o job. */
+const ORPHAN_GRACE_SECONDS = 120;
 /**
  * Tempo sem renovar a trava do job até a fila achar que o worker travou. Renovada a cada metade
  * disso; um nó que segura o processador por menos que isso não derruba mais a execução.
@@ -70,7 +74,29 @@ export interface WorkerHandle {
   close(): Promise<void>;
 }
 
-export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscriber: Redis }): WorkerHandle {
+/** Opções do worker da fila. */
+export function workerOptions(config: Config, workerId: string): Omit<WorkerOptions, 'connection'> {
+  return {
+    concurrency: config.workerConcurrency,
+    // Job travado (o worker parou de renovar a trava) não roda de novo: falha, e a procura de abandonadas
+    // marca a execução como interrompida. maxStalledCount não vale para os jobs dos agendamentos (a fila
+    // sempre os devolve para a espera); maxStartedAttempts vale para todos e barra a segunda rodada.
+    maxStalledCount: 0,
+    maxStartedAttempts: 1,
+    lockDuration: LOCK_DURATION_MS,
+    // Nome da conexão no Redis (bull:<fila>:w:<id>): um dos sinais de que o worker está vivo.
+    name: workerId,
+  };
+}
+
+export function startWorker(deps: {
+  db: Db;
+  config: Config;
+  redis: Redis;
+  subscriber: Redis;
+  /** Intervalo da procura de execuções abandonadas (os testes usam um menor). */
+  sweepIntervalMs?: number;
+}): WorkerHandle {
   const { db, config, redis, subscriber } = deps;
   /** Nome deste worker no Redis; gravado em cada execução que ele pega. */
   const workerId = randomUUID();
@@ -80,6 +106,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
   const dataTables = new PgDataTableStore(db);
   const queue = new ExecutionQueue(redis);
   const publicUrl = config.publicUrl ?? `http://localhost:${config.port}`;
+  const internalUrl = config.internalUrl ?? publicUrl;
 
   /** Avisa quem chamou por HTTP (webhook, formulário); sem ninguém escutando, não manda nada. */
   const publish = async (executionId: string, event: ExecutionEvent) => {
@@ -291,16 +318,17 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           executeSubworkflow: subworkflowRunner(id, rootMode, depth + 1, triggeredBy, childAccess),
           ...deps,
           publicUrl,
+          internalUrl,
           // O subfluxo roda dentro do worker de quem chamou: não pode pausar.
           canWait: false,
         }).then(interruptedOnShutdown);
         // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
         const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
-        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepAs === 'manual' || keepAs === 'retry');
+        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepAs === 'manual' || keepAs === 'retry', workerId);
         // Sem pausa (canWait: false), o subfluxo nunca termina esperando.
         return { executionId: id, status: result.status === 'waiting' ? 'error' : result.status, output: result.lastOutput, error: result.error };
       } catch (err) {
-        await failExecution(db, id, err instanceof Error ? err.message : String(err));
+        await failExecution(db, id, err instanceof Error ? err.message : String(err), workerId);
         throw err;
       } finally {
         signal.removeEventListener('abort', onParentAbort);
@@ -308,11 +336,15 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       }
     };
 
-  const run = async (executionId: string) => {
+  const columns = 'id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data';
+  /** Roda uma execução da fila. `alreadyClaimed`: ela já nasceu rodando neste worker (agendamento). */
+  const run = async (executionId: string, alreadyClaimed = false) => {
     const claimed = await one<ExecutionRow>(
       db,
-      `UPDATE executions SET status = 'running', started_at = coalesce(started_at, now()), worker_id = $2 WHERE id = $1 AND status = 'queued'
-       RETURNING id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data`,
+      alreadyClaimed
+        ? `SELECT ${columns} FROM executions WHERE id = $1 AND status = 'running' AND worker_id = $2`
+        : `UPDATE executions SET status = 'running', started_at = coalesce(started_at, now()), worker_id = $2 WHERE id = $1 AND status = 'queued'
+           RETURNING ${columns}`,
       [executionId, workerId],
     );
     if (!claimed) return; // cancelada antes de começar, ou já processada
@@ -338,6 +370,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         executeSubworkflow: subworkflowRunner(executionId, claimed.mode, 1, claimed.triggered_by, access),
         ...deps,
         publicUrl,
+        internalUrl,
         onResponse: (response) => {
           // Só a primeira resposta vale, como no n8n.
           if (responded) return;
@@ -346,7 +379,12 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         },
       }).then(interruptedOnShutdown);
       const keepFiles = claimed.mode === 'manual' || claimed.mode === 'retry';
-      await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), keepFiles);
+      const saved = await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), keepFiles, workerId);
+      // Outro já encerrou a execução (cancelada, ou dada como interrompida): o resultado desta rodada não vale.
+      if (!saved) {
+        console.warn(`Execução ${executionId} já tinha sido encerrada por outro; o resultado não foi gravado`);
+        return;
+      }
       if (result.status === 'waiting') {
         if (result.wait?.until) await queue.scheduleResume(executionId, Date.parse(result.wait.until));
         await publish(executionId, { type: 'waiting', wait: result.wait! });
@@ -356,7 +394,8 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       if (result.status === 'error') await runErrorWorkflow(claimed, result.error);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await failExecution(db, executionId, message);
+      // Já encerrada por outro, ou pausada (a procura de abandonadas agenda a volta que faltou).
+      if (!(await failExecution(db, executionId, message, workerId))) return;
       await publish(executionId, { type: 'finished', status: 'error', error: message, lastOutput: [] });
       await runErrorWorkflow(claimed, { message }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
     } finally {
@@ -389,6 +428,9 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           triggeredBy: null,
           definition: wf.definition,
           startNodeId: wf.definition.nodes.find((n) => n.type === 'scheduleTrigger' && !n.disabled)?.id ?? null,
+          // Nasce rodando neste worker: se ele parar antes de terminar, a procura de abandonadas a encontra.
+          status: 'running' as const,
+          workerId,
         };
         // A execução única não é pulada: o fluxo já foi desativado e o horário não voltaria.
         const id = wf.definition.settings?.skipIfRunning && !data.once
@@ -407,7 +449,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           console.log(`Agendamento do fluxo "${wf.name}" pulado: a execução agendada anterior ainda não terminou`);
           return;
         }
-        await run(id);
+        await run(id, true);
       } else if (data.kind === 'resume') {
         // O tempo de espera acabou: volta para a fila sem dados de retomada (segue com os itens de antes).
         const resumed = await one(db, `UPDATE executions SET status = 'queued', resume_data = NULL WHERE id = $1 AND status = 'waiting' RETURNING id`, [data.executionId]);
@@ -419,19 +461,27 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         }
       }
     },
-    // Job travado (o worker parou de renovar a trava) vai direto para falha, sem rodar de novo.
-    { connection: redis, concurrency: config.workerConcurrency, maxStalledCount: 0, lockDuration: LOCK_DURATION_MS, name: workerId },
+    { connection: redis, ...workerOptions(config, workerId) },
   );
 
+  // Aviso de vida: enquanto ele vale, as execuções deste worker não são dadas como abandonadas.
+  const beat = () => void queue.heartbeat(workerId).catch((err) => console.error('Aviso de vida do worker não foi gravado:', err));
+  beat();
+  const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+
   /** Marca como erro as execuções abandonadas e roda o fluxo de erro de cada uma (agendadas, webhooks, gatilhos). */
-  const failAbandoned = async (ids: string[]) => {
-    if (!ids.length) return;
+  const failAbandoned = async (rows: { id: string; worker_id: string | null }[]) => {
+    if (!rows.length) return;
+    // Só se ainda é do worker visto parado: outro pode tê-la pego de volta nesse meio-tempo.
     const failed = await many<ExecutionRow>(
       db,
-      `UPDATE executions SET status = 'error', finished_at = now(), error_message = $2, error = $3
-       WHERE id = ANY($1::uuid[]) AND status = 'running'
-       RETURNING id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, NULL AS resume_state, NULL AS resume_data`,
-      [ids, ABANDONED_MESSAGE, JSON.stringify({ message: ABANDONED_MESSAGE })],
+      `UPDATE executions e SET status = 'error', finished_at = now(), error_message = $3, error = $4
+       FROM unnest($1::uuid[], $2::text[]) AS a(id, worker_id)
+       WHERE e.id = a.id AND e.worker_id IS NOT DISTINCT FROM a.worker_id AND e.status = 'running'
+       RETURNING e.id, e.workflow_id, e.workflow_version, e.mode, e.status, e.definition, e.input, e.triggered_by, e.start_node_id, e.retry_of,
+         NULL AS resume_state, NULL AS resume_data`,
+      [rows.map((r) => r.id), rows.map((r) => r.worker_id), ABANDONED_MESSAGE, JSON.stringify({ message: ABANDONED_MESSAGE })],
     );
     for (const row of failed) {
       console.warn(`Execução ${row.id} estava abandonada e foi marcada como erro`);
@@ -441,29 +491,67 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
   };
 
   /**
-   * Procura execuções 'running' que ninguém está rodando: o worker delas não está mais conectado ao Redis
-   * (reinício, queda), ou é este worker e ela já saiu da lista do que ele roda (falha ao gravar o fim).
-   * Na subida e no aviso de falha de um job, o worker que sumiu basta. Na procura de cada minuto, só vira
-   * erro o que aparecer abandonado duas vezes seguidas, para uma queda rápida do Redis não derrubar nada.
+   * Procura execuções 'running' que ninguém está rodando: o worker delas não está mais vivo (sem aviso de
+   * vida e sem conexão com a fila: reinício, queda), ou é este worker e ela já saiu da lista do que ele roda
+   * (falha ao gravar o fim). Na subida e no aviso de falha de um job, o worker morto basta. Na procura de
+   * cada minuto, só vira erro o que aparecer abandonado duas vezes seguidas, para uma queda rápida do Redis
+   * não derrubar nada.
    */
   let suspects = new Set<string>();
+  const sweepRunning = async (immediate: boolean) => {
+    const rows = await many<{ id: string; worker_id: string | null }>(db, `SELECT id, worker_id FROM executions WHERE status = 'running'`);
+    if (!rows.length) {
+      suspects = new Set();
+      return;
+    }
+    const live = await queue.liveWorkers(rows.map((r) => r.worker_id));
+    if (!live) return;
+    live.ids.add(workerId);
+    const key = (r: { id: string; worker_id: string | null }) => `${r.id}:${r.worker_id ?? ''}`;
+    const ownLost = (r: { id: string; worker_id: string | null }) => r.worker_id === workerId && !running.has(r.id);
+    const abandoned = rows.filter((r) => isAbandoned(r.worker_id, live) || ownLost(r));
+    const confirmed = abandoned.filter((r) => (immediate && !ownLost(r)) || suspects.has(key(r)));
+    suspects = new Set(abandoned.map(key));
+    await failAbandoned(confirmed);
+  };
+
+  /**
+   * Execução que perdeu o job: na fila sem job para rodá-la (o job não chegou a ser criado, ou o Redis o
+   * perdeu) volta para a fila; pausada com a hora de voltar vencida e sem o job da volta, volta na hora.
+   * Sem isto, ela ficaria parada para sempre (e, com "Pular este horário", travaria o agendamento). Só o
+   * que aparecer assim em duas procuras seguidas, para não pegar quem está no meio da passagem para a fila.
+   */
+  let orphanSuspects = new Set<string>();
+  const sweepOrphans = async () => {
+    const rows = await many<{ id: string; status: 'queued' | 'waiting' }>(
+      db,
+      `SELECT id, status FROM executions
+       WHERE (status = 'queued' AND created_at < now() - make_interval(secs => $1))
+          OR (status = 'waiting' AND wait_till < now() - make_interval(secs => $1))`,
+      [ORPHAN_GRACE_SECONDS],
+    );
+    if (!rows.length) {
+      orphanSuspects = new Set();
+      return;
+    }
+    const withJobs = await queue.executionsWithJobs();
+    const key = (r: { id: string; status: string }) => `${r.id}:${r.status}`;
+    const orphans = rows.filter((r) => !withJobs.has(r.id));
+    const confirmed = orphans.filter((r) => orphanSuspects.has(key(r)));
+    orphanSuspects = new Set(orphans.map(key));
+    for (const r of confirmed) {
+      console.warn(`Execução ${r.id} (${r.status === 'queued' ? 'na fila' : 'esperando'}) estava sem job e voltou para a fila`);
+      // Se o job aparecer de novo, não roda duas vezes: só um pega a execução (ela sai de 'queued' ou 'waiting').
+      if (r.status === 'queued') await queue.enqueueResumed(r.id);
+      else await queue.scheduleResume(r.id, Date.now());
+    }
+  };
+
   let sweeping: Promise<void> | null = null;
   const sweep = (immediate: boolean): Promise<void> => {
     sweeping ??= (async () => {
-      const rows = await many<{ id: string; worker_id: string | null }>(db, `SELECT id, worker_id FROM executions WHERE status = 'running'`);
-      if (!rows.length) {
-        suspects = new Set();
-        return;
-      }
-      const live = await queue.liveWorkers();
-      if (!live) return;
-      live.ids.add(workerId);
-      const key = (r: { id: string; worker_id: string | null }) => `${r.id}:${r.worker_id ?? ''}`;
-      const ownLost = (r: { id: string; worker_id: string | null }) => r.worker_id === workerId && !running.has(r.id);
-      const abandoned = rows.filter((r) => isAbandoned(r.worker_id, live) || ownLost(r));
-      const confirmed = abandoned.filter((r) => (immediate && !ownLost(r)) || suspects.has(key(r)));
-      suspects = new Set(abandoned.map(key));
-      await failAbandoned(confirmed.map((r) => r.id));
+      await sweepRunning(immediate);
+      if (!immediate) await sweepOrphans();
     })()
       .catch((err) => console.error('Procura de execuções abandonadas falhou:', err))
       .finally(() => {
@@ -476,11 +564,12 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     .waitUntilReady()
     .then(() => sweep(true))
     .catch(() => undefined);
-  const sweepTimer = setInterval(() => void sweep(false), SWEEP_INTERVAL_MS);
+  const sweepTimer = setInterval(() => void sweep(false), deps.sweepIntervalMs ?? SWEEP_INTERVAL_MS);
   sweepTimer.unref();
 
   // Job que falhou (travado porque o worker parou, ou erro antes de começar a execução): execução que
-  // ficou na fila vira erro, e a procura acha a que ficou 'running' sem ninguém rodando.
+  // ficou na fila vira erro, e a procura acha a que ficou 'running' sem ninguém rodando (inclusive a do
+  // agendamento, que nasce rodando).
   worker.on('failed', (job, err) => {
     if (stopping) return;
     const data = job?.data;
@@ -500,6 +589,9 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
       clearInterval(sweepTimer);
       for (const c of running.values()) c.abort();
       await worker.close();
+      // Só agora: enquanto terminava as execuções, o worker ainda contava como vivo para os outros.
+      clearInterval(heartbeatTimer);
+      await queue.clearHeartbeat(workerId).catch(() => undefined);
       await queue.close();
       await pools.closeAll();
       await closeDefaultPythonRunner();
