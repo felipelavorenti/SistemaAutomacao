@@ -66,6 +66,8 @@ const ORPHAN_GRACE_SECONDS = 120;
 const ORPHAN_REQUEUE_LIMIT_SECONDS = 60 * 60;
 const ORPHAN_MESSAGE = 'Execução interrompida: ficou mais de 1 hora na fila sem o job que a rodaria';
 const NEVER_QUEUED_MESSAGE = 'Execução interrompida: o job dela não chegou à fila (o servidor parou antes de pô-la na fila, ou o Redis perdeu o job)';
+/** Quanto o desligamento espera a última conferência dos pedidos de cancelamento gravados no banco. */
+const CLOSE_CANCEL_CHECK_MS = 5_000;
 /** Por quanto tempo um pedido de cancelamento vale para uma execução que este worker ainda vai registrar. */
 const EARLY_CANCEL_MS = 60_000;
 const ABANDONED_MESSAGE = 'Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela';
@@ -746,10 +748,18 @@ export function startWorker(deps: {
       stopping = true;
       clearInterval(sweepTimer);
       clearInterval(cancelCheckTimer);
+      // A fila para de pegar jobs já aqui (antes de qualquer espera): o que chegar fica na fila para depois.
+      const closing = worker.close();
       // Um pedido de cancelar que se perdeu no Redis ainda conta: a execução fica cancelada, não interrompida.
-      await checkCancels().catch(() => undefined);
+      // Com o banco lento ou travado, a conferência não segura o desligamento.
+      let giveUp: NodeJS.Timeout | undefined;
+      await Promise.race([
+        checkCancels().catch(() => undefined),
+        new Promise<void>((resolve) => (giveUp = setTimeout(resolve, CLOSE_CANCEL_CHECK_MS))),
+      ]);
+      clearTimeout(giveUp);
       for (const c of running.values()) c.abort();
-      await worker.close();
+      await closing;
       // Só agora: enquanto terminava as execuções, o worker ainda contava como vivo para os outros.
       clearInterval(heartbeatTimer);
       await queue.clearHeartbeat(workerId).catch(() => undefined);

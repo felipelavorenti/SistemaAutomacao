@@ -646,6 +646,41 @@ describe.skipIf(!available)('Correções de quebra', () => {
     expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
   });
 
+  it('desligando com o banco travado: o worker não pega job novo e não fica preso na conferência dos cancelamentos', async () => {
+    const slowFlow = await createFlow('Roda ao desligar', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['t', 'h']]));
+    const quick = await createFlow('Chega ao desligar', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }]));
+    const running = (await call(admin, 'POST', `/api/workflows/${slowFlow}/run`, {})).body.executionId;
+    await until(async () => (await status(running)).status === 'running', 'a execução começar');
+    // A última conferência dos pedidos de cancelar não volta (o banco travou).
+    const query = db.query.bind(db);
+    let hung = false;
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    db.query = (async (sql: unknown, ...rest: unknown[]) => {
+      if (typeof sql === 'string' && sql.startsWith('SELECT id FROM executions WHERE id = ANY') && sql.includes('cancel_requested')) {
+        hung = true;
+        await released;
+      }
+      return (query as (...a: unknown[]) => unknown)(sql, ...rest);
+    }) as typeof db.query;
+    let arrived = '';
+    try {
+      const closing = worker!.close();
+      worker = null;
+      await until(async () => hung, 'o worker começar a conferir os cancelamentos');
+      // Um pedido chega enquanto o worker desliga: fica na fila para o próximo worker.
+      arrived = (await call(admin, 'POST', `/api/workflows/${quick}/run`, {})).body.executionId;
+      await closing;
+    } finally {
+      release();
+      db.query = query;
+    }
+    expect((await status(running)).status).not.toBe('running');
+    expect((await status(arrived)).status).toBe('queued');
+    worker = newWorker();
+    await until(async () => (await status(arrived)).status === 'success', 'o próximo worker rodar a que chegou');
+  });
+
   it('cancelar a execução no meio de um Execute Workflow "uma vez para cada item" não deixa os outros subfluxos rodando', async () => {
     const child = await createFlow('Filho rápido', flow([{ id: 'r', name: 'Recebe', type: 'executeWorkflowTrigger' }, { id: 'n', name: 'Nada', type: 'noOp' }], [['r', 'n']]));
     const parent = await createFlow(
