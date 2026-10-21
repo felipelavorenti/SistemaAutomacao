@@ -25,7 +25,7 @@ import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
 import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, QUEUE_NAME, type JobData } from './queue.js';
-import { cleanupOldExecutions, createExecution, decodeResume, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
+import { cleanupOldExecutions, createExecution, decodeResume, enqueueOrFail, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
 /** Limites do que fica guardado de cada comando SQL. */
@@ -62,6 +62,7 @@ const SWEEP_INTERVAL_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = HEARTBEAT_TTL_MS / 4;
 /** Execução na fila ou com a hora de voltar vencida, sem job, há mais que isto: perdeu o job. */
 const ORPHAN_GRACE_SECONDS = 120;
+const NOT_QUEUED_MESSAGE = 'Execução interrompida: não chegou a entrar na fila';
 /**
  * Tempo sem renovar a trava do job até a fila achar que o worker travou. Renovada a cada metade
  * disso; um nó que segura o processador por menos que isso não derruba mais a execução.
@@ -152,7 +153,7 @@ export function startWorker(deps: {
       input: [{ json: payload }],
       startNodeId: start.id,
     });
-    await queue.enqueueRun(id);
+    await enqueueOrFail(db, queue, id);
   };
 
   void subscriber.subscribe(CANCEL_CHANNEL);
@@ -380,9 +381,14 @@ export function startWorker(deps: {
       }).then(interruptedOnShutdown);
       const keepFiles = claimed.mode === 'manual' || claimed.mode === 'retry';
       const saved = await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), keepFiles, workerId);
-      // Outro já encerrou a execução (cancelada, ou dada como interrompida): o resultado desta rodada não vale.
+      // Outro já encerrou a execução (cancelada, ou dada como interrompida): o resultado desta rodada não
+      // vale. Quem chamou por HTTP fica sabendo como ela ficou (repetir o aviso não faz mal: vale o primeiro).
       if (!saved) {
         console.warn(`Execução ${executionId} já tinha sido encerrada por outro; o resultado não foi gravado`);
+        const closed = await one<{ status: string; error_message: string | null }>(db, 'SELECT status, error_message FROM executions WHERE id = $1', [executionId]);
+        if (closed?.status === 'canceled' || closed?.status === 'error') {
+          await publish(executionId, { type: 'finished', status: closed.status, error: closed.error_message ?? undefined, lastOutput: [] });
+        }
         return;
       }
       if (result.status === 'waiting') {
@@ -391,11 +397,15 @@ export function startWorker(deps: {
         return;
       }
       await publish(executionId, { type: 'finished', status: result.status, error: result.error?.message, lastOutput: result.lastOutput });
-      if (result.status === 'error') await runErrorWorkflow(claimed, result.error);
+      if (result.status === 'error') await runErrorWorkflow(claimed, result.error).catch((e) => console.error('Fluxo de erro não iniciado:', e));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Já encerrada por outro, ou pausada (a procura de abandonadas agenda a volta que faltou).
-      if (!(await failExecution(db, executionId, message, workerId))) return;
+      // O fim já foi gravado (por este worker, ou por outro que a encerrou) e algo falhou depois: fica só
+      // no log. Se ela ficou pausada sem o job da volta, a procura de execuções sem job agenda a volta.
+      if (!(await failExecution(db, executionId, message, workerId))) {
+        console.error(`Execução ${executionId}: falha depois de gravar o resultado:`, err);
+        return;
+      }
       await publish(executionId, { type: 'finished', status: 'error', error: message, lastOutput: [] });
       await runErrorWorkflow(claimed, { message }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
     } finally {
@@ -452,7 +462,14 @@ export function startWorker(deps: {
         await run(id, true);
       } else if (data.kind === 'resume') {
         // O tempo de espera acabou: volta para a fila sem dados de retomada (segue com os itens de antes).
-        const resumed = await one(db, `UPDATE executions SET status = 'queued', resume_data = NULL WHERE id = $1 AND status = 'waiting' RETURNING id`, [data.executionId]);
+        // Job de uma pausa que já acabou (retomada antes da hora, ou outra pausa depois dela) não faz nada.
+        const resumed = await one(
+          db,
+          `UPDATE executions SET status = 'queued', resume_data = NULL
+           WHERE id = $1 AND status = 'waiting' AND ($2::double precision IS NULL OR abs(extract(epoch FROM wait_till) * 1000 - $2) < 1)
+           RETURNING id`,
+          [data.executionId, data.at ?? null],
+        );
         if (resumed) await run(data.executionId);
       } else if (data.kind === 'cleanup' && config.executionRetentionDays > 0) {
         const removed = await cleanupOldExecutions(db, config.executionRetentionDays);
@@ -516,16 +533,19 @@ export function startWorker(deps: {
   };
 
   /**
-   * Execução que perdeu o job: na fila sem job para rodá-la (o job não chegou a ser criado, ou o Redis o
-   * perdeu) volta para a fila; pausada com a hora de voltar vencida e sem o job da volta, volta na hora.
-   * Sem isto, ela ficaria parada para sempre (e, com "Pular este horário", travaria o agendamento). Só o
-   * que aparecer assim em duas procuras seguidas, para não pegar quem está no meio da passagem para a fila.
+   * Execução que perdeu o job. Na fila sem job para rodá-la: se nunca começou, quem a criou não conseguiu
+   * pô-la na fila (e recebeu o erro, ou caiu no meio), então vira erro em vez de rodar depois de quem pediu
+   * já ter tentado de novo; se já tinha rodado e voltou de uma pausa (webhook ou formulário), volta para a
+   * fila, porque os dados da retomada já foram aceitos. Pausada com a hora de voltar vencida e sem o job da
+   * volta: volta na hora. Sem isto, ela ficaria parada para sempre (e, com "Pular este horário", travaria o
+   * agendamento). Só o que aparecer assim em duas procuras seguidas, para não pegar quem está no meio da
+   * passagem para a fila.
    */
   let orphanSuspects = new Set<string>();
   const sweepOrphans = async () => {
-    const rows = await many<{ id: string; status: 'queued' | 'waiting' }>(
+    const rows = await many<{ id: string; status: 'queued' | 'waiting'; started: boolean; wait_till: Date | null }>(
       db,
-      `SELECT id, status FROM executions
+      `SELECT id, status, started_at IS NOT NULL AS started, wait_till FROM executions
        WHERE (status = 'queued' AND created_at < now() - make_interval(secs => $1))
           OR (status = 'waiting' AND wait_till < now() - make_interval(secs => $1))`,
       [ORPHAN_GRACE_SECONDS],
@@ -540,10 +560,20 @@ export function startWorker(deps: {
     const confirmed = orphans.filter((r) => orphanSuspects.has(key(r)));
     orphanSuspects = new Set(orphans.map(key));
     for (const r of confirmed) {
-      console.warn(`Execução ${r.id} (${r.status === 'queued' ? 'na fila' : 'esperando'}) estava sem job e voltou para a fila`);
-      // Se o job aparecer de novo, não roda duas vezes: só um pega a execução (ela sai de 'queued' ou 'waiting').
-      if (r.status === 'queued') await queue.enqueueResumed(r.id);
-      else await queue.scheduleResume(r.id, Date.now());
+      if (r.status === 'waiting') {
+        console.warn(`Execução ${r.id} esperava sem o job da volta; volta agora`);
+        // Se o job aparecer de novo, não roda duas vezes: só um tira a execução de 'waiting'.
+        await queue.scheduleResume(r.id, r.wait_till!.getTime());
+      } else if (r.started) {
+        console.warn(`Execução ${r.id} voltou de uma pausa sem job na fila; volta para a fila`);
+        await queue.enqueueResumed(r.id);
+      } else {
+        console.warn(`Execução ${r.id} nunca entrou na fila; marcada como erro`);
+        await db.query(
+          `UPDATE executions SET status = 'error', started_at = now(), finished_at = now(), error_message = $2, error = $3 WHERE id = $1 AND status = 'queued'`,
+          [r.id, NOT_QUEUED_MESSAGE, JSON.stringify({ message: NOT_QUEUED_MESSAGE })],
+        );
+      }
     }
   };
 

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { parseKey, type Config } from '../src/config.js';
 import { createDb, migrate, one, type Db } from '../src/db/db.js';
+import { ExecutionEvents } from '../src/executions/events.js';
 import { createRedis, ExecutionQueue, QUEUE_NAME } from '../src/executions/queue.js';
 import { cleanupOldExecutions } from '../src/executions/store.js';
 import { startWorker, workerOptions, type WorkerHandle } from '../src/executions/worker.js';
@@ -94,14 +95,15 @@ describe.skipIf(!available)('Correções de quebra', () => {
   /** Execução gravada direto no banco, como se um worker estivesse no meio dela. */
   async function insertExecution(
     workflowId: string,
-    fields: { mode?: string; status: string; workerId?: string | null; parentId?: string; daysAgo?: number },
+    fields: { mode?: string; status: string; workerId?: string | null; parentId?: string; daysAgo?: number; notStarted?: boolean },
   ): Promise<string> {
     const row = await one<{ id: string }>(
       db,
       `INSERT INTO executions (workflow_id, mode, status, definition, worker_id, parent_execution_id, created_at, started_at)
-       SELECT id, $2, $3, definition, $4, $5, now() - make_interval(days => $6), now() - make_interval(days => $6) FROM workflows WHERE id = $1
+       SELECT id, $2, $3, definition, $4, $5, now() - make_interval(days => $6), CASE WHEN NOT $7 THEN now() - make_interval(days => $6) END
+       FROM workflows WHERE id = $1
        RETURNING id`,
-      [workflowId, fields.mode ?? 'manual', fields.status, fields.workerId ?? null, fields.parentId ?? null, fields.daysAgo ?? 0],
+      [workflowId, fields.mode ?? 'manual', fields.status, fields.workerId ?? null, fields.parentId ?? null, fields.daysAgo ?? 0, fields.notStarted ?? false],
     );
     return row!.id;
   }
@@ -238,9 +240,13 @@ describe.skipIf(!available)('Correções de quebra', () => {
     const sweeper = newWorker(200);
     try {
       const quick = await createFlow('Sem job', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }]));
-      // Ficou na fila, mas o job nunca chegou ao Redis (falha entre gravar e enfileirar).
-      const queued = await insertExecution(quick, { status: 'queued', daysAgo: 1 });
-      await until(async () => (await status(queued)).status === 'success', 'a execução sem job rodar');
+      // Gravada, mas nunca chegou à fila (quem a criou caiu antes de enfileirar): vira erro, não roda depois.
+      const neverQueued = await insertExecution(quick, { status: 'queued', daysAgo: 1, notStarted: true });
+      // Voltou de uma pausa (webhook aceito), mas o job da volta não chegou ao Redis: roda.
+      const resumed = await insertExecution(quick, { status: 'queued', daysAgo: 1 });
+      await until(async () => (await status(resumed)).status === 'success', 'a execução retomada sem job rodar');
+      await until(async () => (await status(neverQueued)).status === 'error', 'a execução que nunca entrou na fila virar erro');
+      expect(await status(neverQueued)).toEqual({ status: 'error', error_message: 'Execução interrompida: não chegou a entrar na fila' });
 
       const paused = await createFlow(
         'Espera sem volta',
@@ -255,7 +261,8 @@ describe.skipIf(!available)('Correções de quebra', () => {
       const { executionId } = (await call(admin, 'POST', `/api/workflows/${paused}/run`, {})).body;
       await until(async () => (await status(executionId)).status === 'waiting', 'a execução pausar');
       // O job da volta sumiu e a hora já passou (ex.: a volta falhou com o Postgres fora do ar).
-      await queue.cancelResume(executionId);
+      const { wait_till } = (await one<{ wait_till: Date }>(db, 'SELECT wait_till FROM executions WHERE id = $1', [executionId]))!;
+      await queue.cancelResume(executionId, wait_till);
       await db.query(`UPDATE executions SET wait_till = now() - interval '10 minutes' WHERE id = $1`, [executionId]);
       await until(async () => (await status(executionId)).status === 'success', 'a execução pausada voltar');
 
@@ -273,10 +280,27 @@ describe.skipIf(!available)('Correções de quebra', () => {
     const wf = await createFlow('Sem worker', flow([schedule]));
     const parent = await insertExecution(wf, { status: 'running', workerId: 'worker-sumido' });
     const child = await insertExecution(wf, { mode: 'subworkflow', status: 'running', workerId: 'worker-sumido', parentId: parent });
-    const res = await call(admin, 'POST', `/api/executions/${parent}/cancel`);
-    expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(await status(parent)).toEqual({ status: 'canceled', error_message: 'Cancelada; o worker que a rodava tinha parado' });
-    expect((await status(child)).status).toBe('canceled');
+    // Quem chamou por webhook e espera a resposta fica sabendo do cancelamento (o worker parado não avisaria).
+    const listener = createRedis(REDIS_URL);
+    const events = new ExecutionEvents(listener);
+    try {
+      const sub = await events.subscribe(parent);
+      const res = await call(admin, 'POST', `/api/executions/${parent}/cancel`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(await sub.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'canceled' });
+      await sub.close();
+      expect(await status(parent)).toEqual({ status: 'canceled', error_message: 'Cancelada; o worker que a rodava tinha parado' });
+      expect((await status(child)).status).toBe('canceled');
+
+      // Na fila: o worker não vai pegá-la, então o aviso também sai do cancelamento.
+      const queued = await insertExecution(wf, { status: 'queued', notStarted: true });
+      const subQueued = await events.subscribe(queued);
+      expect((await call(admin, 'POST', `/api/executions/${queued}/cancel`)).status).toBe(200);
+      expect(await subQueued.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'canceled' });
+      await subQueued.close();
+    } finally {
+      listener.disconnect();
+    }
 
     // Execução de um worker vivo: só pede o cancelamento, quem roda é que encerra.
     const alive = await insertExecution(wf, { status: 'running', workerId: 'outro-worker' });
@@ -286,6 +310,78 @@ describe.skipIf(!available)('Correções de quebra', () => {
 
     // O worker_id é interno: não aparece na API.
     expect((await call(admin, 'GET', `/api/executions/${parent}`)).body).not.toHaveProperty('worker_id');
+  });
+
+  it('worker de outra máquina que caiu: a conexão parada há muito tempo não conta como viva', async () => {
+    const probe = new ExecutionQueue(redis);
+    // Como o CLIENT LIST mostra: a conexão de uma máquina que caiu sem avisar fica na lista, parada.
+    probe.queue.getWorkers = async () => [
+      { rawname: 'bull:x:w:caiu', idle: '900' },
+      { rawname: 'bull:x:w:ativo', idle: '2' },
+      { rawname: 'bull:x:w:ocupado', idle: '900' },
+    ];
+    await redis.set('sa:worker:ocupado', '1', 'PX', 60_000); // todas as vagas ocupadas, mas o aviso de vida em dia
+    try {
+      const live = await probe.liveWorkers(['caiu', 'ativo', 'ocupado', 'sumido']);
+      expect([...live!.ids].sort()).toEqual(['ativo', 'ocupado']);
+    } finally {
+      await redis.del('sa:worker:ocupado');
+      await probe.close();
+    }
+  });
+
+  it('execução que não chegou à fila vira erro na hora (quem pediu recebe o erro e pode tentar de novo)', async () => {
+    const wf = await createFlow('Redis fora', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }]));
+    const original = queue.enqueueRun;
+    queue.enqueueRun = async () => {
+      throw new Error('Redis fora do ar');
+    };
+    try {
+      expect((await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).status).toBe(500);
+    } finally {
+      queue.enqueueRun = original;
+    }
+    const row = await one<{ status: string; error_message: string }>(db, 'SELECT status, error_message FROM executions WHERE workflow_id = $1', [wf]);
+    expect(row).toEqual({ status: 'error', error_message: 'Não foi possível pôr a execução na fila: Redis fora do ar' });
+  });
+
+  it('duas esperas seguidas: a segunda pausa tem o seu job da volta, e o job de uma pausa antiga não faz nada', async () => {
+    const wf = await createFlow(
+      'Duas esperas',
+      flow(
+        [
+          { id: 't', name: 'Início', type: 'manualTrigger' },
+          { id: 'a', name: 'Espera 1', type: 'wait', parameters: { resume: 'timeInterval', amount: 2, unit: 'hours' } },
+          { id: 'b', name: 'Espera 2', type: 'wait', parameters: { resume: 'timeInterval', amount: 3, unit: 'hours' } },
+        ],
+        [
+          ['t', 'a'],
+          ['a', 'b'],
+        ],
+      ),
+    );
+    const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
+    const waitTill = async () => (await one<{ status: string; wait_till: Date | null }>(db, 'SELECT status, wait_till FROM executions WHERE id = $1', [executionId]))!;
+    const first = await until(async () => {
+      const r = await waitTill();
+      return r.status === 'waiting' && r.wait_till;
+    }, 'a primeira pausa');
+    // A volta da primeira pausa roda; a execução chega à segunda espera dentro desse mesmo job.
+    await (await queue.queue.getJob(`resume-${executionId}-${first.getTime()}`))!.promote();
+    const second = await until(async () => {
+      const r = await waitTill();
+      return r.status === 'waiting' && r.wait_till && r.wait_till.getTime() !== first.getTime() && r.wait_till;
+    }, 'a segunda pausa');
+    const job = await until(() => queue.queue.getJob(`resume-${executionId}-${second.getTime()}`), 'o job da volta da segunda pausa');
+    expect(await job.getState()).toBe('delayed');
+
+    // Um job que sobrou da primeira pausa (hora antiga) não tira a execução da segunda espera.
+    const stale = await queue.queue.add('resume', { kind: 'resume', executionId, at: first.getTime() });
+    await until(async () => (await stale.getState()) === 'completed', 'o job antigo rodar');
+    expect((await waitTill()).status).toBe('waiting');
+
+    await job.promote();
+    await until(async () => (await waitTill()).status === 'success', 'a execução terminar');
   });
 
   // ---------- Q4: limpeza em lotes ----------
@@ -353,7 +449,12 @@ describe.skipIf(!available)('Correções de quebra', () => {
     await Promise.all([queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both }), queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both })]);
     await until(async () => (await scheduledRuns(both)).length === 1, 'um dos dois horários rodar');
     // A execução agendada nasce rodando, já com o worker: se ele parar, a procura de abandonadas a acha.
-    expect(await one(db, `SELECT status, worker_id IS NOT NULL AS owned FROM executions WHERE workflow_id = $1`, [both])).toEqual({ status: 'running', owned: true });
+    // (gravada já rodando: começou no mesmo comando que a criou, sem passar pela fila)
+    expect(await one(db, `SELECT status, worker_id IS NOT NULL AS owned, started_at = created_at AS born_running FROM executions WHERE workflow_id = $1`, [both])).toEqual({
+      status: 'running',
+      owned: true,
+      born_running: true,
+    });
     await new Promise((r) => setTimeout(r, 500));
     expect(await scheduledRuns(both)).toHaveLength(1);
     await until(async () => (await scheduledRuns(both)).join() === 'success', 'a execução terminar');

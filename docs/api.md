@@ -1038,6 +1038,7 @@ Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o
 
 - 403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador
 - 404: o fluxo não existe ou está numa pasta sem acesso
+- 500: não foi possível pôr a execução na fila (Redis fora do ar); ela fica com status error
 
 ### POST /api/workflows/{id}/listen
 
@@ -1940,7 +1941,7 @@ curl -X POST "$INFO8N/api/executions/6add9343-6e56-49d2-b8ef-81a3a3021946/cancel
 
 **Exemplo de resposta**
 
-Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".
+Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado". Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.
 
 ```json
 {"ok": true}
@@ -1980,6 +1981,7 @@ executionId é a nova execução, com mode retry e retry_of apontando para a ori
 **Erros próprios**
 
 - 400: a execução ainda está em andamento
+- 500: não foi possível pôr a execução na fila (Redis fora do ar); a nova execução fica com status error
 
 ### GET /api/db-commands
 

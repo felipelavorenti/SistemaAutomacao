@@ -327,7 +327,11 @@ const GROUPS: ApiGroup[] = [
           },
         ],
         response: 'Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o resultado.',
-        errors: ['403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador', '404: o fluxo não existe ou está numa pasta sem acesso'],
+        errors: [
+          '403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador',
+          '404: o fluxo não existe ou está numa pasta sem acesso',
+          '500: não foi possível pôr a execução na fila (Redis fora do ar); ela fica com status error',
+        ],
       },
       {
         method: 'POST',
@@ -504,7 +508,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).',
         params: [id('da execução')],
         response:
-          'Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (servidor caiu e não voltou), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado".',
+          'Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado". Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.',
         errors: ['400: a execução já terminou'],
         audited: true,
       },
@@ -515,7 +519,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Roda de novo com a mesma definição e a mesma entrada.',
         params: [id('da execução')],
         response: 'executionId é a nova execução, com mode retry e retry_of apontando para a original.',
-        errors: ['400: a execução ainda está em andamento'],
+        errors: ['400: a execução ainda está em andamento', '500: não foi possível pôr a execução na fila (Redis fora do ar); a nova execução fica com status error'],
         audited: true,
       },
       {

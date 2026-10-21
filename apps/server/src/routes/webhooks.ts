@@ -25,7 +25,7 @@ import {
 import { one } from '../db/db.js';
 import type { ExecutionEvent, ExecutionEvents } from '../executions/events.js';
 import type { ExecutionQueue } from '../executions/queue.js';
-import { createExecution, encodeJson } from '../executions/store.js';
+import { createExecution, encodeJson, failQueued } from '../executions/store.js';
 import { nodeParams, type TriggerManager, type WebhookEntry } from '../triggers/manager.js';
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
@@ -238,9 +238,16 @@ export function webhookRoutes(deps: WebhookDeps) {
 
     /** Assina os avisos antes de pôr na fila, para não perder uma resposta rápida. */
     const start = async (executionId: string, listen: boolean) => {
-      const sub = listen ? await deps.events().subscribe(executionId) : null;
-      await deps.queue.enqueueRun(executionId);
-      return sub;
+      let sub: Awaited<ReturnType<ExecutionEvents['subscribe']>> | null = null;
+      try {
+        if (listen) sub = await deps.events().subscribe(executionId);
+        await deps.queue.enqueueRun(executionId);
+        return sub;
+      } catch (err) {
+        await sub?.close().catch(() => undefined);
+        await failQueued(deps.db, executionId, err);
+        throw err;
+      }
     };
 
     const createFrom = async (entry: WebhookEntry, item: Item, test: boolean): Promise<string> => {
@@ -253,7 +260,14 @@ export function webhookRoutes(deps: WebhookDeps) {
         input: [item],
         startNodeId: entry.node.id,
       });
-      if (test) await deps.triggers.testExecutionCreated(entry.workflowId, id);
+      if (test) {
+        try {
+          await deps.triggers.testExecutionCreated(entry.workflowId, id);
+        } catch (err) {
+          await failQueued(deps.db, id, err);
+          throw err;
+        }
+      }
       return id;
     };
 
@@ -378,9 +392,13 @@ export function webhookRoutes(deps: WebhookDeps) {
 
     /** Volta a execução pausada para a fila com os dados que chegaram; false se ela não está mais esperando. */
     const resume = async (id: string, data: ResumeData): Promise<boolean> => {
-      const row = await one(deps.db, `UPDATE executions SET status = 'queued', resume_data = $2 WHERE id = $1 AND status = 'waiting' RETURNING id`, [id, encodeJson(data)]);
+      const row = await one<{ wait_till: Date | null }>(
+        deps.db,
+        `UPDATE executions SET status = 'queued', resume_data = $2 WHERE id = $1 AND status = 'waiting' RETURNING wait_till`,
+        [id, encodeJson(data)],
+      );
       if (!row) return false;
-      await deps.queue.cancelResume(id);
+      await deps.queue.cancelResume(id, row.wait_till);
       return true;
     };
 

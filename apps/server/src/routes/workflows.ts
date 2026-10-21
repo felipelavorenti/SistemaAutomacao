@@ -6,7 +6,7 @@ import { ADMIN_ONLY_NODE_TYPES, convertN8nWorkflow, defaultRegistry, ExpressionS
 import { currentUser, type RouteDeps } from '../app.js';
 import { activatableTypes, isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
-import { createExecution } from '../executions/store.js';
+import { createExecution, enqueueOrFail } from '../executions/store.js';
 import { fixedReferences } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { canSeeClient, canSeeFolder, forbidden, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
@@ -571,7 +571,7 @@ export const workflowRoutes =
         input: (b.input as Item[] | undefined) ?? null,
         startNodeId: b.startNodeId && definition.nodes.some((n) => n.id === b.startNodeId) ? b.startNodeId : null,
       });
-      await queue.enqueueRun(executionId);
+      await enqueueOrFail(db, queue, executionId);
       return { executionId };
     });
 

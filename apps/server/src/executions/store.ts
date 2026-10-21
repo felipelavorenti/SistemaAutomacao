@@ -255,6 +255,32 @@ export async function failExecution(db: Queryable, id: string, message: string, 
   return (res.rowCount ?? 0) > 0;
 }
 
+/**
+ * Execução que não chegou à fila (o Redis falhou ao enfileirar): vira erro. Quem pediu recebeu o erro e
+ * pode tentar de novo; sem isto, ela ficaria Na fila, e a procura de execuções sem job a encerraria
+ * minutos depois. Só a que ainda está na fila: se o job chegou ao Redis apesar do erro, ele não roda.
+ */
+export async function failQueued(db: Queryable, id: string, err: unknown): Promise<void> {
+  const message = `Não foi possível pôr a execução na fila: ${err instanceof Error ? err.message : String(err)}`;
+  await db
+    .query(
+      `UPDATE executions SET status = 'error', started_at = coalesce(started_at, now()), finished_at = now(), error_message = $2, error = $3
+       WHERE id = $1 AND status = 'queued'`,
+      [id, message, JSON.stringify({ message })],
+    )
+    .catch((e) => console.error(`Execução ${id} não foi marcada como erro:`, e));
+}
+
+/** Põe na fila uma execução recém-criada; se o Redis falhar, ela vira erro (failQueued) e o erro segue. */
+export async function enqueueOrFail(db: Queryable, queue: { enqueueRun(id: string): Promise<void> }, id: string): Promise<void> {
+  try {
+    await queue.enqueueRun(id);
+  } catch (err) {
+    await failQueued(db, id, err);
+    throw err;
+  }
+}
+
 /** Quantas linhas cada comando da limpeza apaga: tudo de uma vez seguraria o banco com meses de histórico. */
 export const CLEANUP_BATCH = 5000;
 

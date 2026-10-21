@@ -11,12 +11,19 @@ export type JobData =
   | { kind: 'run'; executionId: string }
   | { kind: 'scheduled'; workflowId: string; once?: number }
   | { kind: 'cleanup' }
-  /** Execução pausada cujo tempo de espera acabou. */
-  | { kind: 'resume'; executionId: string };
+  /** Execução pausada cujo tempo de espera acabou. `at`: a hora marcada (wait_till) da pausa deste job. */
+  | { kind: 'resume'; executionId: string; at?: number };
 
 /** Quanto tempo o aviso de vida de um worker vale no Redis sem ser renovado. */
 export const HEARTBEAT_TTL_MS = 60_000;
+/**
+ * Conexão da fila parada há mais que isto não prova que o worker está vivo: a de uma máquina que caiu
+ * (sem avisar o Redis) fica na lista por uns 15 minutos. Com o aviso de vida em dia, o worker conta como
+ * vivo mesmo assim (com todas as vagas ocupadas, a conexão da fila fica parada).
+ */
+const STALE_CONNECTION_SECONDS = 300;
 const workerKey = (workerId: string) => `sa:worker:${workerId}`;
+const resumeJobId = (executionId: string, at: number) => `resume-${executionId}-${at}`;
 
 export interface LiveWorkers {
   ids: Set<string>;
@@ -77,18 +84,31 @@ export class ExecutionQueue {
     return next;
   }
 
-  /** Agenda a volta de uma execução pausada (Wait por tempo, ou o limite de espera do webhook e do formulário). */
+  /**
+   * Agenda a volta de uma execução pausada (Wait por tempo, ou o limite de espera do webhook e do
+   * formulário) para `at`, o wait_till da pausa. Cada pausa tem o seu job: a pausa seguinte começa
+   * dentro do job da anterior, que ainda está rodando, e a fila ignora um job novo com o mesmo ID.
+   */
   async scheduleResume(executionId: string, at: number): Promise<void> {
-    await this.cancelResume(executionId);
-    await this.queue.add(
-      'resume',
-      { kind: 'resume', executionId },
-      { jobId: `resume-${executionId}`, delay: Math.max(0, at - Date.now()), removeOnComplete: true, removeOnFail: 1000 },
-    );
+    const jobId = resumeJobId(executionId, at);
+    // Sobra de uma tentativa que falhou com o mesmo horário: sem tirar, a fila ignoraria o job novo.
+    await this.removeOnce(jobId);
+    await this.queue.add('resume', { kind: 'resume', executionId, at }, { jobId, delay: Math.max(0, at - Date.now()), removeOnComplete: true, removeOnFail: 1000 });
   }
 
-  async cancelResume(executionId: string): Promise<void> {
+  /** Tira o job da volta de uma pausa que acabou antes da hora (webhook, formulário, cancelamento). */
+  async cancelResume(executionId: string, waitTill: Date | string | null): Promise<void> {
+    if (waitTill) await this.removeOnce(resumeJobId(executionId, new Date(waitTill).getTime()));
+    // Job de uma versão anterior do Info8n, com um ID só por execução.
     await this.removeOnce(`resume-${executionId}`);
+  }
+
+  /**
+   * Avisa quem chamou a execução por HTTP (webhook, formulário) que ela terminou, quando quem a encerrou
+   * não foi o worker (cancelada na fila, ou cancelada com o worker parado).
+   */
+  async publishFinished(executionId: string, status: 'canceled' | 'error', error: string): Promise<void> {
+    await this.redis.publish(executionChannel(executionId), JSON.stringify({ type: 'finished', status, error, lastOutput: [] }));
   }
 
   async requestCancel(executionId: string): Promise<void> {
@@ -106,27 +126,32 @@ export class ExecutionQueue {
   }
 
   /**
-   * Quais destes workers estão vivos: com o aviso de vida no Redis, ou com a conexão da fila aberta
-   * (`bull:<fila>:w:<id>`). A conexão sozinha não basta: a fila a fecha antes de o worker terminar as
-   * execuções ao desligar, e ela cai por instantes quando reconecta. `unnamed`: há worker sem nome
-   * (versão anterior do Info8n), que roda execuções sem worker_id. Null quando o Redis não lista as
-   * conexões; aí não dá para saber quem está vivo.
+   * Quais destes workers estão vivos: com o aviso de vida no Redis, ou com a conexão da fila
+   * (`bull:<fila>:w:<id>`) aberta e usada há pouco. A conexão sozinha não basta: a fila a fecha antes de
+   * o worker terminar as execuções ao desligar, ela cai por instantes quando reconecta, e a de uma
+   * máquina que caiu sem avisar fica na lista por minutos. `unnamed`: há worker sem nome (versão anterior
+   * do Info8n), que roda execuções sem worker_id. Null quando o Redis não lista as conexões; aí não dá
+   * para saber quem está vivo.
    */
   async liveWorkers(candidates: Iterable<string | null>): Promise<LiveWorkers | null> {
-    const ids = new Set<string>();
+    const connected = new Map<string, number>();
     let unnamed = false;
     for (const client of await this.queue.getWorkers()) {
       const name = client.rawname;
       if (typeof name !== 'string') return null;
       const at = name.indexOf(':w:');
       if (at === -1) unnamed = true;
-      else ids.add(name.slice(at + 3));
+      else connected.set(name.slice(at + 3), Number(client.idle));
     }
-    const asked = [...new Set([...candidates].filter((id): id is string => !!id && !ids.has(id)))];
-    if (asked.length) {
-      const beats = await this.redis.mget(asked.map(workerKey));
-      asked.forEach((id, i) => beats[i] !== null && ids.add(id));
-    }
+    const asked = [...new Set([...candidates].filter((id): id is string => !!id))];
+    const beats = asked.length ? await this.redis.mget(asked.map(workerKey)) : [];
+    const ids = new Set<string>();
+    asked.forEach((id, i) => {
+      const idle = connected.get(id);
+      // Sem o tempo parado na lista (Redis diferente), a conexão aberta vale.
+      const recent = idle !== undefined && !(idle >= STALE_CONNECTION_SECONDS);
+      if (beats[i] !== null || recent) ids.add(id);
+    });
     return { ids, unnamed };
   }
 
