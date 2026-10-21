@@ -10,6 +10,11 @@ services:
       TRUST_PROXY: "true"
       PUBLIC_URL: https://${INFO8N_HOST:-localhost}
 
+  worker:
+    environment:
+      # Endereço que vai nos links das execuções e na URL de retomada do Wait.
+      PUBLIC_URL: https://${INFO8N_HOST:-localhost}
+
   https:
     image: caddy:2
     restart: unless-stopped

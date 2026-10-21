@@ -621,6 +621,7 @@ function SettingsModal({
   onSave: (settings: WorkflowSettings) => void;
 }) {
   const [errorWorkflowId, setErrorWorkflowId] = useState(settings.errorWorkflowId ?? '');
+  const [skipIfRunning, setSkipIfRunning] = useState(settings.skipIfRunning === true);
   return (
     <Modal title="Configurações do fluxo" onClose={onClose}>
       <Field
@@ -636,10 +637,22 @@ function SettingsModal({
           ))}
         </select>
       </Field>
+      <Field
+        label="Se a execução agendada anterior ainda não terminou"
+        hint="Vale para o gatilho Schedule. Pular evita duas execuções agendadas deste fluxo ao mesmo tempo; o horário pulado não roda depois."
+      >
+        <select value={skipIfRunning ? 'skip' : 'run'} disabled={readOnly} onChange={(e) => setSkipIfRunning(e.target.value === 'skip')}>
+          <option value="run">Rodar mesmo assim</option>
+          <option value="skip">Pular este horário</option>
+        </select>
+      </Field>
       {!readOnly && (
         <div className="modal-actions">
           <button onClick={onClose}>Cancelar</button>
-          <button className="primary" onClick={() => onSave({ ...settings, errorWorkflowId: errorWorkflowId || undefined })}>
+          <button
+            className="primary"
+            onClick={() => onSave({ ...settings, errorWorkflowId: errorWorkflowId || undefined, skipIfRunning: skipIfRunning || undefined })}
+          >
             Aplicar
           </button>
         </div>

@@ -32,9 +32,11 @@ await app.listen({ port: config.port, host: '0.0.0.0' });
 await triggers.start();
 
 const shutdown = async () => {
+  // Primeiro o worker: as execuções em andamento terminam como "interrompidas" e quem espera a resposta
+  // por HTTP (webhook, formulário) recebe o aviso antes de o servidor parar de responder.
+  await worker?.close();
   await app.close();
   await triggers.close();
-  await worker?.close();
   await queue.close();
   redis.disconnect();
   await db.end();

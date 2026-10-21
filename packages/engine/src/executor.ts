@@ -1,6 +1,6 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
 import type { ApiEndpointData } from './catalog.js';
-import { DatabasePools } from './database/drivers.js';
+import { DatabasePools, type DatabaseLease } from './database/drivers.js';
 import type { CommandLog, ConnectionData, DatabaseCommandLog, DatabaseSession, DataTableStore, FileData, NodeExecuteContext, NodeType, SubworkflowResult } from './node-types.js';
 import { MemoryDataTableStore } from './data-tables.js';
 
@@ -347,6 +347,8 @@ async function runNode(
     });
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    // Pools de banco usados nesta tentativa: devolvidos no fim, para a troca da conexão não fechar um em uso.
+    const leases = new Leases();
     try {
       const output = await withAbort(
         type.execute({
@@ -366,7 +368,7 @@ async function runNode(
             if (!options.getFile) throw new NodeOperationError('Arquivos não estão disponíveis nesta execução');
             return options.getFile(id);
           },
-          database: (connectionId) => openDatabase(connectionId, node, options, pools),
+          database: (connectionId) => openDatabase(connectionId, node, options, pools, leases),
           getApiEndpoint: async (erpClientId, endpointId) => {
             if (!options.getApiEndpoint) throw new NodeOperationError('O catálogo de APIs não está disponível nesta execução');
             return options.getApiEndpoint(erpClientId, endpointId);
@@ -411,6 +413,7 @@ async function runNode(
       lastError = toNodeError(err, timeout.aborted ? timeoutMs : undefined);
     } finally {
       scope.release();
+      leases.releaseAll();
     }
     if (attempt < maxTries) await sleep(wait * attempt, options.signal);
   }
@@ -422,10 +425,34 @@ async function runNode(
   return done({ status: 'error', output: [], tries: maxTries, error: lastError });
 }
 
-async function openDatabase(connectionId: string, node: NodeInstance, options: ExecuteOptions, pools: DatabasePools): Promise<DatabaseSession> {
+/** Pools emprestados numa tentativa de um nó. Um nó que passou do tempo e pede banco depois do fim devolve na hora. */
+class Leases {
+  private list: DatabaseLease[] = [];
+  private done = false;
+
+  add(lease: DatabaseLease): void {
+    if (this.done) lease.release();
+    else this.list.push(lease);
+  }
+
+  releaseAll(): void {
+    this.done = true;
+    for (const lease of this.list.splice(0)) lease.release();
+  }
+}
+
+async function openDatabase(
+  connectionId: string,
+  node: NodeInstance,
+  options: ExecuteOptions,
+  pools: DatabasePools,
+  leases: Leases,
+): Promise<DatabaseSession> {
   if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
   const connection = await options.getConnection(connectionId);
-  const client = pools.get(connection);
+  const lease = pools.acquire(connection);
+  leases.add(lease);
+  const { client } = lease;
 
   const logged = async <T extends { rows: unknown[]; rowsAffected: number | null }>(
     operation: DatabaseCommandLog['operation'],

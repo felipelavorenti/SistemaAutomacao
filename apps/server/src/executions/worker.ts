@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Worker, type Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import {
@@ -7,6 +8,7 @@ import {
   NodeOperationError,
   type CommandLog,
   type DatabaseCommandLog,
+  type ExecutionResult,
   type JsonValue,
   type ConnectionData,
   type ExecuteOptions,
@@ -16,14 +18,14 @@ import {
   type WorkflowDefinition,
 } from '@sa/engine';
 import type { Config } from '../config.js';
-import { one, type Db } from '../db/db.js';
+import { many, one, transaction, type Db } from '../db/db.js';
 import { loadApiEndpoint } from '../lib/catalog.js';
 import { decryptJson } from '../lib/crypto.js';
 import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
-import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, QUEUE_NAME, type JobData } from './queue.js';
-import { createExecution, decodeResume, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
+import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, isAbandoned, QUEUE_NAME, type JobData } from './queue.js';
+import { cleanupOldExecutions, createExecution, decodeResume, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
 /** Limites do que fica guardado de cada comando SQL. */
@@ -54,13 +56,26 @@ const ERROR_WORKFLOW_MODES = new Set<ExecutionMode>(['schedule', 'webhook', 'tri
 const MAX_SUBWORKFLOW_DEPTH = 10;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** De quanto em quanto tempo o worker procura execuções abandonadas por um worker que parou. */
+const SWEEP_INTERVAL_MS = 60_000;
+/**
+ * Tempo sem renovar a trava do job até a fila achar que o worker travou. Renovada a cada metade
+ * disso; um nó que segura o processador por menos que isso não derruba mais a execução.
+ */
+const LOCK_DURATION_MS = 5 * 60_000;
+const ABANDONED_MESSAGE = 'Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela';
+const SHUTDOWN_MESSAGE = 'Execução interrompida porque o servidor foi desligado';
+
 export interface WorkerHandle {
   close(): Promise<void>;
 }
 
 export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscriber: Redis }): WorkerHandle {
   const { db, config, redis, subscriber } = deps;
+  /** Nome deste worker no Redis; gravado em cada execução que ele pega. */
+  const workerId = randomUUID();
   const running = new Map<string, AbortController>();
+  let stopping = false;
   const pools = new DatabasePools();
   const dataTables = new PgDataTableStore(db);
   const queue = new ExecutionQueue(redis);
@@ -223,6 +238,10 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
     };
   };
 
+  /** Desligando o servidor, a execução abortada vira erro (e não "cancelada"), e o fluxo de erro roda. */
+  const interruptedOnShutdown = (result: ExecutionResult): ExecutionResult =>
+    stopping && result.status === 'canceled' ? { ...result, status: 'error', error: { message: SHUTDOWN_MESSAGE } } : result;
+
   /**
    * Roda um subfluxo dentro da execução de quem chamou (sem passar pela fila,
    * para não disputar vaga com o próprio pai) e registra a execução filha.
@@ -254,6 +273,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
         input: items,
         parentExecutionId: parentId,
         status: 'running',
+        workerId,
       });
       const controller = new AbortController();
       const onParentAbort = () => controller.abort();
@@ -273,7 +293,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           publicUrl,
           // O subfluxo roda dentro do worker de quem chamou: não pode pausar.
           canWait: false,
-        });
+        }).then(interruptedOnShutdown);
         // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
         const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
         await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepAs === 'manual' || keepAs === 'retry');
@@ -291,9 +311,9 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
   const run = async (executionId: string) => {
     const claimed = await one<ExecutionRow>(
       db,
-      `UPDATE executions SET status = 'running', started_at = coalesce(started_at, now()) WHERE id = $1 AND status = 'queued'
+      `UPDATE executions SET status = 'running', started_at = coalesce(started_at, now()), worker_id = $2 WHERE id = $1 AND status = 'queued'
        RETURNING id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data`,
-      [executionId],
+      [executionId, workerId],
     );
     if (!claimed) return; // cancelada antes de começar, ou já processada
 
@@ -324,7 +344,7 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           responded = true;
           void publish(executionId, { type: 'response', response });
         },
-      });
+      }).then(interruptedOnShutdown);
       const keepFiles = claimed.mode === 'manual' || claimed.mode === 'retry';
       await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), keepFiles);
       if (result.status === 'waiting') {
@@ -362,34 +382,121 @@ export function startWorker(deps: { db: Db; config: Config; redis: Redis; subscr
           await db.query('UPDATE workflows SET active = false, updated_at = now() WHERE id = $1', [wf.id]);
           await audit(db, { userId: null, action: 'deactivate', entityType: 'workflow', entityId: wf.id, entityName: wf.name, after: { reason: 'execução única agendada' } });
         }
-        const id = await createExecution(db, {
+        const args = {
           workflowId: wf.id,
           workflowVersion: wf.version,
-          mode: 'schedule',
+          mode: 'schedule' as const,
           triggeredBy: null,
           definition: wf.definition,
           startNodeId: wf.definition.nodes.find((n) => n.type === 'scheduleTrigger' && !n.disabled)?.id ?? null,
-        });
+        };
+        const id = wf.definition.settings?.skipIfRunning
+          ? await transaction(db, async (client) => {
+              // Trava por fluxo: dois horários pegos ao mesmo tempo não passam juntos pela conferência.
+              await client.query('SELECT pg_advisory_xact_lock(1105, hashtext($1))', [wf.id]);
+              const previous = await one(
+                client,
+                `SELECT id FROM executions WHERE workflow_id = $1 AND mode = 'schedule' AND status IN ('queued', 'running', 'waiting') LIMIT 1`,
+                [wf.id],
+              );
+              return previous ? null : createExecution(client, args);
+            })
+          : await createExecution(db, args);
+        if (!id) {
+          console.log(`Agendamento do fluxo "${wf.name}" pulado: a execução agendada anterior ainda não terminou`);
+          return;
+        }
         await run(id);
       } else if (data.kind === 'resume') {
         // O tempo de espera acabou: volta para a fila sem dados de retomada (segue com os itens de antes).
         const resumed = await one(db, `UPDATE executions SET status = 'queued', resume_data = NULL WHERE id = $1 AND status = 'waiting' RETURNING id`, [data.executionId]);
         if (resumed) await run(data.executionId);
       } else if (data.kind === 'cleanup' && config.executionRetentionDays > 0) {
-        await db.query(`DELETE FROM executions WHERE created_at < now() - make_interval(days => $1)`, [config.executionRetentionDays]);
-        await db.query(`DELETE FROM db_commands WHERE at < now() - make_interval(days => $1)`, [config.executionRetentionDays]);
+        const removed = await cleanupOldExecutions(db, config.executionRetentionDays);
+        if (removed.executions || removed.dbCommands) {
+          console.log(`Limpeza: ${removed.executions} execuções e ${removed.dbCommands} comandos SQL apagados`);
+        }
       }
     },
-    { connection: redis, concurrency: config.workerConcurrency, maxStalledCount: 0 },
+    // Job travado (o worker parou de renovar a trava) vai direto para falha, sem rodar de novo.
+    { connection: redis, concurrency: config.workerConcurrency, maxStalledCount: 0, lockDuration: LOCK_DURATION_MS, name: workerId },
   );
 
-  // Se o worker cair no meio, o job é marcado como travado e a execução vira erro.
+  /** Marca como erro as execuções abandonadas e roda o fluxo de erro de cada uma (agendadas, webhooks, gatilhos). */
+  const failAbandoned = async (ids: string[]) => {
+    if (!ids.length) return;
+    const failed = await many<ExecutionRow>(
+      db,
+      `UPDATE executions SET status = 'error', finished_at = now(), error_message = $2, error = $3
+       WHERE id = ANY($1::uuid[]) AND status = 'running'
+       RETURNING id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, NULL AS resume_state, NULL AS resume_data`,
+      [ids, ABANDONED_MESSAGE, JSON.stringify({ message: ABANDONED_MESSAGE })],
+    );
+    for (const row of failed) {
+      console.warn(`Execução ${row.id} estava abandonada e foi marcada como erro`);
+      await publish(row.id, { type: 'finished', status: 'error', error: ABANDONED_MESSAGE, lastOutput: [] });
+      await runErrorWorkflow(row, { message: ABANDONED_MESSAGE }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
+    }
+  };
+
+  /**
+   * Procura execuções 'running' que ninguém está rodando: o worker delas não está mais conectado ao Redis
+   * (reinício, queda), ou é este worker e ela já saiu da lista do que ele roda (falha ao gravar o fim).
+   * Na subida e no aviso de falha de um job, o worker que sumiu basta. Na procura de cada minuto, só vira
+   * erro o que aparecer abandonado duas vezes seguidas, para uma queda rápida do Redis não derrubar nada.
+   */
+  let suspects = new Set<string>();
+  let sweeping: Promise<void> | null = null;
+  const sweep = (immediate: boolean): Promise<void> => {
+    sweeping ??= (async () => {
+      const rows = await many<{ id: string; worker_id: string | null }>(db, `SELECT id, worker_id FROM executions WHERE status = 'running'`);
+      if (!rows.length) {
+        suspects = new Set();
+        return;
+      }
+      const live = await queue.liveWorkers();
+      if (!live) return;
+      live.ids.add(workerId);
+      const key = (r: { id: string; worker_id: string | null }) => `${r.id}:${r.worker_id ?? ''}`;
+      const ownLost = (r: { id: string; worker_id: string | null }) => r.worker_id === workerId && !running.has(r.id);
+      const abandoned = rows.filter((r) => isAbandoned(r.worker_id, live) || ownLost(r));
+      const confirmed = abandoned.filter((r) => (immediate && !ownLost(r)) || suspects.has(key(r)));
+      suspects = new Set(abandoned.map(key));
+      await failAbandoned(confirmed.map((r) => r.id));
+    })()
+      .catch((err) => console.error('Procura de execuções abandonadas falhou:', err))
+      .finally(() => {
+        sweeping = null;
+      });
+    return sweeping;
+  };
+
+  void worker
+    .waitUntilReady()
+    .then(() => sweep(true))
+    .catch(() => undefined);
+  const sweepTimer = setInterval(() => void sweep(false), SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
+
+  // Job que falhou (travado porque o worker parou, ou erro antes de começar a execução): execução que
+  // ficou na fila vira erro, e a procura acha a que ficou 'running' sem ninguém rodando.
   worker.on('failed', (job, err) => {
-    if (job?.data.kind === 'run') void failExecution(db, job.data.executionId, `Execução interrompida: ${err.message}`);
+    if (stopping) return;
+    const data = job?.data;
+    const done = data?.kind === 'run' || data?.kind === 'resume'
+      ? db.query(
+          `UPDATE executions SET status = 'error', finished_at = now(), started_at = coalesce(started_at, now()), error_message = $2, error = $3
+           WHERE id = $1 AND status = 'queued'`,
+          [data.executionId, `Execução interrompida: ${err.message}`, JSON.stringify({ message: `Execução interrompida: ${err.message}` })],
+        )
+      : Promise.resolve();
+    void done.then(() => sweep(true)).catch((e) => console.error('Falha do job não foi registrada:', e));
   });
 
   return {
     async close() {
+      stopping = true;
+      clearInterval(sweepTimer);
       for (const c of running.values()) c.abort();
       await worker.close();
       await queue.close();

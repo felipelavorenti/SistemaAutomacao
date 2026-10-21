@@ -14,6 +14,16 @@ export type JobData =
   /** Execução pausada cujo tempo de espera acabou. */
   | { kind: 'resume'; executionId: string };
 
+export interface LiveWorkers {
+  ids: Set<string>;
+  unnamed: boolean;
+}
+
+/** Execução 'running' que nenhum worker conectado está rodando (o worker parou ou o servidor reiniciou). */
+export function isAbandoned(workerId: string | null, live: LiveWorkers): boolean {
+  return workerId === null ? !live.unnamed : !live.ids.has(workerId);
+}
+
 export function createRedis(url: string): Redis {
   return new Redis(url, { maxRetriesPerRequest: null });
 }
@@ -76,6 +86,24 @@ export class ExecutionQueue {
 
   async requestCancel(executionId: string): Promise<void> {
     await this.redis.publish(CANCEL_CHANNEL, executionId);
+  }
+
+  /**
+   * Workers conectados ao Redis agora, pelo nome da conexão (`bull:<fila>:w:<id>`). `unnamed`: há worker
+   * sem nome (versão anterior do Info8n), que roda execuções sem worker_id. Null quando o Redis não
+   * lista as conexões; aí não dá para saber quem está vivo.
+   */
+  async liveWorkers(): Promise<LiveWorkers | null> {
+    const ids = new Set<string>();
+    let unnamed = false;
+    for (const client of await this.queue.getWorkers()) {
+      const name = client.rawname;
+      if (typeof name !== 'string') return null;
+      const at = name.indexOf(':w:');
+      if (at === -1) unnamed = true;
+      else ids.add(name.slice(at + 3));
+    }
+    return { ids, unnamed };
   }
 
   /** Cria, atualiza ou remove o agendamento de um fluxo. */

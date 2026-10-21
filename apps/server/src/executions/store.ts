@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gunzipSync, gzip, gzipSync } from 'node:zlib';
 import type { BinaryData, ExecutionResult, Item, JsonObject, JsonValue, NodeRun, ResumeData, ResumeState, WorkflowDefinition } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
+
+/** Compacta fora da thread principal: um log grande não segura o worker (nem a renovação do job na fila). */
+const gzipAsync = promisify(gzip);
 
 export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry' | 'webhook' | 'trigger' | 'error';
 
@@ -41,14 +45,16 @@ export async function createExecution(
     parentExecutionId?: string | null;
     /** Subfluxos já nascem rodando, dentro da execução de quem chamou. */
     status?: 'queued' | 'running';
+    /** Worker que roda a execução (subfluxos: o mesmo de quem chamou). */
+    workerId?: string | null;
     /** Gatilho de onde começa (webhook, formulário, Error Trigger…); sem ele, o primeiro gatilho do fluxo. */
     startNodeId?: string | null;
   },
 ): Promise<string> {
   const row = await one<{ id: string }>(
     db,
-    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id)
-     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10) RETURNING id`,
+    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id, worker_id)
+     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10, $11) RETURNING id`,
     [
       args.workflowId,
       args.workflowVersion,
@@ -60,6 +66,7 @@ export async function createExecution(
       args.parentExecutionId ?? null,
       args.status ?? 'queued',
       args.startNodeId ?? null,
+      args.workerId ?? null,
     ],
   );
   return row!.id;
@@ -170,7 +177,7 @@ export function stripBinaries(runs: NodeRun[], keepFiles: boolean): { runs: Node
 
 export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false): Promise<void> {
   const stripped = stripBinaries(result.runs, keepData && keepFiles);
-  const data = keepData ? gzipSync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
+  const data = keepData ? await gzipAsync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
   for (const file of stripped.files) {
     await db.query(
       `INSERT INTO execution_files (execution_id, ref, file_name, mime_type, size, content) VALUES ($1, $2, $3, $4, $5, $6)
@@ -238,6 +245,30 @@ export async function failExecution(db: Queryable, id: string, message: string):
      WHERE id = $1 AND status IN ('queued', 'running')`,
     [id, message, JSON.stringify({ message })],
   );
+}
+
+/** Quantas linhas cada comando da limpeza apaga: tudo de uma vez seguraria o banco com meses de histórico. */
+export const CLEANUP_BATCH = 5000;
+
+/**
+ * Apaga, em lotes, as execuções terminadas e os comandos SQL mais antigos que o prazo. Execuções na
+ * fila, rodando ou esperando ficam, mesmo antigas.
+ */
+export async function cleanupOldExecutions(db: Queryable, days: number, batch = CLEANUP_BATCH): Promise<{ executions: number; dbCommands: number }> {
+  const deleteAll = async (sql: string) => {
+    let total = 0;
+    for (;;) {
+      const res = await db.query(sql, [days, batch]);
+      total += res.rowCount ?? 0;
+      if ((res.rowCount ?? 0) < batch) return total;
+    }
+  };
+  const executions = await deleteAll(
+    `DELETE FROM executions WHERE id IN (
+       SELECT id FROM executions WHERE created_at < now() - make_interval(days => $1) AND status IN ('success', 'error', 'canceled') LIMIT $2)`,
+  );
+  const dbCommands = await deleteAll(`DELETE FROM db_commands WHERE id IN (SELECT id FROM db_commands WHERE at < now() - make_interval(days => $1) LIMIT $2)`);
+  return { executions, dbCommands };
 }
 
 export function decodeData(data: Buffer | null): { runs: NodeRun[] } | null {

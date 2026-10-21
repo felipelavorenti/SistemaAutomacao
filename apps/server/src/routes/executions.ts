@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { WorkflowDefinition } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
+import { isAbandoned } from '../executions/queue.js';
 import { createExecution, decodeData } from '../executions/store.js';
 import { audit } from '../lib/audit.js';
 import { canSeeFolder, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
@@ -35,6 +36,7 @@ interface ExecutionRow {
   wait_info: unknown;
   resume_state: Buffer | null;
   resume_data: Buffer | null;
+  worker_id: string | null;
 }
 
 export const executionRoutes =
@@ -127,7 +129,7 @@ export const executionRoutes =
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
       // O estado da pausa é interno (pode ter arquivos inteiros); a tela usa wait_till e wait_info.
-      const { data, resume_state: _state, resume_data: _resume, ...rest } = row;
+      const { data, resume_state: _state, resume_data: _resume, worker_id: _worker, ...rest } = row;
       // Subfluxos que esta execução chamou, só os que o usuário pode ver.
       const children = await many(
         db,
@@ -171,7 +173,21 @@ export const executionRoutes =
       if (row.status === 'queued') {
         await db.query(`UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada antes de começar' WHERE id = $1 AND status = 'queued'`, [id]);
       } else if (row.status === 'running') {
-        await queue.requestCancel(id);
+        // Ninguém está rodando (o worker parou): cancela na hora, com os subfluxos que ela chamou.
+        const live = await queue.liveWorkers().catch(() => null);
+        if (live && isAbandoned(row.worker_id, live)) {
+          await db.query(
+            `WITH RECURSIVE tree AS (
+               SELECT id FROM executions WHERE id = $1
+               UNION ALL SELECT e.id FROM executions e JOIN tree t ON e.parent_execution_id = t.id WHERE e.status = 'running'
+             )
+             UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada; o worker que a rodava tinha parado'
+             WHERE id IN (SELECT id FROM tree) AND status = 'running'`,
+            [id],
+          );
+        } else {
+          await queue.requestCancel(id);
+        }
       } else if (row.status === 'waiting') {
         await db.query(
           `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',

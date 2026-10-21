@@ -1,17 +1,38 @@
+x-ambiente: &ambiente
+  DATABASE_URL: postgres://automacao:${POSTGRES_PASSWORD}@postgres:5432/automacao
+  REDIS_URL: redis://redis:6379
+  FILES_DIRS: ${FILES_DIRS:-/files}
+
 services:
+  # Telas, API, webhooks, formulários e gatilhos.
   app:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://automacao:${POSTGRES_PASSWORD}@postgres:5432/automacao
-      REDIS_URL: redis://redis:6379
-      FILES_DIRS: ${FILES_DIRS:-/files}
+      <<: *ambiente
+      # As execuções rodam no serviço worker: um fluxo pesado não deixa a tela lenta para todo mundo.
+      RUN_WORKER_IN_PROCESS: "false"
     volumes:
       # Pasta para os nós Read/Write Files from Disk (dentro do Info8n ela é /files).
       - ./arquivos:/files
     ports:
       - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Roda as execuções dos fluxos (até WORKER_CONCURRENCY ao mesmo tempo).
+  worker:
+    build: .
+    command: ["node", "apps/server/dist/worker-main.js"]
+    restart: unless-stopped
+    env_file: .env
+    environment: *ambiente
+    volumes:
+      - ./arquivos:/files
     depends_on:
       postgres:
         condition: service_healthy

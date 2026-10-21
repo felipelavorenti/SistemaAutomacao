@@ -324,12 +324,29 @@ export function createDbClient(connection: ConnectionData): DbClient {
   }
 }
 
+/** Pool emprestado a um nó; `release` devolve quando o nó termina. */
+export interface DatabaseLease {
+  client: DbClient;
+  release(): void;
+}
+
+interface PoolEntry {
+  key: string;
+  client: DbClient;
+  lastUsed: number;
+  /** Nós usando o pool agora. */
+  users: number;
+}
+
 /**
- * Guarda um pool por conexão cadastrada. Se os dados da conexão mudarem, o pool
- * antigo é fechado; pools parados por 10 minutos também são fechados.
+ * Guarda um pool por conexão cadastrada. Se os dados da conexão mudarem, as próximas consultas usam
+ * um pool novo, e o antigo só fecha quando a última consulta que ainda o usa terminar. Pools parados
+ * por 10 minutos (sem nenhum nó usando) também são fechados.
  */
 export class DatabasePools {
-  private pools = new Map<string, { key: string; client: DbClient; lastUsed: number }>();
+  private pools = new Map<string, PoolEntry>();
+  /** Pools de uma versão antiga da conexão, esperando os nós que ainda os usam terminarem. */
+  private retired = new Set<PoolEntry>();
   private timer: NodeJS.Timeout;
 
   constructor(private idleMs = 10 * 60_000) {
@@ -337,23 +354,43 @@ export class DatabasePools {
     this.timer.unref();
   }
 
-  get(connection: ConnectionData): DbClient {
+  acquire(connection: ConnectionData): DatabaseLease {
     const key = createHash('sha256').update(JSON.stringify([connection.type, connection.data])).digest('hex');
-    const current = this.pools.get(connection.id);
-    if (current && current.key === key) {
-      current.lastUsed = Date.now();
-      return current.client;
+    let entry = this.pools.get(connection.id);
+    if (entry && entry.key !== key) {
+      this.pools.delete(connection.id);
+      this.retire(entry);
+      entry = undefined;
     }
-    if (current) void current.client.close().catch(() => undefined);
-    const client = createDbClient(connection);
-    this.pools.set(connection.id, { key, client, lastUsed: Date.now() });
-    return client;
+    if (!entry) {
+      entry = { key, client: createDbClient(connection), lastUsed: Date.now(), users: 0 };
+      this.pools.set(connection.id, entry);
+    }
+    const leased = entry;
+    leased.users++;
+    leased.lastUsed = Date.now();
+    let released = false;
+    return {
+      client: leased.client,
+      release: () => {
+        if (released) return;
+        released = true;
+        leased.users--;
+        leased.lastUsed = Date.now();
+        if (leased.users === 0 && this.retired.delete(leased)) void leased.client.close().catch(() => undefined);
+      },
+    };
+  }
+
+  private retire(entry: PoolEntry): void {
+    if (entry.users > 0) this.retired.add(entry);
+    else void entry.client.close().catch(() => undefined);
   }
 
   private async closeIdle(): Promise<void> {
     const now = Date.now();
     for (const [id, entry] of this.pools) {
-      if (now - entry.lastUsed < this.idleMs) continue;
+      if (entry.users > 0 || now - entry.lastUsed < this.idleMs) continue;
       this.pools.delete(id);
       await entry.client.close().catch(() => undefined);
     }
@@ -361,8 +398,9 @@ export class DatabasePools {
 
   async closeAll(): Promise<void> {
     clearInterval(this.timer);
-    const all = [...this.pools.values()];
+    const all = [...this.pools.values(), ...this.retired];
     this.pools.clear();
+    this.retired.clear();
     await Promise.all(all.map((e) => e.client.close().catch(() => undefined)));
   }
 }

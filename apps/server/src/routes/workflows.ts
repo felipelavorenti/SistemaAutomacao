@@ -35,7 +35,7 @@ export const definitionSchema = z.object({
     }),
   ),
   connections: z.array(z.object({ from: z.string(), fromOutput: z.number().int().min(0), to: z.string(), toInput: z.number().int().min(0) })),
-  settings: z.object({ errorWorkflowId: z.string().uuid().optional() }).optional(),
+  settings: z.object({ errorWorkflowId: z.string().uuid().optional(), skipIfRunning: z.boolean().optional() }).optional(),
 }) as unknown as z.ZodType<WorkflowDefinition>;
 
 const idParam = z.object({ id: z.string().uuid() });

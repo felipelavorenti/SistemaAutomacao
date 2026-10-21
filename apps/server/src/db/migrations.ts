@@ -329,4 +329,14 @@ CREATE TABLE data_table_rows (
 ALTER TABLE api_tokens ADD COLUMN expires_at timestamptz;
 `,
   },
+  {
+    id: '011_recuperacao_execucoes',
+    sql: `
+-- Worker que está rodando a execução: na subida (e a cada minuto), execução 'running' de um worker que
+-- não está mais conectado ao Redis vira erro, em vez de ficar "Em execução" para sempre.
+ALTER TABLE executions ADD COLUMN worker_id text;
+-- Apagar uma execução limpa o retry_of de quem a repetiu; sem índice, cada exclusão lia a tabela inteira.
+CREATE INDEX executions_retry_idx ON executions (retry_of) WHERE retry_of IS NOT NULL;
+`,
+  },
 ];
