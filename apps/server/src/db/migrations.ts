@@ -347,6 +347,9 @@ CREATE INDEX executions_retry_idx ON executions (retry_of) WHERE retry_of IS NOT
 -- antes ficam sem a hora (o default vem depois do ADD COLUMN), e vale a created_at delas.
 ALTER TABLE executions ADD COLUMN queued_at timestamptz;
 ALTER TABLE executions ALTER COLUMN queued_at SET DEFAULT now();
+-- Alguém pediu para cancelar enquanto ela rodava: se ela pausar mesmo assim (o pedido chegou depois do
+-- último nó), fica cancelada em vez de esperar.
+ALTER TABLE executions ADD COLUMN cancel_requested boolean NOT NULL DEFAULT false;
 `,
   },
 ];

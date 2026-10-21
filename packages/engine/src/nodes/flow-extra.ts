@@ -724,6 +724,9 @@ export const wait: NodeType = {
           until = Date.now() + waitAmountMs(await ctx.getParam('resumeAmount', 0), String(await ctx.getParam('resumeUnit', 0)));
         }
       }
+      // Limite que já passou: o tempo de espera acabou, e o fluxo segue com os mesmos itens, como na volta
+      // pelo tempo. Pausar aqui faria um fluxo que volta a este Wait pausar e voltar sem parar.
+      if (until !== undefined && until <= Date.now()) return [input];
       const config: JsonObject = {};
       if (resume === 'webhook') {
         for (const name of WAIT_WEBHOOK_FIELDS) config[name] = await ctx.getParam(name, 0);

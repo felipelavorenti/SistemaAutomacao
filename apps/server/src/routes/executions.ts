@@ -37,6 +37,8 @@ interface ExecutionRow {
   resume_state: Buffer | null;
   resume_data: Buffer | null;
   worker_id: string | null;
+  cancel_requested: boolean;
+  queued_at: Date | null;
 }
 
 export const executionRoutes =
@@ -129,7 +131,7 @@ export const executionRoutes =
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
       // O estado da pausa é interno (pode ter arquivos inteiros); a tela usa wait_till e wait_info.
-      const { data, resume_state: _state, resume_data: _resume, worker_id: _worker, ...rest } = row;
+      const { data, resume_state: _state, resume_data: _resume, worker_id: _worker, cancel_requested: _cancel, queued_at: _queued, ...rest } = row;
       // Subfluxos que esta execução chamou, só os que o usuário pode ver.
       const children = await many(
         db,
@@ -165,11 +167,13 @@ export const executionRoutes =
       return reply.send(file.content);
     });
 
-    app.post('/executions/:id/cancel', async (request) => {
-      const user = currentUser(request);
-      requireCap(user, 'workflow:execute');
-      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
-      const row = await load(user, id);
+    type CancelState = { status: string; worker_id: string | null; wait_till: Date | null };
+    /**
+     * Cancela a execução no estado em que ela foi lida. Devolve false quando ela mudou de estado no meio
+     * (um worker a pegou da fila, ela pausou, ou voltou de uma pausa): aí o cancelamento é tentado de novo
+     * no estado novo, em vez de não fazer nada.
+     */
+    const cancelAs = async (id: string, row: CancelState): Promise<boolean> => {
       if (row.status === 'queued') {
         const canceled = await one(
           db,
@@ -178,9 +182,9 @@ export const executionRoutes =
         );
         // O worker não vai pegá-la: quem chamou por webhook ou formulário fica sabendo por aqui.
         if (canceled) await queue.publishFinished(id, 'canceled', 'Cancelada antes de começar').catch(() => undefined);
-        // Um worker a pegou nesse meio-tempo: o cancelamento vai para ele, como no caso de 'running'.
-        else await queue.requestCancel(id);
-      } else if (row.status === 'running') {
+        return !!canceled;
+      }
+      if (row.status === 'running') {
         // Ninguém está rodando (o worker parou): cancela na hora, com os subfluxos que ela chamou.
         const live = await queue.liveWorkers([row.worker_id]).catch(() => null);
         if (live && isAbandoned(row.worker_id, live)) {
@@ -196,19 +200,42 @@ export const executionRoutes =
           );
           if (canceled.some((r) => r.id === id)) {
             await queue.publishFinished(id, 'canceled', 'Cancelada; o worker que a rodava tinha parado').catch(() => undefined);
+            await queue.requestCancel(id);
+            return true;
           }
         }
-        // Pede sempre: se o worker estiver vivo, é ele que encerra (e não grava por cima do cancelamento).
-        await queue.requestCancel(id);
-      } else if (row.status === 'waiting') {
-        await db.query(
-          `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',
-             resume_state = NULL, resume_data = NULL, wait_till = NULL WHERE id = $1 AND status = 'waiting'`,
-          [id],
-        );
-        await queue.cancelResume(id, row.wait_till);
-      } else {
-        throw new HttpError(400, 'A execução já terminou');
+        // Com o worker vivo, é ele que encerra. O pedido fica gravado: se ela pausar mesmo assim (o aviso
+        // chegou depois do último nó), a pausa vira cancelamento.
+        const requested = await one(db, `UPDATE executions SET cancel_requested = true WHERE id = $1 AND status = 'running' RETURNING id`, [id]);
+        if (requested) await queue.requestCancel(id);
+        return !!requested;
+      }
+      // Esperando.
+      const canceled = await one(
+        db,
+        `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',
+           resume_state = NULL, resume_data = NULL, wait_till = NULL WHERE id = $1 AND status = 'waiting' RETURNING id`,
+        [id],
+      );
+      if (canceled) await queue.cancelResume(id, row.wait_till);
+      return !!canceled;
+    };
+
+    app.post('/executions/:id/cancel', async (request) => {
+      const user = currentUser(request);
+      requireCap(user, 'workflow:execute');
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const row = await load(user, id);
+      const active = (status: string) => status === 'queued' || status === 'running' || status === 'waiting';
+      let state: CancelState | undefined = row;
+      let done = false;
+      for (let attempt = 0; attempt < 5 && state && active(state.status) && !done; attempt++) {
+        done = await cancelAs(id, state);
+        if (!done) state = await one<CancelState>(db, 'SELECT status, worker_id, wait_till FROM executions WHERE id = $1', [id]);
+      }
+      if (!done) {
+        if (!state || !active(state.status)) throw new HttpError(400, 'A execução já terminou');
+        throw new HttpError(409, 'A execução mudou de situação várias vezes durante o cancelamento; tente de novo');
       }
       await audit(db, { userId: user.id, action: 'cancel', entityType: 'execution', entityId: id, entityName: row.workflow_name, ip: request.ip });
       return { ok: true };

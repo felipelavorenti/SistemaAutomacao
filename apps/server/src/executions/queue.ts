@@ -165,6 +165,21 @@ export class ExecutionQueue {
     return ids;
   }
 
+  /**
+   * Quando falharam os jobs de cada execução que ainda estão guardados entre os que falharam (run e
+   * resume; a fila guarda os 1000 últimos de cada tipo).
+   */
+  async failedJobs(): Promise<Map<string, number[]>> {
+    const failed = new Map<string, number[]>();
+    for (const job of await this.queue.getJobs(['failed'], 0, -1, true)) {
+      const data = job?.data;
+      if (data?.kind !== 'run' && data?.kind !== 'resume') continue;
+      const at = job.finishedOn ?? job.processedOn ?? job.timestamp;
+      failed.set(data.executionId, [...(failed.get(data.executionId) ?? []), at]);
+    }
+    return failed;
+  }
+
   /** Cria, atualiza ou remove o agendamento de um fluxo. */
   async syncSchedule(workflow: { id: string; active: boolean; definition: WorkflowDefinition }): Promise<void> {
     const schedulerId = `wf:${workflow.id}`;

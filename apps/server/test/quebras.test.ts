@@ -245,9 +245,10 @@ describe.skipIf(!available)('Correções de quebra', () => {
     try {
       const quick = await createFlow('Sem job', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }], [], { errorWorkflowId: errorFlow }));
       const queuedAgo = (id: string, minutes: number) => db.query(`UPDATE executions SET queued_at = now() - make_interval(mins => $2) WHERE id = $1`, [id, minutes]);
-      // Aceita, mas o job sumiu antes de ela começar (falhou com o banco fora do ar, ou o Redis o perdeu): roda.
-      const lost = await insertExecution(quick, { status: 'queued', notStarted: true });
-      await queuedAgo(lost, 5);
+      // Nenhum job dela chegou à fila (quem a criou parou antes de pô-la na fila): vira erro, porque quem
+      // pediu pode ter tentado de novo.
+      const neverQueued = await insertExecution(quick, { mode: 'webhook', status: 'queued', notStarted: true });
+      await queuedAgo(neverQueued, 5);
       // Voltou de uma pausa (webhook aceito) há pouco, criada há um dia, e o job da volta não chegou ao Redis: roda.
       const resumed = await insertExecution(quick, { status: 'queued', daysAgo: 1 });
       await queuedAgo(resumed, 5);
@@ -257,20 +258,26 @@ describe.skipIf(!available)('Correções de quebra', () => {
       const legacy = await insertExecution(quick, { status: 'queued', daysAgo: 1 });
       await db.query(`UPDATE executions SET queued_at = NULL WHERE id = $1`, [legacy]);
       const sub = await events.subscribe(old);
-      await until(async () => (await status(lost)).status === 'success', 'a execução aceita sem job rodar');
+      const subNever = await events.subscribe(neverQueued);
       await until(async () => (await status(resumed)).status === 'success', 'a execução retomada sem job rodar');
       const message = 'Execução interrompida: ficou mais de 1 hora na fila sem o job que a rodaria';
       await until(async () => (await status(old)).status === 'error', 'a execução antiga virar erro');
       expect(await status(old)).toEqual({ status: 'error', error_message: message });
+      await until(async () => (await status(legacy)).status === 'error', 'a execução sem queued_at virar erro');
       expect(await status(legacy)).toEqual({ status: 'error', error_message: message });
+      const neverMessage = 'Execução interrompida: o job dela não chegou à fila (o servidor parou antes de pô-la na fila, ou o Redis perdeu o job)';
+      await until(async () => (await status(neverQueued)).status === 'error', 'a execução sem job nenhum virar erro');
+      expect(await status(neverQueued)).toEqual({ status: 'error', error_message: neverMessage });
       // Quem esperava a resposta do webhook fica sabendo, e o fluxo de erro roda.
       expect(await sub.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'error', error: message });
+      expect(await subNever.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'error', error: neverMessage });
       await sub.close();
-      const errorRun = await until(
-        () => one<{ input: { json: { execution: { id: string } } }[] }>(db, `SELECT input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow]),
-        'o fluxo de erro rodar',
-      );
-      expect(errorRun.input[0].json.execution.id).toBe(old);
+      await subNever.close();
+      const errorRuns = await until(async () => {
+        const rows = (await db.query<{ input: { json: { execution: { id: string } } }[] }>(`SELECT input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow])).rows;
+        return rows.length === 2 && rows;
+      }, 'o fluxo de erro rodar para as duas');
+      expect(errorRuns.map((r) => r.input[0].json.execution.id).sort()).toEqual([old, neverQueued].sort());
 
       const paused = await createFlow(
         'Espera sem volta',
@@ -326,8 +333,9 @@ describe.skipIf(!available)('Correções de quebra', () => {
       outage = false;
       // Não vira erro: nada dela rodou, e quem pediu ouviu que ela foi aceita.
       expect(await status(executionId)).toEqual({ status: 'queued', error_message: null });
-      // Passados os minutos de folga, a procura de execuções sem job a põe de novo na fila.
-      await db.query(`UPDATE executions SET queued_at = now() - interval '5 minutes' WHERE id = $1`, [executionId]);
+      // Passados os minutos de folga, a procura de execuções sem job a põe de novo na fila. Vale mesmo que
+      // ela já estivesse na fila havia mais de 1 hora (atrás de outras): conta a partir da falha do job.
+      await db.query(`UPDATE executions SET queued_at = now() - interval '2 hours' WHERE id = $1`, [executionId]);
       await until(async () => (await status(executionId)).status === 'success', 'a execução rodar');
     } finally {
       await worker.close();
@@ -403,6 +411,21 @@ describe.skipIf(!available)('Correções de quebra', () => {
       await until(async () => cancels.includes(claimed), 'o pedido de cancelar chegar ao worker');
       cancelListener.disconnect();
       await db.query(`UPDATE executions SET status = 'canceled' WHERE id = $1`, [claimed]);
+
+      // Esperando, e uma volta da pausa a tira da espera no instante do cancelamento: ela é cancelada na fila.
+      const resuming = await insertExecution(wf, { status: 'waiting' });
+      db.query = (async (sql: unknown, ...rest: unknown[]) => {
+        if (typeof sql === 'string' && sql.includes("'Cancelada enquanto esperava'")) {
+          await query(`UPDATE executions SET status = 'queued' WHERE id = $1`, [resuming]);
+        }
+        return (query as (...a: unknown[]) => unknown)(sql, ...rest);
+      }) as typeof db.query;
+      try {
+        expect((await call(admin, 'POST', `/api/executions/${resuming}/cancel`)).status).toBe(200);
+      } finally {
+        db.query = query;
+      }
+      expect(await status(resuming)).toEqual({ status: 'canceled', error_message: 'Cancelada antes de começar' });
     } finally {
       listener.disconnect();
     }
@@ -415,6 +438,45 @@ describe.skipIf(!available)('Correções de quebra', () => {
 
     // O worker_id é interno: não aparece na API.
     expect((await call(admin, 'GET', `/api/executions/${parent}`)).body).not.toHaveProperty('worker_id');
+  });
+
+  it('cancelar enquanto ela roda, com o aviso chegando depois do último nó: ela fica cancelada, não esperando', async () => {
+    const wf = await createFlow(
+      'Aprovação rápida',
+      flow(
+        [
+          { id: 't', name: 'Início', type: 'manualTrigger' },
+          { id: 'w', name: 'Aprovação', type: 'wait', parameters: { resume: 'webhook', limitWaitTime: true, resumeAmount: 2, resumeUnit: 'hours' } },
+        ],
+        [['t', 'w']],
+      ),
+    );
+    // O cancelamento chega entre o fim dos nós e a gravação da pausa: o aviso pelo Redis já não para nada.
+    const query = db.query.bind(db);
+    let cancel: Promise<{ status: number }> | null = null;
+    db.query = (async (sql: unknown, ...rest: unknown[]) => {
+      if (!cancel && typeof sql === 'string' && sql.includes('RETURNING status') && sql.includes('cancel_requested THEN')) {
+        const id = (rest[0] as string[])[0];
+        const owner = await query<{ workflow_id: string }>('SELECT workflow_id FROM executions WHERE id = $1', [id]);
+        if (owner.rows[0]?.workflow_id === wf) {
+          cancel = call(admin, 'POST', `/api/executions/${id}/cancel`);
+          await cancel;
+        }
+      }
+      return (query as (...a: unknown[]) => unknown)(sql, ...rest);
+    }) as typeof db.query;
+    let target = '';
+    try {
+      target = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body.executionId;
+      await until(async () => !['queued', 'running'].includes((await status(target)).status), 'a execução terminar');
+    } finally {
+      db.query = query;
+    }
+    expect((await cancel!).status).toBe(200);
+    expect(await status(target)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
+    const row = (await one<{ wait_till: Date | null; resume_state: Buffer | null }>(db, 'SELECT wait_till, resume_state FROM executions WHERE id = $1', [target]))!;
+    expect(row).toEqual({ wait_till: null, resume_state: null });
+    expect(await queue.queue.getJobs(['delayed'])).not.toContainEqual(expect.objectContaining({ data: expect.objectContaining({ executionId: target }) }));
   });
 
   it('worker de outra máquina que caiu: a conexão parada há muito tempo não conta como viva', async () => {

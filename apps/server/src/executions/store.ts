@@ -175,11 +175,15 @@ export function stripBinaries(runs: NodeRun[], keepFiles: boolean): { runs: Node
   return { runs: stripped, files: [...files.values()] };
 }
 
+/** Mensagem da execução que ia pausar, mas alguém pediu para cancelar enquanto ela rodava. */
+export const CANCELED_BEFORE_PAUSE = 'Execução cancelada';
+
 /**
- * Grava o fim da execução. `owner`: só grava se ela ainda é deste worker e está rodando; devolve false
- * quando outro já a encerrou (cancelada ou marcada como interrompida), e aí nada muda.
+ * Grava o fim da execução e devolve o status gravado. `owner`: só grava se ela ainda é deste worker e está
+ * rodando; devolve null quando outro já a encerrou (cancelada ou marcada como interrompida), e aí nada
+ * muda. A pausa de uma execução com o cancelamento pedido (cancel_requested) é gravada como cancelada.
  */
-export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false, owner?: string): Promise<boolean> {
+export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false, owner?: string): Promise<string | null> {
   const stripped = stripBinaries(result.runs, keepData && keepFiles);
   const data = keepData ? await gzipAsync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
   for (const file of stripped.files) {
@@ -191,11 +195,16 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
   }
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
   const waiting = result.status === 'waiting';
-  const res = await db.query(
-    `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,
-       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
-       wait_till = $14, wait_info = $15, resume_state = $16, resume_data = NULL
-     WHERE id = $1 AND ($17::text IS NULL OR (status = 'running' AND worker_id = $17))`,
+  const res = await db.query<{ status: string }>(
+    `UPDATE executions SET status = CASE WHEN $13 AND cancel_requested THEN 'canceled' ELSE $2 END, started_at = $3,
+       finished_at = CASE WHEN $13 AND cancel_requested THEN now() ELSE $4::timestamptz END, summary = $5, data = $6, data_size = $7,
+       error = CASE WHEN $13 AND cancel_requested THEN $19::jsonb ELSE $8::jsonb END,
+       error_message = CASE WHEN $13 AND cancel_requested THEN $18::text ELSE $9 END, error_node = $10,
+       input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
+       wait_till = CASE WHEN cancel_requested THEN NULL ELSE $14::timestamptz END, wait_info = CASE WHEN cancel_requested THEN NULL ELSE $15::jsonb END,
+       resume_state = CASE WHEN cancel_requested THEN NULL ELSE $16::bytea END, resume_data = NULL
+     WHERE id = $1 AND ($17::text IS NULL OR (status = 'running' AND worker_id = $17))
+     RETURNING status`,
     [
       id,
       result.status,
@@ -214,9 +223,11 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
       waiting && result.wait ? JSON.stringify(result.wait) : null,
       waiting && result.resumeState ? encodeJson(result.resumeState) : null,
       owner ?? null,
+      CANCELED_BEFORE_PAUSE,
+      JSON.stringify({ message: CANCELED_BEFORE_PAUSE }),
     ],
   );
-  return (res.rowCount ?? 0) > 0;
+  return res.rows[0]?.status ?? null;
 }
 
 export function encodeJson(value: unknown): Buffer {
