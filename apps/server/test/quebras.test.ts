@@ -613,6 +613,81 @@ describe.skipIf(!available)('Correções de quebra', () => {
     expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
   });
 
+  it('cancelar a execução no meio de um Execute Workflow "uma vez para cada item" não deixa os outros subfluxos rodando', async () => {
+    const child = await createFlow('Filho rápido', flow([{ id: 'r', name: 'Recebe', type: 'executeWorkflowTrigger' }, { id: 'n', name: 'Nada', type: 'noOp' }], [['r', 'n']]));
+    const parent = await createFlow(
+      'Pai em laço',
+      flow(
+        [
+          { id: 't', name: 'Início', type: 'manualTrigger' },
+          { id: 'c', name: 'Itens', type: 'code', parameters: { mode: 'all', jsCode: 'return Array.from({ length: 300 }, (_, i) => ({ json: { i } }));' } },
+          { id: 'x', name: 'Para cada', type: 'executeWorkflow', parameters: { workflowId: child, mode: 'each' } },
+        ],
+        [
+          ['t', 'c'],
+          ['c', 'x'],
+        ],
+      ),
+    );
+    const children = async () => (await one<{ n: number }>(db, 'SELECT count(*)::int AS n FROM executions WHERE workflow_id = $1', [child]))!.n;
+    const { executionId } = (await call(admin, 'POST', `/api/workflows/${parent}/run`, {})).body;
+    await until(async () => (await children()) >= 10, 'os primeiros subfluxos rodarem');
+    expect((await call(admin, 'POST', `/api/executions/${executionId}/cancel`)).status).toBe(200);
+    await until(async () => (await status(executionId)).status === 'canceled', 'a execução ser cancelada');
+    const before = await children();
+    await new Promise((r) => setTimeout(r, 500));
+    // No máximo o subfluxo que estava sendo registrado na hora, e ele é cancelado.
+    expect(await children()).toBeLessThanOrEqual(before + 1);
+    const late = await db.query<{ status: string }>(
+      `SELECT c.status FROM executions c, executions p WHERE c.workflow_id = $1 AND p.id = $2 AND c.created_at > p.finished_at`,
+      [child, executionId],
+    );
+    expect(late.rows.filter((r) => r.status !== 'canceled')).toEqual([]);
+    expect(await children()).toBeLessThan(300);
+  });
+
+  it('pausa que volta antes de a rodada anterior terminar de avisar: a rodada nova continua cancelável', async () => {
+    const wf = await createFlow(
+      'Volta rápida',
+      flow(
+        [
+          { id: 't', name: 'Início', type: 'manualTrigger' },
+          { id: 'w', name: 'Aprovação', type: 'wait', parameters: { resume: 'webhook' } },
+          { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } },
+        ],
+        [
+          ['t', 'w'],
+          ['w', 'h'],
+        ],
+      ),
+    );
+    // O aviso da pausa demora (Redis lento): a volta pela URL chega e roda neste mesmo worker antes de ele terminar.
+    await worker!.close();
+    const slowRedis = createRedis(REDIS_URL);
+    const originalCall = slowRedis.call.bind(slowRedis) as (...args: unknown[]) => Promise<unknown>;
+    let slowPubsub = true;
+    slowRedis.call = (async (...args: unknown[]) => {
+      if (slowPubsub && args[0] === 'PUBSUB') await new Promise((r) => setTimeout(r, 1000));
+      return originalCall(...args);
+    }) as typeof slowRedis.call;
+    worker = startWorker({ db, config, redis: slowRedis, subscriber: createRedis(REDIS_URL) });
+    try {
+      const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
+      await until(async () => (await status(executionId)).status === 'waiting', 'a execução pausar');
+      expect((await app.inject({ method: 'GET', url: `/webhook-waiting/${executionId}` })).statusCode).toBe(200);
+      await until(async () => (await status(executionId)).status === 'running', 'a volta começar a rodar');
+      // A rodada da pausa termina de avisar e sai; a rodada nova ainda está no nó demorado.
+      await new Promise((r) => setTimeout(r, 1200));
+      slowPubsub = false;
+      expect((await call(admin, 'POST', `/api/executions/${executionId}/cancel`)).status).toBe(200);
+      await until(async () => (await status(executionId)).status !== 'running', 'a execução terminar');
+      expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
+    } finally {
+      await worker.close();
+      worker = newWorker();
+    }
+  });
+
   it('execução na fila que perdeu o job: só conta para a 1 hora o tempo em que ficou sem job', () => {
     const min = 60_000;
     const t0 = Date.parse('2026-10-21T10:00:00Z');

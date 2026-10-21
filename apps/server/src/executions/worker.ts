@@ -321,6 +321,8 @@ export function startWorker(deps: {
       parentCanceledByUser: () => boolean,
     ): ExecuteOptions['executeSubworkflow'] =>
     async ({ workflowId, items, signal }) => {
+      // Quem chamou já foi cancelada (ou o servidor está desligando): não começa outro subfluxo.
+      if (signal.aborted) throw new NodeOperationError('Execução cancelada');
       if (depth > MAX_SUBWORKFLOW_DEPTH) {
         throw new NodeOperationError(`Passou do limite de ${MAX_SUBWORKFLOW_DEPTH} subfluxos chamados um dentro do outro`);
       }
@@ -350,6 +352,8 @@ export function startWorker(deps: {
       const controller = new AbortController();
       const onParentAbort = () => controller.abort();
       signal.addEventListener('abort', onParentAbort, { once: true });
+      // Cancelada enquanto o subfluxo era registrado: o aviso de cancelar já passou e não chegaria a ele.
+      if (signal.aborted) controller.abort();
       running.set(id, controller);
       const byUser = () => canceledByUser.has(id) || parentCanceledByUser();
       try {
@@ -378,8 +382,10 @@ export function startWorker(deps: {
         throw err;
       } finally {
         signal.removeEventListener('abort', onParentAbort);
-        running.delete(id);
-        canceledByUser.delete(id);
+        if (running.get(id) === controller) {
+          running.delete(id);
+          canceledByUser.delete(id);
+        }
       }
     };
 
@@ -465,8 +471,12 @@ export function startWorker(deps: {
       await publish(executionId, { type: 'finished', status: 'error', error: message, lastOutput: [] });
       await runErrorWorkflow(claimed, { message }).catch((e) => console.error('Fluxo de erro não iniciado:', e));
     } finally {
-      running.delete(executionId);
-      canceledByUser.delete(executionId);
+      // Só a entrada desta rodada: a execução pode ter pausado e voltado (outra rodada, neste mesmo worker)
+      // antes de esta terminar de avisar a pausa.
+      if (running.get(executionId) === controller) {
+        running.delete(executionId);
+        canceledByUser.delete(executionId);
+      }
     }
   };
 

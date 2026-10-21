@@ -398,6 +398,9 @@ async function runNode(
             }),
           executeWorkflow: async (workflowId, items) => {
             if (!options.executeSubworkflow) throw new NodeOperationError('Não é possível executar outro fluxo nesta execução');
+            // Cancelada: o nó já foi dado como encerrado, mas o código dele (um laço por item) pode continuar
+            // rodando; ele não começa mais nenhum subfluxo.
+            if (signal.aborted) throw new ExecutionCanceled();
             return options.executeSubworkflow({ workflowId, items, signal });
           },
           state,

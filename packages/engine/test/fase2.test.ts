@@ -229,6 +229,27 @@ describe('Execute Workflow', () => {
     expect(each.lastOutput).toHaveLength(2);
   });
 
+  it('cancelada no meio do "uma vez para cada item": não começa mais nenhum subfluxo', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    // O subfluxo não escuta o cancelamento (como um registrado no instante do aviso): só o laço pode parar.
+    const executeSubworkflow = async ({ items: list }: { items: Item[] }): Promise<SubworkflowResult> => {
+      calls++;
+      if (calls === 5) controller.abort();
+      await new Promise((r) => setTimeout(r, 5));
+      return { executionId: `sub-${calls}`, status: 'success', output: list };
+    };
+    const many = Array.from({ length: 50 }, (_, i) => ({ json: { i } }));
+    const result = await run(
+      { nodes: [trigger, node('e', 'executeWorkflow', { workflowId: 'wf-9', mode: 'each' })], connections: [link('t', 'e')] },
+      many,
+      { executeSubworkflow, signal: controller.signal },
+    );
+    expect(result.status).toBe('canceled');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(calls).toBe(5);
+  });
+
   it('erro do subfluxo traz o nó e os detalhes da API', async () => {
     const executeSubworkflow = async (): Promise<SubworkflowResult> => ({
       executionId: 'sub-1',
