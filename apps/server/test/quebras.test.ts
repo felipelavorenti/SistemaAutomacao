@@ -293,6 +293,8 @@ describe.skipIf(!available)('Correções de quebra', () => {
       await until(async () => (await status(executionId)).status === 'waiting', 'a execução pausar');
       // O job da volta sumiu e a hora já passou (ex.: a volta falhou com o Postgres fora do ar).
       const { wait_till } = (await one<{ wait_till: Date }>(db, 'SELECT wait_till FROM executions WHERE id = $1', [executionId]))!;
+      // O worker grava a pausa antes de pôr o job da volta na fila.
+      await until(() => queue.queue.getJob(`resume-${executionId}-${wait_till.getTime()}`), 'o job da volta');
       await queue.cancelResume(executionId, wait_till);
       await db.query(`UPDATE executions SET wait_till = now() - interval '10 minutes' WHERE id = $1`, [executionId]);
       await until(async () => (await status(executionId)).status === 'success', 'a execução pausada voltar');
@@ -483,21 +485,53 @@ describe.skipIf(!available)('Correções de quebra', () => {
     expect(await queue.queue.getJobs(['delayed'])).not.toContainEqual(expect.objectContaining({ data: expect.objectContaining({ executionId: target }) }));
   });
 
-  it('worker de outra máquina que caiu: a conexão parada há muito tempo não conta como viva', async () => {
+  it('worker de outra máquina que caiu: a conexão parada há muito tempo não conta como viva; com um nó segurando o processador, conta', async () => {
     const probe = new ExecutionQueue(redis);
     // Como o CLIENT LIST mostra: a conexão de uma máquina que caiu sem avisar fica na lista, parada.
     probe.queue.getWorkers = async () => [
       { rawname: 'bull:x:w:caiu', idle: '900' },
       { rawname: 'bull:x:w:ativo', idle: '2' },
       { rawname: 'bull:x:w:ocupado', idle: '900' },
+      { rawname: 'bull:x:w:travado', idle: '900' },
     ];
     await redis.set('sa:worker:ocupado', '1', 'PX', 60_000); // todas as vagas ocupadas, mas o aviso de vida em dia
+    // Um nó segura o processador há mais de 1 minuto: só o aviso com o prazo da trava do job está em dia.
+    await redis.set('sa:worker-held:travado', '1', 'PX', 60_000);
+    // Processo que morreu (a conexão fechou): o aviso longo sozinho não conta.
+    await redis.set('sa:worker-held:morto', '1', 'PX', 60_000);
     try {
-      const live = await probe.liveWorkers(['caiu', 'ativo', 'ocupado', 'sumido']);
-      expect([...live!.ids].sort()).toEqual(['ativo', 'ocupado']);
+      const live = await probe.liveWorkers(['caiu', 'ativo', 'ocupado', 'sumido', 'travado', 'morto']);
+      expect([...live!.ids].sort()).toEqual(['ativo', 'ocupado', 'travado']);
     } finally {
-      await redis.del('sa:worker:ocupado');
+      await redis.del('sa:worker:ocupado', 'sa:worker-held:travado', 'sa:worker-held:morto');
       await probe.close();
+    }
+  });
+
+  it('pedido de cancelar que se perdeu no Redis: o worker o acha no banco', async () => {
+    const wf = await createFlow('Aviso perdido', flow([{ id: 't', name: 'Início', type: 'manualTrigger' }, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['t', 'h']]));
+    await worker!.close();
+    worker = startWorker({ db, config, redis: createRedis(REDIS_URL), subscriber: createRedis(REDIS_URL), cancelCheckIntervalMs: 200 });
+    try {
+      const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
+      await until(async () => (await status(executionId)).status === 'running', 'a execução começar');
+      // A rota grava o pedido e avisa pelo Redis; o aviso não chegou (o worker estava reconectando ao Redis).
+      await db.query('UPDATE executions SET cancel_requested = true WHERE id = $1', [executionId]);
+      await until(async () => (await status(executionId)).status !== 'running', 'o worker achar o pedido');
+      expect(await status(executionId)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
+
+      // Desligando antes da conferência: a execução fica cancelada, não interrompida pelo desligamento.
+      await worker.close();
+      worker = newWorker();
+      const second = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body.executionId;
+      await until(async () => (await status(second)).status === 'running', 'a segunda execução começar');
+      await db.query('UPDATE executions SET cancel_requested = true WHERE id = $1', [second]);
+      await worker.close();
+      worker = null;
+      expect(await status(second)).toEqual({ status: 'canceled', error_message: 'Execução cancelada' });
+    } finally {
+      await worker?.close();
+      worker = newWorker();
     }
   });
 
@@ -581,12 +615,11 @@ describe.skipIf(!available)('Correções de quebra', () => {
       expect(await sub.next((e) => e.type === 'finished', 2000)).toMatchObject({ type: 'finished', status: 'canceled', error: message });
       await sub.close();
       await until(async () => (await status(other)).status === 'error', 'a outra execução virar erro');
-      const errorRuns = await until(async () => {
-        const rows = (await db.query<{ input: { json: { execution: { id: string } } }[] }>(`SELECT input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow])).rows;
-        return rows.length > 0 && rows;
-      }, 'o fluxo de erro rodar para a que virou erro');
+      const errorRuns = async () =>
+        (await db.query<{ input: { json: { execution: { id: string } } }[] }>(`SELECT input FROM executions WHERE workflow_id = $1 AND mode = 'error'`, [errorFlow])).rows;
+      await until(async () => (await errorRuns()).length > 0, 'o fluxo de erro rodar para a que virou erro');
       await new Promise((r) => setTimeout(r, 500));
-      expect(errorRuns.map((r) => r.input[0].json.execution.id)).toEqual([other]);
+      expect((await errorRuns()).map((r) => r.input[0].json.execution.id)).toEqual([other]);
     } finally {
       listener.disconnect();
       await sweeper.close();
@@ -630,20 +663,37 @@ describe.skipIf(!available)('Correções de quebra', () => {
       ),
     );
     const children = async () => (await one<{ n: number }>(db, 'SELECT count(*)::int AS n FROM executions WHERE workflow_id = $1', [child]))!.n;
-    const { executionId } = (await call(admin, 'POST', `/api/workflows/${parent}/run`, {})).body;
-    await until(async () => (await children()) >= 10, 'os primeiros subfluxos rodarem');
-    expect((await call(admin, 'POST', `/api/executions/${executionId}/cancel`)).status).toBe(200);
-    await until(async () => (await status(executionId)).status === 'canceled', 'a execução ser cancelada');
-    const before = await children();
+    // O 10º subfluxo fica preso entre a conferência do cancelamento e o registro dele: o cancelamento chega aí.
+    const query = db.query.bind(db);
+    let lookups = 0;
+    let held = false;
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    db.query = (async (sql: unknown, ...rest: unknown[]) => {
+      if (typeof sql === 'string' && sql.startsWith('SELECT id, name, folder_id, version, definition FROM workflows') && (rest[0] as string[])[0] === child && ++lookups === 10) {
+        held = true;
+        await released;
+      }
+      return (query as (...a: unknown[]) => unknown)(sql, ...rest);
+    }) as typeof db.query;
+    let executionId = '';
+    try {
+      executionId = (await call(admin, 'POST', `/api/workflows/${parent}/run`, {})).body.executionId;
+      await until(async () => held, 'o 10º subfluxo ficar preso antes do registro');
+      expect((await call(admin, 'POST', `/api/executions/${executionId}/cancel`)).status).toBe(200);
+      await until(async () => (await status(executionId)).status === 'canceled', 'a execução ser cancelada');
+    } finally {
+      release();
+      db.query = query;
+    }
+    // O subfluxo que estava sendo registrado na hora é cancelado, e nenhum outro começa.
+    await until(async () => (await children()) === 10, 'o subfluxo preso ser registrado');
+    const late = async () =>
+      (await db.query<{ status: string }>(`SELECT c.status FROM executions c, executions p WHERE c.workflow_id = $1 AND p.id = $2 AND c.created_at > p.finished_at`, [child, executionId])).rows;
+    await until(async () => (await late()).every((r) => r.status !== 'running'), 'o subfluxo preso terminar');
+    expect(await late()).toEqual([{ status: 'canceled' }]);
     await new Promise((r) => setTimeout(r, 500));
-    // No máximo o subfluxo que estava sendo registrado na hora, e ele é cancelado.
-    expect(await children()).toBeLessThanOrEqual(before + 1);
-    const late = await db.query<{ status: string }>(
-      `SELECT c.status FROM executions c, executions p WHERE c.workflow_id = $1 AND p.id = $2 AND c.created_at > p.finished_at`,
-      [child, executionId],
-    );
-    expect(late.rows.filter((r) => r.status !== 'canceled')).toEqual([]);
-    expect(await children()).toBeLessThan(300);
+    expect(await children()).toBe(10);
   });
 
   it('pausa que volta antes de a rodada anterior terminar de avisar: a rodada nova continua cancelável', async () => {
@@ -792,7 +842,25 @@ describe.skipIf(!available)('Correções de quebra', () => {
     // Dois horários pegos ao mesmo tempo: só um passa.
     const both = await createFlow('Dois de uma vez', flow([schedule, { id: 'h', name: 'Demora', type: 'httpRequest', parameters: { url: slowBase } }], [['s', 'h']], { skipIfRunning: true }));
     expect((await call(admin, 'POST', `/api/workflows/${both}/activate`)).status).toBe(200);
-    await Promise.all([queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both }), queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both })]);
+    // Segura a gravação das duas (LOCK em SHARE deixa ler, não inserir): sem a trava por fluxo, as duas
+    // conferências passariam antes de qualquer uma gravar.
+    const holder = await db.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('LOCK TABLE executions IN SHARE MODE');
+      await Promise.all([queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both }), queue.queue.add('scheduled', { kind: 'scheduled', workflowId: both })]);
+      const waiting = async () =>
+        (await one<{ n: number }>(
+          db,
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock'
+             AND (query LIKE 'SELECT pg_advisory_xact_lock%' OR query LIKE 'INSERT INTO executions%')`,
+        ))!.n;
+      await until(async () => (await waiting()) >= 2, 'os dois horários chegarem à conferência');
+    } finally {
+      await holder.query('COMMIT');
+      holder.release();
+    }
     await until(async () => (await scheduledRuns(both)).length === 1, 'um dos dois horários rodar');
     // A execução agendada nasce rodando, já com o worker: se ele parar, a procura de abandonadas a acha.
     // (gravada já rodando: começou no mesmo comando que a criou, sem passar pela fila)
@@ -813,11 +881,11 @@ describe.skipIf(!available)('Correções de quebra', () => {
     const { executionId } = (await call(admin, 'POST', `/api/workflows/${wf}/run`, {})).body;
     await until(async () => (await status(executionId)).status === 'running', 'a execução começar');
     const { worker_id } = (await one<{ worker_id: string }>(db, 'SELECT worker_id FROM executions WHERE id = $1', [executionId]))!;
-    expect(await redis.exists(`sa:worker:${worker_id}`)).toBe(1);
+    expect(await redis.exists(`sa:worker:${worker_id}`, `sa:worker-held:${worker_id}`)).toBe(2);
     await worker!.close();
     worker = null;
     expect(await status(executionId)).toEqual({ status: 'error', error_message: 'Execução interrompida porque o servidor foi desligado' });
     // Desligado, o worker apaga o aviso de vida: as execuções dele param de contar como em andamento.
-    expect(await redis.exists(`sa:worker:${worker_id}`)).toBe(0);
+    expect(await redis.exists(`sa:worker:${worker_id}`, `sa:worker-held:${worker_id}`)).toBe(0);
   });
 });

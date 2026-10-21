@@ -24,7 +24,7 @@ import { decryptJson } from '../lib/crypto.js';
 import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
-import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, QUEUE_NAME, type FailedJob, type JobData } from './queue.js';
+import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, LOCK_DURATION_MS, QUEUE_NAME, type FailedJob, type JobData } from './queue.js';
 import { CANCELED_BEFORE_PAUSE, cleanupOldExecutions, createExecution, decodeResume, enqueueOrFail, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
@@ -68,11 +68,6 @@ const ORPHAN_MESSAGE = 'Execução interrompida: ficou mais de 1 hora na fila se
 const NEVER_QUEUED_MESSAGE = 'Execução interrompida: o job dela não chegou à fila (o servidor parou antes de pô-la na fila, ou o Redis perdeu o job)';
 /** Por quanto tempo um pedido de cancelamento vale para uma execução que este worker ainda vai registrar. */
 const EARLY_CANCEL_MS = 60_000;
-/**
- * Tempo sem renovar a trava do job até a fila achar que o worker travou. Renovada a cada metade
- * disso; um nó que segura o processador por menos que isso não derruba mais a execução.
- */
-const LOCK_DURATION_MS = 5 * 60_000;
 const ABANDONED_MESSAGE = 'Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela';
 /** Execução que alguém mandou cancelar e cujo worker parou antes de encerrá-la. */
 const CANCELED_ABANDONED_MESSAGE = 'Cancelada; o worker que a rodava tinha parado';
@@ -115,6 +110,8 @@ export function startWorker(deps: {
   subscriber: Redis;
   /** Intervalo da procura de execuções abandonadas (os testes usam um menor). */
   sweepIntervalMs?: number;
+  /** Intervalo da conferência dos pedidos de cancelamento gravados no banco (os testes usam um menor). */
+  cancelCheckIntervalMs?: number;
 }): WorkerHandle {
   const { db, config, redis, subscriber } = deps;
   /** Nome deste worker no Redis; gravado em cada execução que ele pega. */
@@ -555,6 +552,30 @@ export function startWorker(deps: {
   const heartbeatTimer = setInterval(beat, HEARTBEAT_INTERVAL_MS);
   heartbeatTimer.unref();
 
+  // O pedido de cancelar vem pelo Redis, que não guarda a mensagem para quem estava reconectando (o
+  // Redis reiniciou, a rede piscou). A rota também grava cancel_requested: o worker confere de tempos em
+  // tempos as execuções que roda e interrompe as que têm o pedido.
+  const checkCancels = async () => {
+    const ids = [...running.keys()];
+    if (!ids.length) return;
+    const rows = await many<{ id: string }>(
+      db,
+      `SELECT id FROM executions WHERE id = ANY($1::uuid[]) AND worker_id = $2 AND status = 'running' AND cancel_requested`,
+      [ids, workerId],
+    );
+    for (const { id } of rows) {
+      const controller = running.get(id);
+      if (!controller || controller.signal.aborted) continue;
+      canceledByUser.add(id);
+      controller.abort();
+    }
+  };
+  const cancelCheckTimer = setInterval(
+    () => void checkCancels().catch((err) => console.error('Conferência dos pedidos de cancelamento falhou:', err)),
+    deps.cancelCheckIntervalMs ?? HEARTBEAT_INTERVAL_MS,
+  );
+  cancelCheckTimer.unref();
+
   const failedColumns = `e.id, e.workflow_id, e.workflow_version, e.mode, e.status, e.definition, e.input, e.triggered_by, e.start_node_id,
     e.retry_of, NULL AS resume_state, NULL AS resume_data`;
   /** Execuções que o worker não encerrou e viraram erro: avisa quem chamou por HTTP e roda o fluxo de erro de cada uma. */
@@ -724,6 +745,9 @@ export function startWorker(deps: {
     async close() {
       stopping = true;
       clearInterval(sweepTimer);
+      clearInterval(cancelCheckTimer);
+      // Um pedido de cancelar que se perdeu no Redis ainda conta: a execução fica cancelada, não interrompida.
+      await checkCancels().catch(() => undefined);
       for (const c of running.values()) c.abort();
       await worker.close();
       // Só agora: enquanto terminava as execuções, o worker ainda contava como vivo para os outros.

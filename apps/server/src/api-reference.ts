@@ -330,7 +330,7 @@ const GROUPS: ApiGroup[] = [
         errors: [
           '403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador',
           '404: o fluxo não existe ou está numa pasta sem acesso',
-          '500: não foi possível pôr a execução na fila (Redis fora do ar); ela fica com status error',
+          '500: o Redis recusou pôr a execução na fila (ex.: disco ou memória cheios); ela fica com status error. Com o Redis fora do ar, a chamada espera ele voltar',
         ],
       },
       {
@@ -508,7 +508,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Cancela uma execução na fila, em andamento ou pausada esperando (Wait, Form).',
         params: [id('da execução')],
         response:
-          'Na fila, ela fica canceled na hora, com error_message "Cancelada antes de começar". Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois; se ela ia pausar quando o pedido chegou, fica canceled com error_message "Execução cancelada", em vez de waiting. Se a execução mudou de situação no meio do cancelamento (saiu da fila, pausou ou voltou de uma pausa), o cancelamento vale para a situação nova. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado"; se ele parou há menos tempo, ou parar antes de encerrá-la, elas ficam canceled com essa mensagem quando a parada for notada (não error). Depois do cancelamento, um nó que roda para cada item (Database, Send Email, Data Table, Execute Workflow e outros) para antes do item seguinte: nada novo é gravado, enviado ou chamado, e nenhum subfluxo novo começa. Um nó que esperava para tentar de novo não tenta. Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.',
+          'Na fila, ela fica canceled na hora, com error_message "Cancelada antes de começar". Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois (se o aviso pelo Redis se perder numa reconexão, o worker acha o pedido no banco em até 15 segundos); se ela ia pausar quando o pedido chegou, fica canceled com error_message "Execução cancelada", em vez de waiting. Se a execução mudou de situação no meio do cancelamento (saiu da fila, pausou ou voltou de uma pausa), o cancelamento vale para a situação nova. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado"; se ele parou há menos tempo, ou parar antes de encerrá-la, elas ficam canceled com essa mensagem quando a parada for notada (não error). Depois do cancelamento, um nó que roda para cada item (Database, Send Email, Data Table, Execute Workflow e outros) para antes do item seguinte: nada novo é gravado, enviado ou chamado, e nenhum subfluxo novo começa. Um nó que esperava para tentar de novo não tenta. Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.',
         errors: ['400: a execução já terminou', '409: a execução mudou de situação várias vezes durante o cancelamento; tente de novo'],
         audited: true,
       },
@@ -519,7 +519,7 @@ const GROUPS: ApiGroup[] = [
         summary: 'Roda de novo com a mesma definição e a mesma entrada.',
         params: [id('da execução')],
         response: 'executionId é a nova execução, com mode retry e retry_of apontando para a original.',
-        errors: ['400: a execução ainda está em andamento', '500: não foi possível pôr a execução na fila (Redis fora do ar); a nova execução fica com status error'],
+        errors: ['400: a execução ainda está em andamento', '500: o Redis recusou pôr a execução na fila (ex.: disco ou memória cheios); a nova execução fica com status error. Com o Redis fora do ar, a chamada espera ele voltar'],
         audited: true,
       },
       {

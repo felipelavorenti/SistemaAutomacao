@@ -17,12 +17,21 @@ export type JobData =
 /** Quanto tempo o aviso de vida de um worker vale no Redis sem ser renovado. */
 export const HEARTBEAT_TTL_MS = 60_000;
 /**
+ * Tempo sem renovar a trava do job até a fila achar que o worker travou (renovada a cada metade disso).
+ * O aviso de vida também tem uma segunda chave com esse prazo: um worker com a conexão da fila ainda
+ * aberta conta como vivo até ele vencer, porque um nó que segura o processador (planilha grande, JSON
+ * grande) para as renovações e outro worker não pode dar as execuções dele como abandonadas antes disso.
+ */
+export const LOCK_DURATION_MS = 5 * 60_000;
+/**
  * Conexão da fila parada há mais que isto não prova que o worker está vivo: a de uma máquina que caiu
  * (sem avisar o Redis) fica na lista por uns 15 minutos. Com o aviso de vida em dia, o worker conta como
  * vivo mesmo assim (com todas as vagas ocupadas, a conexão da fila fica parada).
  */
 const STALE_CONNECTION_SECONDS = 300;
 const workerKey = (workerId: string) => `sa:worker:${workerId}`;
+/** Aviso de vida com o prazo da trava do job (LOCK_DURATION_MS); só vale com a conexão da fila aberta. */
+const heldKey = (workerId: string) => `sa:worker-held:${workerId}`;
 const resumeJobId = (executionId: string, at: number) => `resume-${executionId}-${at}`;
 /**
  * Jobs que falharam ficam guardados por 2 horas (em segundos), e não pelos N últimos: o limite por
@@ -128,23 +137,27 @@ export class ExecutionQueue {
     await this.redis.publish(CANCEL_CHANNEL, executionId);
   }
 
-  /** Avisa que este worker está vivo. Vale por HEARTBEAT_TTL_MS; o worker renova bem antes disso. */
+  /**
+   * Avisa que este worker está vivo. Vale por HEARTBEAT_TTL_MS, ou por LOCK_DURATION_MS enquanto a conexão
+   * da fila dele estiver aberta; o worker renova bem antes disso.
+   */
   async heartbeat(workerId: string): Promise<void> {
-    await this.redis.set(workerKey(workerId), '1', 'PX', HEARTBEAT_TTL_MS);
+    await this.redis.multi().set(workerKey(workerId), '1', 'PX', HEARTBEAT_TTL_MS).set(heldKey(workerId), '1', 'PX', LOCK_DURATION_MS).exec();
   }
 
   /** Apaga o aviso de vida; o worker chama só depois de terminar as execuções que estava rodando. */
   async clearHeartbeat(workerId: string): Promise<void> {
-    await this.redis.del(workerKey(workerId));
+    await this.redis.del(workerKey(workerId), heldKey(workerId));
   }
 
   /**
-   * Quais destes workers estão vivos: com o aviso de vida no Redis, ou com a conexão da fila
-   * (`bull:<fila>:w:<id>`) aberta e usada há pouco. A conexão sozinha não basta: a fila a fecha antes de
-   * o worker terminar as execuções ao desligar, ela cai por instantes quando reconecta, e a de uma
-   * máquina que caiu sem avisar fica na lista por minutos. `unnamed`: há worker sem nome (versão anterior
-   * do Info8n), que roda execuções sem worker_id. Null quando o Redis não lista as conexões; aí não dá
-   * para saber quem está vivo.
+   * Quais destes workers estão vivos: com o aviso de vida no Redis (renovado há menos de HEARTBEAT_TTL_MS),
+   * com a conexão da fila (`bull:<fila>:w:<id>`) aberta e usada há pouco, ou com a conexão aberta e o
+   * aviso renovado há menos de LOCK_DURATION_MS (o processo existe, mas um nó segura o processador). A
+   * conexão sozinha não basta: a fila a fecha antes de o worker terminar as execuções ao desligar, ela cai
+   * por instantes quando reconecta, e a de uma máquina que caiu sem avisar fica na lista por minutos.
+   * `unnamed`: há worker sem nome (versão anterior do Info8n), que roda execuções sem worker_id. Null
+   * quando o Redis não lista as conexões; aí não dá para saber quem está vivo.
    */
   async liveWorkers(candidates: Iterable<string | null>): Promise<LiveWorkers | null> {
     const connected = new Map<string, number>();
@@ -157,13 +170,14 @@ export class ExecutionQueue {
       else connected.set(name.slice(at + 3), Number(client.idle));
     }
     const asked = [...new Set([...candidates].filter((id): id is string => !!id))];
-    const beats = asked.length ? await this.redis.mget(asked.map(workerKey)) : [];
+    const beats = asked.length ? await this.redis.mget(asked.flatMap((id) => [workerKey(id), heldKey(id)])) : [];
     const ids = new Set<string>();
     asked.forEach((id, i) => {
       const idle = connected.get(id);
       // Sem o tempo parado na lista (Redis diferente), a conexão aberta vale.
       const recent = idle !== undefined && !(idle >= STALE_CONNECTION_SECONDS);
-      if (beats[i] !== null || recent) ids.add(id);
+      const held = idle !== undefined && beats[2 * i + 1] !== null;
+      if (beats[2 * i] !== null || recent || held) ids.add(id);
     });
     return { ids, unnamed };
   }
