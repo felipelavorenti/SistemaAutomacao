@@ -1,7 +1,7 @@
 import { defaultRegistry, isExpression, NodeOperationError, type PropertyType, type WorkflowDefinition } from '@sa/engine';
-import { one, type Db } from '../db/db.js';
+import { many, one, type Db } from '../db/db.js';
 import { loadUser } from './auth.js';
-import { canSeeClient, canSeeFolder, type CurrentUser } from './permissions.js';
+import { canSeeClient, canSeeFolder, HttpError, type CurrentUser } from './permissions.js';
 
 /** Conexões, clientes no ERP e subfluxos que o fluxo escolhe com valor fixo (sem expressão). */
 export interface FixedReferences {
@@ -36,6 +36,43 @@ export function fixedReferences(definition: WorkflowDefinition): FixedReferences
     }
   }
   return refs;
+}
+
+/** Fluxos que citam um ID (conexão, endpoint ou cliente no ERP): os das pastas do usuário e quantos são de outras pastas. */
+export interface WorkflowUsage {
+  visible: { id: string; name: string; active: boolean }[];
+  hidden: number;
+}
+
+/**
+ * Quem usa o ID. O nome de um fluxo de pasta sem acesso nunca sai daqui: ele só entra na contagem,
+ * para a exclusão continuar bloqueada sem mostrar o que está nas outras pastas.
+ */
+export async function workflowsUsing(db: Db, user: CurrentUser, id: string): Promise<WorkflowUsage> {
+  const rows = await many<{ id: string; name: string; active: boolean; visible: boolean }>(
+    db,
+    `SELECT id, name, active, ($2::uuid[] IS NULL OR folder_id = ANY($2)) AS visible
+     FROM workflows WHERE definition::text LIKE '%' || $1 || '%' ORDER BY name`,
+    [id, user.folderIds],
+  );
+  return {
+    visible: rows.filter((r) => r.visible).map((r) => ({ id: r.id, name: r.name, active: r.active })),
+    hidden: rows.filter((r) => !r.visible).length,
+  };
+}
+
+/** Como as mensagens contam os fluxos de pastas sem acesso, sem dizer quais são. */
+export function hiddenFlows(count: number): string {
+  return count === 1 ? '1 fluxo de pasta que você não acessa' : `${count} fluxos de pastas que você não acessa`;
+}
+
+/** 409 quando algum fluxo usa o ID. `subject` é o começo da frase ("A conexão é usada"). */
+export async function refuseIfUsed(db: Db, user: CurrentUser, id: string, subject: string): Promise<void> {
+  const { visible, hidden } = await workflowsUsing(db, user, id);
+  if (!visible.length && !hidden) return;
+  const others = hiddenFlows(hidden);
+  if (!visible.length) throw new HttpError(409, `${subject} por ${others}`);
+  throw new HttpError(409, `${subject} pelos fluxos: ${visible.map((w) => w.name).join(', ')}${hidden ? ` e por mais ${others}` : ''}`);
 }
 
 /**
