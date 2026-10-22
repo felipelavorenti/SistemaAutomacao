@@ -7,7 +7,7 @@ import { currentUser, type RouteDeps } from '../app.js';
 import { activatableTypes, isActivatable } from '../triggers/manager.js';
 import { many, one, transaction } from '../db/db.js';
 import { createExecution, enqueueOrFail } from '../executions/store.js';
-import { fixedReferences } from '../lib/access.js';
+import { fixedReferences, hiddenFlows } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { canSeeClient, canSeeFolder, forbidden, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
 
@@ -166,9 +166,11 @@ export const workflowRoutes =
       }
     };
 
-    /** Webhook e formulário com caminho já usado por outro fluxo ativo. */
-    const checkTriggerConflicts = (wf: { id: string; name: string; version: number; definition: WorkflowDefinition }) => {
-      const problems = triggers.conflicts(wf);
+    /** Webhook e formulário com caminho já usado por outro fluxo ativo. O nome do outro só aparece se ele está numa pasta do usuário. */
+    const checkTriggerConflicts = async (user: CurrentUser, wf: { id: string; name: string; version: number; definition: WorkflowDefinition }) => {
+      const mine =
+        user.folderIds === null ? null : new Set((await many<{ id: string }>(db, 'SELECT id FROM workflows WHERE folder_id = ANY($1)', [user.folderIds])).map((r) => r.id));
+      const problems = triggers.conflicts(wf, (id) => mine === null || mine.has(id));
       if (problems.length) throw new HttpError(400, problems.join('; '));
     };
 
@@ -286,7 +288,7 @@ export const workflowRoutes =
       await checkSubworkflows(user, b.definition, id);
       checkSchedule(b.definition, before.active);
       await checkErrorWorkflow(user, b.definition);
-      if (before.active) checkTriggerConflicts({ id, name: b.name, version: before.version, definition: b.definition });
+      if (before.active) await checkTriggerConflicts(user, { id, name: b.name, version: before.version, definition: b.definition });
       const issues = validateWorkflow(b.definition);
       if (before.active && issues.length) {
         throw new HttpError(400, 'O fluxo está ativo e tem problemas; corrija antes de salvar', issues);
@@ -337,7 +339,7 @@ export const workflowRoutes =
         const issues = validateWorkflow(wf.definition);
         if (issues.length) throw new HttpError(400, 'Corrija os problemas do fluxo antes de ativar', issues);
         checkSchedule(wf.definition, true);
-        checkTriggerConflicts(wf);
+        await checkTriggerConflicts(user, wf);
       }
       await db.query('UPDATE workflows SET active = $2, updated_at = now(), updated_by = $3 WHERE id = $1', [id, active, user.id]);
       await queue.syncSchedule({ ...wf, active });
@@ -363,16 +365,22 @@ export const workflowRoutes =
       requireCap(user, 'workflow:edit');
       const { id } = idParam.parse(request.params);
       const wf = await load(user, id);
-      const callers = await many<{ name: string }>(
+      const callers = await many<{ name: string; folder_id: string }>(
         db,
-        `SELECT name FROM workflows WHERE id <> $1 AND EXISTS (
+        `SELECT name, folder_id FROM workflows WHERE id <> $1 AND EXISTS (
            SELECT 1 FROM jsonb_array_elements(definition->'nodes') n
            WHERE n->>'type' = 'executeWorkflow' AND n->'parameters'->>'workflowId' = $1::text)
          ORDER BY name`,
         [id],
       );
       if (callers.length) {
-        throw new HttpError(400, `Este fluxo é chamado por outros fluxos: ${callers.map((c) => c.name).join(', ')}. Remova as chamadas antes de excluir.`);
+        // O nome de quem chama só aparece se ele está numa pasta do usuário; os outros só entram na contagem.
+        const names = callers.filter((c) => canSeeFolder(user, c.folder_id)).map((c) => c.name);
+        const others = callers.length - names.length;
+        const who = !names.length
+          ? `por ${hiddenFlows(others)}`
+          : `por outros fluxos: ${names.join(', ')}${others ? ` e por mais ${hiddenFlows(others)}` : ''}`;
+        throw new HttpError(400, `Este fluxo é chamado ${who}. Remova as chamadas antes de excluir.`);
       }
       await queue.syncSchedule({ ...wf, active: false });
       await triggers.remove(id);
@@ -509,6 +517,11 @@ export const workflowRoutes =
           const n8nId = wf.id === undefined || wf.id === null ? null : String(wf.id);
           const previous = n8nId ? already.get(n8nId) : undefined;
           if (previous) {
+            // Importado antes numa pasta sem acesso: não diz o nome nem o ID de lá.
+            if (!canSeeFolder(user, previous.folder_id)) {
+              results.push({ n8nId, name: wf.name ?? '', status: 'skipped', warnings: [{ message: 'já foi importado antes, numa pasta que você não acessa' }] });
+              continue;
+            }
             results.push({ n8nId, name: wf.name ?? previous.name, status: 'skipped', id: previous.id, warnings: [{ message: `já foi importado antes como "${previous.name}"` }] });
             continue;
           }

@@ -497,7 +497,7 @@ São registradas fora de `/api`, sem login, com os caminhos do n8n. Têm um leit
 Roda no processo da API (`index.ts` chama `triggers.start()` depois do `listen` e `close()` ao desligar). Com vários processos de API, cada um teria os próprios ouvintes: rode uma API só.
 
 - `start()` lê os fluxos ativos e chama `sync` para cada um. `sync(fluxo, { strict })` registra os webhooks e formulários em memória e liga os ouvintes. Ativar usa `strict: true`: se um ouvinte não inicia (senha IMAP errada, pasta fora de FILES_DIRS), a ativação volta atrás com 400 "O gatilho não iniciou: ...". Salvar um fluxo ativo chama `sync` de novo; desativar e excluir chamam `remove`.
-- `conflicts()` recusa dois fluxos ativos com o mesmo método e caminho (ou o mesmo caminho de formulário). Caminho vazio vale o ID do nó.
+- `conflicts()` recusa dois fluxos ativos com o mesmo método e caminho (ou o mesmo caminho de formulário). Caminho vazio vale o ID do nó. A rota passa `canSee`: se o outro fluxo está numa pasta que o usuário não acessa, a mensagem diz "por um fluxo ativo de uma pasta que você não acessa", sem o nome.
 - Nós com `listen(ctx)` (IMAP, pasta, SSE) recebem um `TriggerContext` com `emit(items)`, `emitError`, `signal`, os parâmetros resolvidos, `getConnection`, `filesDirs` e `staticData`, e devolvem a função que fecha. Nós com `poll(ctx)` (RSS) rodam nos crons de `pollTimesToCrons(parameters.pollTimes)` e devolvem `Item[]` ou `null`.
 - `staticData` fica na tabela `workflow_static_data` (por fluxo e nó): último e-mail do IMAP, data do último item do RSS.
 - Cada disparo cria uma execução `mode = 'trigger'` com `start_node_id` e os itens como entrada.
@@ -673,6 +673,7 @@ Telas e API vão com `X-Frame-Options: DENY`, `Content-Security-Policy: frame-an
 
 - Administrar = usuários, pastas, clientes e auditoria.
 - O administrador vê todas as pastas e todos os clientes. Os outros perfis veem só as pastas e os clientes liberados para eles. Conexões sem cliente ficam visíveis para todos.
+- O que cita outros fluxos só dá o nome dos fluxos das pastas do usuário: quem usa uma conexão, um endpoint ou um cliente no ERP (`GET /connections/{id}/usage` e o 409 das exclusões, por `workflowsUsing` e `refuseIfUsed`, em `apps/server/src/lib/access.ts`), quem chama um subfluxo (400 de `DELETE /workflows/{id}`), o caminho de webhook ou formulário já usado (`conflicts()`) e o fluxo do n8n já importado (pulado sem `id` e sem o nome de lá). Os de outras pastas entram só na contagem (`hiddenFlows`) e continuam bloqueando a exclusão. Sem isso, uma conexão sem cliente, que todos enxergam, mostraria o nome dos fluxos de todas as pastas.
 
 **Conexões, clientes no ERP e subfluxos escolhidos por expressão**
 

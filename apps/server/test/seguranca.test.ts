@@ -453,4 +453,91 @@ describe.skipIf(!available)('Segurança', () => {
     expect((await call(editor, 'PUT', `/api/erps/${erp.id}`, { ...body, name: 'ERP Teste 2', baseUrl: 'https://{{host}}:{{porta}}' })).status).toBe(200);
     expect((await call(admin, 'PUT', `/api/erps/${erp.id}`, body)).status).toBe(200);
   });
+
+  // ---------- N1: "quem usa" não mostra fluxos de pastas sem acesso ----------
+
+  it('lista de quem usa a conexão só mostra os fluxos das pastas do usuário', async () => {
+    // Conexão sem cliente: todo mundo enxerga.
+    const conn = (await call(admin, 'POST', '/api/connections', { name: 'Compartilhada', type: 'httpBearerAuth', clientId: null, data: { token: 't' } })).body.id;
+    const http = (name: string) => flow([{ id: 'h', name, type: 'httpRequest', parameters: { url: apiBase, connection: conn } }]);
+    const secret = await createFlow(admin, 'Fechamento da diretoria', folderB, http('HTTP'));
+    const mine = await createFlow(editor, 'Fluxo da pasta A', folderA, http('HTTP'));
+
+    expect((await call(editor, 'GET', `/api/connections/${conn}/usage`)).body).toEqual([{ id: mine, name: 'Fluxo da pasta A', active: false }]);
+    expect((await call(admin, 'GET', `/api/connections/${conn}/usage`)).body.map((w: { id: string }) => w.id).sort()).toEqual([mine, secret].sort());
+
+    // A exclusão continua bloqueada pelo fluxo da outra pasta, sem dizer o nome dele.
+    const refused = await call(editor, 'DELETE', `/api/connections/${conn}`);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe('A conexão é usada pelos fluxos: Fluxo da pasta A e por mais 1 fluxo de pasta que você não acessa');
+    expect((await call(admin, 'DELETE', `/api/connections/${conn}`)).body.error).toBe('A conexão é usada pelos fluxos: Fechamento da diretoria, Fluxo da pasta A');
+  });
+
+  it('excluir endpoint ou cliente no ERP usado em outra pasta não mostra o nome do fluxo', async () => {
+    const erp = (await call(admin, 'POST', '/api/erps', { name: 'ERP Pastas', baseUrl: 'https://erp.local', authType: 'none' })).body.id;
+    const endpoint = (await call(admin, 'POST', `/api/erps/${erp}/endpoints`, { name: 'Consulta', method: 'GET', path: '/x' })).body.id;
+    const erpClient = (await call(admin, 'POST', `/api/erps/${erp}/clients`, { clientId: clientX, values: {} })).body.id;
+    expect(endpoint && erpClient).toBeTruthy();
+    await createFlow(
+      admin,
+      'Fechamento da diretoria pelo ERP',
+      folderB,
+      flow([{ id: 'h', name: 'ERP', type: 'httpRequest', parameters: { source: 'catalog', erpClient, endpoint, variables: {} } }]),
+    );
+
+    const endpointRefused = await call(editor, 'DELETE', `/api/erp-endpoints/${endpoint}`);
+    expect(endpointRefused.status).toBe(409);
+    expect(endpointRefused.body.error).toBe('O endpoint é usado por 1 fluxo de pasta que você não acessa');
+    const clientRefused = await call(editor, 'DELETE', `/api/erp-clients/${erpClient}`);
+    expect(clientRefused.status).toBe(409);
+    expect(clientRefused.body.error).toBe('O cadastro é usado por 1 fluxo de pasta que você não acessa');
+    expect((await call(admin, 'DELETE', `/api/erp-clients/${erpClient}`)).body.error).toBe('O cadastro é usado pelos fluxos: Fechamento da diretoria pelo ERP');
+  });
+
+  it('caminho de webhook repetido não diz o nome do fluxo ativo de outra pasta', async () => {
+    const webhook = flow([{ id: 'w', name: 'Webhook', type: 'webhook', parameters: { httpMethod: 'POST', path: 'diretoria/folha' } }]);
+    const secret = await createFlow(admin, 'Folha da diretoria', folderB, webhook);
+    expect((await call(admin, 'POST', `/api/workflows/${secret}/activate`)).status).toBe(200);
+    const mine = await createFlow(editor, 'Webhook da pasta A', folderA, webhook);
+    const refused = await call(editor, 'POST', `/api/workflows/${mine}/activate`);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toBe('O webhook POST "diretoria/folha" já é usado por um fluxo ativo de uma pasta que você não acessa');
+    await call(admin, 'POST', `/api/workflows/${secret}/deactivate`);
+  });
+
+  it('excluir subfluxo chamado de outra pasta não diz o nome de quem chama', async () => {
+    const sub = await createFlow(editor, 'Sub da pasta A', folderA, flow([{ id: 's', name: 'Recebe', type: 'executeWorkflowTrigger' }]));
+    await createFlow(
+      admin,
+      'Chamador da diretoria',
+      folderB,
+      flow(
+        [
+          { id: 't', name: 'Início', type: 'manualTrigger' },
+          { id: 'e', name: 'Chama', type: 'executeWorkflow', parameters: { workflowId: sub } },
+        ],
+        [['t', 'e']],
+      ),
+    );
+    const refused = await call(editor, 'DELETE', `/api/workflows/${sub}`);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toBe('Este fluxo é chamado por 1 fluxo de pasta que você não acessa. Remova as chamadas antes de excluir.');
+    expect((await call(admin, 'DELETE', `/api/workflows/${sub}`)).body.error).toMatch(/chamado por outros fluxos: Chamador da diretoria\./);
+  });
+
+  it('importar de novo um fluxo do n8n que está em outra pasta não diz o nome nem o ID de lá', async () => {
+    const n8n = (name: string) => ({
+      id: 'n8n-diretoria',
+      name,
+      nodes: [{ name: 'Início', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, position: [0, 0], parameters: {} }],
+      connections: {},
+    });
+    const first = await call(admin, 'POST', '/api/workflows/import-n8n', { folderId: folderB, data: n8n('Folha da diretoria (n8n)') });
+    expect(first.body[0].status, JSON.stringify(first.body)).toBe('imported');
+    const again = await call(editor, 'POST', '/api/workflows/import-n8n', { folderId: folderA, data: n8n('Qualquer nome') });
+    expect(again.status).toBe(200);
+    expect(again.body).toEqual([
+      { n8nId: 'n8n-diretoria', name: 'Qualquer nome', status: 'skipped', warnings: [{ message: 'já foi importado antes, numa pasta que você não acessa' }] },
+    ]);
+  });
 });

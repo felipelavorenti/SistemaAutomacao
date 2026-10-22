@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { endpointVariables, type JsonObject } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
+import { refuseIfUsed } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { DEFAULT_CLIENT_FIELDS, mergeValues, publicValues, type ClientField } from '../lib/catalog.js';
 import { secretsToRetype } from '../lib/connection-types.js';
@@ -80,9 +81,6 @@ export const catalogRoutes =
       notes: r.notes,
       updatedAt: r.updated_at,
     });
-    /** Fluxos que usam um ID (endpoint, cliente no ERP), para avisar antes de excluir. */
-    const usedBy = (id: string) => many<{ name: string }>(db, `SELECT name FROM workflows WHERE definition::text LIKE '%' || $1 || '%' ORDER BY name`, [id]);
-
     // ---------- ERPs ----------
     app.get('/erps', async (request) => {
       requireCap(currentUser(request), 'workflow:view');
@@ -218,8 +216,7 @@ export const catalogRoutes =
       const user = currentUser(request);
       requireCap(user, 'connection:edit');
       const { id } = idParam.parse(request.params);
-      const used = await usedBy(id);
-      if (used.length) throw new HttpError(409, `O endpoint é usado pelos fluxos: ${used.map((w) => w.name).join(', ')}`);
+      await refuseIfUsed(db, user, id, 'O endpoint é usado');
       const row = await one<{ name: string }>(db, 'DELETE FROM erp_endpoints WHERE id = $1 RETURNING name', [id]);
       if (!row) throw notFound('Endpoint');
       await audit(db, { userId: user.id, action: 'delete', entityType: 'erp_endpoint', entityId: id, entityName: row.name, ip: request.ip });
@@ -303,8 +300,7 @@ export const catalogRoutes =
       const { id } = idParam.parse(request.params);
       const existing = await loadErpClient(id);
       if (!existing || !canSeeClient(user, existing.client_id)) throw notFound('Cliente no ERP');
-      const used = await usedBy(id);
-      if (used.length) throw new HttpError(409, `O cadastro é usado pelos fluxos: ${used.map((w) => w.name).join(', ')}`);
+      await refuseIfUsed(db, user, id, 'O cadastro é usado');
       await db.query('DELETE FROM erp_clients WHERE id = $1', [id]);
       await audit(db, { userId: user.id, action: 'delete', entityType: 'erp_client', entityId: id, entityName: existing.erp_name, ip: request.ip });
       return { ok: true };

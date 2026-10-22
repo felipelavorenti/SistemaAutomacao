@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { testConnection, type JsonObject } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
+import { refuseIfUsed, workflowsUsing } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { connectionTypes, getConnectionType, mergeData, missingFields, publicData, secretsToRetype } from '../lib/connection-types.js';
 import { decryptJson, encryptJson } from '../lib/crypto.js';
@@ -103,7 +104,7 @@ export const connectionRoutes =
       const user = currentUser(request);
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       await load(user, id);
-      return many(db, `SELECT id, name, active FROM workflows WHERE definition::text LIKE '%' || $1 || '%' ORDER BY name`, [id]);
+      return (await workflowsUsing(db, user, id)).visible;
     });
 
     app.post('/connections', async (request) => {
@@ -174,10 +175,7 @@ export const connectionRoutes =
       requireCap(user, 'connection:edit');
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const existing = await load(user, id);
-      const used = await many<{ name: string }>(db, `SELECT name FROM workflows WHERE definition::text LIKE '%' || $1 || '%'`, [id]);
-      if (used.length) {
-        throw new HttpError(409, `A conexão é usada pelos fluxos: ${used.map((w) => w.name).join(', ')}`);
-      }
+      await refuseIfUsed(db, user, id, 'A conexão é usada');
       await db.query('DELETE FROM connections WHERE id = $1', [id]);
       await audit(db, { userId: user.id, action: 'delete', entityType: 'connection', entityId: id, entityName: existing.name, ip: request.ip });
       return { ok: true };

@@ -187,8 +187,8 @@ export class TriggerManager {
     await this.stopTest(workflowId);
   }
 
-  /** Caminhos (método + caminho) que outro fluxo ativo já usa. */
-  conflicts(wf: { id: string; name: string; version: number | null; definition: WorkflowDefinition }): string[] {
+  /** Caminhos (método + caminho) que outro fluxo ativo já usa. `canSee` diz se o nome do outro fluxo pode aparecer na mensagem. */
+  conflicts(wf: { id: string; name: string; version: number | null; definition: WorkflowDefinition }, canSee: (workflowId: string) => boolean = () => true): string[] {
     const problems: string[] = [];
     const mine = entriesFor(wf);
     const seen = new Set<string>();
@@ -200,11 +200,8 @@ export class TriggerManager {
         if (id === wf.id) continue;
         const other = others.find((o) => o.kind === e.kind && o.method === e.method && o.path === e.path);
         if (other) {
-          problems.push(
-            e.kind === 'form'
-              ? `O formulário "${e.path}" já é usado pelo fluxo ativo "${other.workflowName}"`
-              : `O webhook ${e.method} "${e.path}" já é usado pelo fluxo ativo "${other.workflowName}"`,
-          );
+          const by = canSee(id) ? `pelo fluxo ativo "${other.workflowName}"` : 'por um fluxo ativo de uma pasta que você não acessa';
+          problems.push(e.kind === 'form' ? `O formulário "${e.path}" já é usado ${by}` : `O webhook ${e.method} "${e.path}" já é usado ${by}`);
         }
       }
     }

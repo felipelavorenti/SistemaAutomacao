@@ -56,7 +56,7 @@ A tela Fluxos lista os fluxos que você enxerga, com a pasta, a próxima execuç
 
 - **Novo fluxo:** dê um nome, escolha a pasta e o editor abre vazio.
 - **Duplicar:** cria uma cópia inativa na mesma pasta.
-- **Excluir:** pede confirmação. Um fluxo chamado por outros não pode ser excluído; o sistema lista quem o chama.
+- **Excluir:** pede confirmação. Um fluxo chamado por outros não pode ser excluído; o sistema lista quem o chama. Quem chama a partir de uma pasta que você não acessa entra só na contagem, sem o nome.
 
 **O editor**
 
@@ -99,11 +99,11 @@ Cada vez que você salva, o Info8n guarda uma versão nova com a data e o autor.
 
 - **Exportar** (no editor) baixa o fluxo em JSON.
 - **Importar JSON** (na lista) cria um fluxo a partir de um arquivo exportado do Info8n.
-- **Importar do n8n** aceita um ou vários arquivos exportados do n8n. Subfluxos importados juntos, ou antes, ficam ligados ao fluxo que os chama. Ao final, uma lista mostra, fluxo por fluxo, o que precisa de ajuste. Credenciais não vêm do n8n: cadastre-as em Conexões e escolha a conexão em cada nó. Veja também a seção Diferenças para o n8n.
+- **Importar do n8n** aceita um ou vários arquivos exportados do n8n. Subfluxos importados juntos, ou antes, ficam ligados ao fluxo que os chama. Ao final, uma lista mostra, fluxo por fluxo, o que precisa de ajuste. Um fluxo já importado antes é pulado; se ele está numa pasta que você não acessa, o aviso não diz o nome de lá. Credenciais não vêm do n8n: cadastre-as em Conexões e escolha a conexão em cada nó. Veja também a seção Diferenças para o n8n.
 
 **Ativar o fluxo**
 
-Fluxos com um gatilho que dispara sozinho (Agendamento, Webhook, Form Trigger, n8n Trigger, RSS Feed Trigger, Email Trigger, Local File Trigger ou SSE Trigger) precisam estar ativos para rodar. Salve as alterações e ligue a chave Ativo na barra do editor. O sistema recusa a ativação se o fluxo tiver pendências, se outro fluxo ativo já usar o mesmo endereço de webhook ou formulário, ou se o gatilho não conseguir iniciar (por exemplo, a caixa de e-mail recusou a senha); a mensagem diz o motivo. Salvar um fluxo ativo aplica as mudanças nos gatilhos na hora. Para parar de rodar, desligue a chave. Ativar e desativar ficam registrados na Auditoria.
+Fluxos com um gatilho que dispara sozinho (Agendamento, Webhook, Form Trigger, n8n Trigger, RSS Feed Trigger, Email Trigger, Local File Trigger ou SSE Trigger) precisam estar ativos para rodar. Salve as alterações e ligue a chave Ativo na barra do editor. O sistema recusa a ativação se o fluxo tiver pendências, se outro fluxo ativo já usar o mesmo endereço de webhook ou formulário, ou se o gatilho não conseguir iniciar (por exemplo, a caixa de e-mail recusou a senha); a mensagem diz o motivo. O nome do outro fluxo que já usa o endereço só aparece se ele estiver numa pasta que você acessa. Salvar um fluxo ativo aplica as mudanças nos gatilhos na hora. Para parar de rodar, desligue a chave. Ativar e desativar ficam registrados na Auditoria.
 
 ## Campos Fixo e Expressão
 
@@ -514,7 +514,8 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 - **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual. Se você mudar o servidor, a porta ou a URL, digite a senha (ou o token) de novo: o Info8n não deixa levar a senha salva para outro endereço.
 - **Conexão por expressão:** o campo de conexão de um nó também aceita expressão. Na hora de rodar, o Info8n confere se o responsável pela execução tem acesso ao cliente da conexão: quem clicou em Executar ou Tentar de novo, ou, nas execuções automáticas (agendamento, webhook, gatilhos, fluxo de erro), quem salvou o fluxo por último. Sem acesso, o nó falha dizendo isso. A mesma conferência vale para o cliente no ERP e para o subfluxo do Execute Workflow escolhidos por expressão.
 - **Alterar com fluxos rodando:** mudar uma conexão de banco não derruba quem está usando. O nó Banco de dados que já começou termina com os dados antigos (todos os itens dele); os nós que começarem depois usam os dados novos.
-- **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
+- **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam. O mesmo vale para excluir um endpoint ou um cliente cadastrado num ERP.
+- **Onde é usada:** mostra os fluxos que usam a conexão. Essa tela, e a lista que aparece ao excluir, só dão o nome dos fluxos das pastas que você acessa; os das outras pastas entram só na contagem (por exemplo, "e por mais 1 fluxo de pasta que você não acessa") e continuam impedindo a exclusão.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
 
 #### Conectar o Gmail

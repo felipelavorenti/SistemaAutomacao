@@ -278,7 +278,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui o fluxo e desliga o agendamento dele.',
         params: [id('do fluxo')],
-        errors: ['400: outros fluxos chamam este como subfluxo (a mensagem diz quais)'],
+        errors: ['400: outros fluxos chamam este como subfluxo (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)'],
         audited: true,
       },
       {
@@ -287,7 +287,10 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Liga o agendamento do fluxo.',
         params: [id('do fluxo')],
-        errors: ['400: o fluxo não tem gatilho de agendamento, tem problemas, o agendamento é inválido ou a data da execução única já passou'],
+        errors: [
+          '400: o fluxo não tem gatilho de agendamento, tem problemas, o agendamento é inválido ou a data da execução única já passou',
+          '400: o caminho do webhook ou do formulário já é usado por outro fluxo ativo (a mensagem diz qual, se ele está numa pasta que você acessa)',
+        ],
         audited: true,
       },
       {
@@ -414,7 +417,7 @@ const GROUPS: ApiGroup[] = [
           { name: 'data', type: 'objeto ou lista', required: true, description: 'O JSON exportado do n8n, com um fluxo ou uma lista (até 50 MB)' },
         ],
         response:
-          'Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.',
+          'Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe; vem sem id, e sem o nome de lá no aviso, quando ele está numa pasta que você não acessa). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.',
         errors: ['400: o arquivo não é uma exportação do n8n', '403: um fluxo tem o nó Execute Command ou SSH e o usuário não é Administrador (nada é importado)'],
         audited: true,
       },
@@ -574,7 +577,7 @@ const GROUPS: ApiGroup[] = [
         method: 'GET',
         path: '/connections/{id}/usage',
         profile: 'any',
-        summary: 'Fluxos que usam a conexão.',
+        summary: 'Fluxos que usam a conexão. Só lista os das pastas que você acessa.',
         params: [id('da conexão')],
       },
       {
@@ -606,7 +609,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui uma conexão.',
         params: [id('da conexão')],
-        errors: ['409: fluxos usam a conexão (a mensagem diz quais)'],
+        errors: ['409: fluxos usam a conexão (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)'],
         audited: true,
       },
       {
@@ -905,7 +908,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui um endpoint.',
         params: [id('do endpoint')],
-        errors: ['409: fluxos usam o endpoint (a mensagem diz quais)'],
+        errors: ['409: fluxos usam o endpoint (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)'],
         audited: true,
       },
       {
@@ -934,7 +937,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'editor',
         summary: 'Exclui o cadastro de um cliente no ERP.',
         params: [id('do cadastro')],
-        errors: ['409: fluxos usam o cadastro (a mensagem diz quais)'],
+        errors: ['409: fluxos usam o cadastro (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)'],
         audited: true,
       },
       {

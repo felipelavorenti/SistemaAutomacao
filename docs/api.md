@@ -890,7 +890,7 @@ curl -X DELETE "$INFO8N/api/workflows/b2bbbd6a-aa22-4ef0-a066-1ed17da5888b" \
 
 **Erros próprios**
 
-- 400: outros fluxos chamam este como subfluxo (a mensagem diz quais)
+- 400: outros fluxos chamam este como subfluxo (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)
 
 ### POST /api/workflows/{id}/activate
 
@@ -920,6 +920,7 @@ curl -X POST "$INFO8N/api/workflows/dec48013-b108-482a-8fc8-0c531e797802/activat
 **Erros próprios**
 
 - 400: o fluxo não tem gatilho de agendamento, tem problemas, o agendamento é inválido ou a data da execução única já passou
+- 400: o caminho do webhook ou do formulário já é usado por outro fluxo ativo (a mensagem diz qual, se ele está numa pasta que você acessa)
 
 ### POST /api/workflows/{id}/deactivate
 
@@ -1455,7 +1456,7 @@ curl -X POST "$INFO8N/api/workflows/import-n8n" \
 
 **Exemplo de resposta**
 
-Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.
+Uma linha por fluxo do arquivo. status é imported, ou skipped quando o fluxo já tinha sido importado antes (id é o do fluxo que já existe; vem sem id, e sem o nome de lá no aviso, quando ele está numa pasta que você não acessa). wasActive diz se ele estava ativo no n8n, e warnings lista, por nó, o que precisa de ajuste.
 
 ```json
 [
@@ -2225,7 +2226,7 @@ curl "$INFO8N/api/connections/06382b0a-066f-4230-b288-053f93bd9af9" \
 
 ### GET /api/connections/{id}/usage
 
-Fluxos que usam a conexão.
+Fluxos que usam a conexão. Só lista os das pastas que você acessa.
 
 **Perfil:** Qualquer perfil
 
@@ -2415,7 +2416,7 @@ curl -X DELETE "$INFO8N/api/connections/42afd978-bae1-4bc5-8a11-49be5240af1e" \
 
 **Erros próprios**
 
-- 409: fluxos usam a conexão (a mensagem diz quais)
+- 409: fluxos usam a conexão (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)
 
 ### POST /api/connections/test
 
@@ -3529,7 +3530,7 @@ curl -X DELETE "$INFO8N/api/erp-endpoints/9ad6b703-e552-403d-8e70-9224d3117c43" 
 
 **Erros próprios**
 
-- 409: fluxos usam o endpoint (a mensagem diz quais)
+- 409: fluxos usam o endpoint (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)
 
 ### POST /api/erps/{id}/clients
 
@@ -3648,7 +3649,7 @@ curl -X DELETE "$INFO8N/api/erp-clients/676240ab-80ca-4f5d-b22d-ad47fd05fb3f" \
 
 **Erros próprios**
 
-- 409: fluxos usam o cadastro (a mensagem diz quais)
+- 409: fluxos usam o cadastro (a mensagem diz quais; os de pastas que você não acessa entram só na contagem, sem o nome)
 
 ### GET /api/api-catalog
 
