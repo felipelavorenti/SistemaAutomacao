@@ -1,9 +1,12 @@
-import { checkIdentifier } from '../database/params.js';
+import { buildInsertSql, checkIdentifier, insertBatchRows, insertParams } from '../database/params.js';
 import { DATABASE_CONNECTION_TYPES, type ParamDirection, type ParamType, type ProcedureParam } from '../database/drivers.js';
 import type { DatabaseSession, NodeType } from '../node-types.js';
 import { NodeOperationError } from '../node-types.js';
 import type { Item, JsonObject, JsonValue } from '../types.js';
 import { isPlainObject } from './paths.js';
+
+/** Linhas por INSERT quando o nó não diz (o banco ainda pode limitar). */
+const DEFAULT_INSERT_BATCH = 500;
 
 const DIRECTIONS = [
   { name: 'Entrada', value: 'in' },
@@ -84,6 +87,15 @@ export const database: NodeType = {
           { name: 'value', displayName: 'Valor', type: 'string', default: '' },
         ],
       },
+      {
+        name: 'batchSize',
+        displayName: 'Linhas por comando',
+        type: 'number',
+        default: DEFAULT_INSERT_BATCH,
+        showWhen: { operation: ['insert'] },
+        description:
+          'Quantas linhas vão em cada INSERT, para não fazer uma ida ao banco por item. Um lote que dá erro não insere nenhuma das linhas dele; com 1, cada linha é um comando, como antes dos lotes. O banco pode limitar o lote (menos linhas quando a tabela tem muitas colunas).',
+      },
       { name: 'procedure', displayName: 'Procedure', type: 'string', default: '', placeholder: 'pacote.procedure', showWhen: { operation: ['procedure'] } },
       {
         name: 'procedureParams',
@@ -117,12 +129,12 @@ export const database: NodeType = {
     const executeOnce = (await ctx.getParam('executeOnce', 0)) === true;
     const operation = await ctx.getParam('operation', 0);
     const count = executeOnce ? Math.min(1, Math.max(input.length, 1)) : input.length;
+    if (operation === 'insert') return [await insertRows(ctx.getParam, db, input, count)];
     const out: Item[] = [];
 
     for (let i = 0; i < count; i++) {
       try {
-        if (operation === 'insert') out.push(await insert(ctx.getParam, db, input[i], i));
-        else if (operation === 'procedure') out.push(await procedure(ctx.getParam, db, i));
+        if (operation === 'procedure') out.push(await procedure(ctx.getParam, db, i));
         else out.push(...(await query(ctx.getParam, db, i)));
       } catch (err) {
         throw dbError(err, count > 1 ? i : undefined);
@@ -147,7 +159,8 @@ async function query(getParam: GetParam, db: DatabaseSession, i: number): Promis
   return [{ json: { linhasAfetadas: result.rowsAffected ?? 0 } }];
 }
 
-async function insert(getParam: GetParam, db: DatabaseSession, item: Item | undefined, i: number): Promise<Item> {
+/** Tabela, colunas e valores de um item. */
+async function insertValues(getParam: GetParam, item: Item | undefined, i: number): Promise<{ table: string; columns: string[]; values: JsonObject }> {
   const table = checkIdentifier(String((await getParam('table', i)) ?? ''), 'Nome da tabela');
   let values: JsonObject;
   if ((await getParam('columnsMode', i)) === 'manual') {
@@ -161,11 +174,52 @@ async function insert(getParam: GetParam, db: DatabaseSession, item: Item | unde
   }
   const columns = Object.keys(values).map((c) => checkIdentifier(c, 'Nome da coluna'));
   if (!columns.length) throw new NodeOperationError('Nenhuma coluna para inserir');
-  const params: Record<string, JsonValue> = {};
-  columns.forEach((c, n) => (params[`p${n}`] = values[c]));
-  const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map((_, n) => `:p${n}`).join(', ')})`;
-  const result = await db.query(sql, params, 'insert');
-  return { json: { ...values, linhasAfetadas: result.rowsAffected ?? 0 } };
+  return { table, columns, values };
+}
+
+/**
+ * Insere os itens em lotes: itens seguidos com a mesma tabela e as mesmas colunas vão num INSERT só, até o
+ * tamanho do lote (menor se o banco não aguenta tantos parâmetros). Cada item continua com a sua linha na saída.
+ */
+async function insertRows(getParam: GetParam, db: DatabaseSession, input: Item[], count: number): Promise<Item[]> {
+  const asked = Number(await getParam('batchSize', 0));
+  const wanted = Number.isFinite(asked) && asked >= 1 ? Math.floor(asked) : DEFAULT_INSERT_BATCH;
+  const out: Item[] = [];
+  const pending: { key: string; table: string; columns: string[]; rows: JsonObject[]; from: number } = { key: '', table: '', columns: [], rows: [], from: 0 };
+
+  const flush = async () => {
+    const { table, columns, rows, from } = pending;
+    if (!rows.length) return;
+    pending.rows = [];
+    try {
+      const sql = buildInsertSql(db.dialect, table, columns, rows.length);
+      const params = insertParams(rows.map((values) => columns.map((c) => values[c])));
+      const result = await db.query(sql, params, 'insert');
+      // Uma linha por item: o total do lote dividido pelas linhas (1 em cada, salvo gatilho que conte linhas a mais).
+      const total = result.rowsAffected ?? 0;
+      const each = Number.isInteger(total / rows.length) ? total / rows.length : total;
+      for (const values of rows) out.push({ json: { ...values, linhasAfetadas: each } });
+    } catch (err) {
+      throw dbError(err, count > 1 ? from : undefined, rows.length > 1 ? from + rows.length - 1 : undefined);
+    }
+  };
+
+  for (let i = 0; i < count; i++) {
+    let row: Awaited<ReturnType<typeof insertValues>>;
+    try {
+      row = await insertValues(getParam, input[i], i);
+    } catch (err) {
+      // O que veio antes do item com problema já era inserido item a item; continua sendo.
+      await flush();
+      throw dbError(err, count > 1 ? i : undefined);
+    }
+    const key = `${row.table}\u0000${row.columns.join('\u0000')}`;
+    if (pending.rows.length && (pending.key !== key || pending.rows.length >= insertBatchRows(db.dialect, row.columns.length, wanted))) await flush();
+    if (!pending.rows.length) Object.assign(pending, { key, table: row.table, columns: row.columns, from: i });
+    pending.rows.push(row.values);
+  }
+  await flush();
+  return out;
 }
 
 async function procedure(getParam: GetParam, db: DatabaseSession, i: number): Promise<Item> {
@@ -203,11 +257,11 @@ function asList(value: JsonValue): JsonObject[] {
 }
 
 /** Erro do banco com o código do driver, para aparecer no log da execução. */
-function dbError(err: unknown, itemIndex?: number): NodeOperationError {
+function dbError(err: unknown, itemIndex?: number, lastIndex?: number): NodeOperationError {
   if (err instanceof NodeOperationError) return err;
   const e = err as { message?: string; code?: string | number; number?: number; errorNum?: number; detail?: string; hint?: string; position?: string };
   const code = e.code ?? e.number ?? e.errorNum ?? null;
-  const prefix = itemIndex === undefined ? '' : `Item ${itemIndex}: `;
+  const prefix = itemIndex === undefined ? '' : lastIndex === undefined ? `Item ${itemIndex}: ` : `Itens ${itemIndex} a ${lastIndex}: `;
   return new NodeOperationError(`${prefix}${e.message ?? String(err)}`, {
     codigo: code === null ? null : String(code),
     detalhe: e.detail ?? null,

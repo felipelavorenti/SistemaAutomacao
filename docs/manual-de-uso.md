@@ -292,7 +292,7 @@ Vários e-mails de uma vez viram uma execução com um item por e-mail. E-mails 
 **Banco de dados.** SQL Server, Oracle ou Postgres, pela conexão escolhida. Todo comando fica registrado em Comandos SQL.
 
 - **Executar SQL:** escreva o comando com :nome nos lugares dos valores e preencha cada parâmetro abaixo. Um SELECT devolve um item por linha; UPDATE e DELETE devolvem linhasAfetadas. Prefira parâmetros a montar o SQL com expressões: eles protegem contra SQL injection.
-- **Inserir linhas:** informe a tabela e use todos os campos do item com o mesmo nome das colunas, ou escolha coluna e valor.
+- **Inserir linhas:** informe a tabela e use todos os campos do item com o mesmo nome das colunas, ou escolha coluna e valor. Os itens vão em lotes: itens seguidos com a mesma tabela e as mesmas colunas entram num INSERT só, até o número de **Linhas por comando** (500 por padrão), e cada item continua com a sua linha na saída, com linhasAfetadas. Um fluxo que insere 5.000 linhas faz 10 comandos em vez de 5.000 (numa medição no mesmo computador, de 1,8 s para 0,16 s; pela rede a diferença é maior). O banco pode limitar o lote: com muitas colunas, cabem menos linhas por comando (no SQL Server, até 1.000 linhas e 2.000 valores por comando; no Oracle, 999 valores). Um lote que dá erro não insere nenhuma das linhas dele, e a mensagem diz quais itens eram ("Itens 0 a 499"); os lotes anteriores já foram inseridos, como antes eram os itens anteriores. Para voltar a um comando por linha, ponha 1 em Linhas por comando.
 - **Executar procedure:** informe o nome e os parâmetros na ordem da procedure, cada um com direção (entrada, saída, entrada e saída) e tipo. Os de saída e os cursores voltam no item pelo nome; linhas de um SELECT dentro da procedure vêm em linhas.
 - **Executar uma vez só:** desligado, o comando roda uma vez para cada item que chega, com os valores daquele item.
 
@@ -635,7 +635,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 
 ### Comandos SQL
 
-Todo comando que o nó Banco de dados executa num banco de cliente fica registrado aqui: quando, cliente e conexão, fluxo e nó, o SQL com os parâmetros, o resultado (linhas devolvidas ou afetadas, ou o erro) e a duração. Filtre por cliente, conexão, sucesso ou erro e busque no SQL, no nome do fluxo ou no erro. Da tela de uma execução, o link ver comandos SQL abre só os comandos dela. Cada usuário vê apenas os comandos dos clientes a que tem acesso. Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão); a Auditoria não é apagada.
+Todo comando que o nó Banco de dados executa num banco de cliente fica registrado aqui: quando, cliente e conexão, fluxo e nó, o SQL com os parâmetros, o resultado (linhas devolvidas ou afetadas, ou o erro) e a duração. Filtre por cliente, conexão, sucesso ou erro e busque no SQL, no nome do fluxo ou no erro. Da tela de uma execução, o link ver comandos SQL abre só os comandos dela. Cada usuário vê apenas os comandos dos clientes a que tem acesso. Um INSERT em lote aparece como um comando só, com as linhas do lote (parâmetros p0_0, p0_1... p1_0..., linha e coluna) e o total de linhas inseridas. Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão); a Auditoria não é apagada.
 
 ### Auditoria
 

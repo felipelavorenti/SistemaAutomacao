@@ -77,3 +77,36 @@ export function toDbValue(value: JsonValue | undefined): unknown {
   if (value !== null && typeof value === 'object') return JSON.stringify(value);
   return value;
 }
+
+/** Parâmetros por comando: o Postgres aceita 65.535, o SQL Server 2.100 (e 1.000 linhas no VALUES), o Oracle 999 colunas no INSERT ALL. */
+const INSERT_PARAM_LIMIT: Record<Dialect, number> = { postgres: 60_000, mssql: 2_000, oracle: 999 };
+const INSERT_ROW_LIMIT: Record<Dialect, number> = { postgres: 10_000, mssql: 1_000, oracle: 10_000 };
+
+/** Quantas linhas cabem num INSERT, no máximo `wanted`, respeitando os limites do banco. Sempre pelo menos 1. */
+export function insertBatchRows(dialect: Dialect, columnCount: number, wanted: number): number {
+  const byParams = Math.floor(INSERT_PARAM_LIMIT[dialect] / Math.max(1, columnCount));
+  return Math.max(1, Math.min(Math.floor(wanted), byParams, INSERT_ROW_LIMIT[dialect]));
+}
+
+/**
+ * INSERT de `rowCount` linhas num comando só. Os parâmetros são :p0, :p1... para uma linha (como antes dos
+ * lotes) e :p0_0, :p0_1... (linha_coluna) para várias. O Oracle não tem VALUES com várias linhas nas versões
+ * antigas: usa INSERT ALL.
+ */
+export function buildInsertSql(dialect: Dialect, table: string, columns: string[], rowCount: number): string {
+  const name = (row: number, col: number) => (rowCount === 1 ? `:p${col}` : `:p${row}_${col}`);
+  const values = (row: number) => `(${columns.map((_, col) => name(row, col)).join(', ')})`;
+  const list = columns.join(', ');
+  const rows = Array.from({ length: rowCount }, (_, row) => row);
+  if (dialect === 'oracle' && rowCount > 1) {
+    return `INSERT ALL ${rows.map((row) => `INTO ${table} (${list}) VALUES ${values(row)}`).join(' ')} SELECT 1 FROM DUAL`;
+  }
+  return `INSERT INTO ${table} (${list}) VALUES ${rows.map(values).join(', ')}`;
+}
+
+/** Os valores das linhas, com os nomes que o `buildInsertSql` usa. */
+export function insertParams(rows: JsonValue[][]): Record<string, JsonValue> {
+  const params: Record<string, JsonValue> = {};
+  rows.forEach((values, row) => values.forEach((value, col) => (params[rows.length === 1 ? `p${col}` : `p${row}_${col}`] = value)));
+  return params;
+}
