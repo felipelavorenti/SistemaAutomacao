@@ -595,6 +595,8 @@ Toda criação, alteração e exclusão de tabelas e linhas feita na tela ou pel
 
 Toda execução, de qualquer origem, aparece em Execuções, da mais recente para a mais antiga. Os filtros são fluxo, status, tipo, período (de e até) e uma busca pelo nome do fluxo, do nó ou pela mensagem de erro.
 
+O Info8n guarda as execuções terminadas (Sucesso, Erro e Cancelada) por 30 dias; todo dia às 03:30 UTC (00:30 em Brasília) ele apaga as mais antigas. As que estão Na fila, Executando ou Esperando nunca são apagadas. Para mudar o prazo, o administrador define `EXECUTION_RETENTION_DAYS` no `.env` (em dias; `0` guarda tudo para sempre) e reinicia o Info8n. Quem atualiza de uma versão sem essa variável perde, na primeira limpeza, as execuções com mais de 30 dias; se precisar delas, defina um prazo maior antes de atualizar.
+
 Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os que esperam vaga aparecem no topo da lista como Na fila, com o horário desde quando aguardam, e começam sozinhos conforme os anteriores terminam.
 
 | Status | Significado |
@@ -633,7 +635,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 
 ### Comandos SQL
 
-Todo comando que o nó Banco de dados executa num banco de cliente fica registrado aqui: quando, cliente e conexão, fluxo e nó, o SQL com os parâmetros, o resultado (linhas devolvidas ou afetadas, ou o erro) e a duração. Filtre por cliente, conexão, sucesso ou erro e busque no SQL, no nome do fluxo ou no erro. Da tela de uma execução, o link ver comandos SQL abre só os comandos dela. Cada usuário vê apenas os comandos dos clientes a que tem acesso.
+Todo comando que o nó Banco de dados executa num banco de cliente fica registrado aqui: quando, cliente e conexão, fluxo e nó, o SQL com os parâmetros, o resultado (linhas devolvidas ou afetadas, ou o erro) e a duração. Filtre por cliente, conexão, sucesso ou erro e busque no SQL, no nome do fluxo ou no erro. Da tela de uma execução, o link ver comandos SQL abre só os comandos dela. Cada usuário vê apenas os comandos dos clientes a que tem acesso. Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão); a Auditoria não é apagada.
 
 ### Auditoria
 

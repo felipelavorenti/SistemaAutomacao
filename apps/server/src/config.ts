@@ -4,6 +4,9 @@ function required(name: string): string {
   return value;
 }
 
+/** Dias que as execuções e os comandos SQL ficam guardados quando EXECUTION_RETENTION_DAYS não está no .env. */
+export const DEFAULT_RETENTION_DAYS = 30;
+
 function int(name: string, fallback: number): number {
   const value = process.env[name];
   if (value === undefined || value === '') return fallback;
@@ -69,7 +72,7 @@ export function loadConfig(): Config {
     redisUrl: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379',
     encryptionKey: parseKey(required('ENCRYPTION_KEY')),
     sessionTtlHours: int('SESSION_TTL_HOURS', 12),
-    executionRetentionDays: int('EXECUTION_RETENTION_DAYS', 0),
+    executionRetentionDays: int('EXECUTION_RETENTION_DAYS', DEFAULT_RETENTION_DAYS),
     keepSuccessData: process.env.KEEP_SUCCESS_DATA === 'true',
     workerConcurrency: int('WORKER_CONCURRENCY', 5),
     runWorkerInProcess: process.env.RUN_WORKER_IN_PROCESS !== 'false',
