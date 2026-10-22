@@ -110,8 +110,7 @@ export function summarize(runs: NodeRun[]): NodeRunSummary[] {
 export function trimRuns(runs: NodeRun[]): NodeRun[] {
   let total = 0;
   return runs.map((run) => {
-    const trimmed = trimRun(run);
-    const size = Buffer.byteLength(JSON.stringify({ input: trimmed.input, output: trimmed.output }));
+    const { run: trimmed, size } = trimRunSized(run);
     total += size;
     if (total <= MAX_EXECUTION_BYTES) return trimmed;
     const note = (items: Item[][]) => items.map((list) => [{ json: { _naoGuardado: true, itens: list.length } }]);
@@ -121,10 +120,17 @@ export function trimRuns(runs: NodeRun[]): NodeRun[] {
 
 /** Corta entradas e saídas grandes, mantendo a contagem de itens. */
 export function trimRun(run: NodeRun): NodeRun {
-  const size = Buffer.byteLength(JSON.stringify({ input: run.input, output: run.output }));
-  if (size <= MAX_RUN_BYTES) return run;
+  return trimRunSized(run).run;
+}
+
+/** O corte por nó e o tamanho que ficou, medido uma vez só (o JSON de uma passagem grande é caro de montar). */
+function trimRunSized(run: NodeRun): { run: NodeRun; size: number } {
+  const sizeOf = (r: NodeRun) => Buffer.byteLength(JSON.stringify({ input: r.input, output: r.output }));
+  const size = sizeOf(run);
+  if (size <= MAX_RUN_BYTES) return { run, size };
   const note = (items: Item[][]) => items.map((list) => [{ json: { _truncado: true, itens: list.length, bytes: size } }]);
-  return { ...run, input: note(run.input), output: note(run.output) };
+  const trimmed = { ...run, input: note(run.input), output: note(run.output) };
+  return { run: trimmed, size: sizeOf(trimmed) };
 }
 
 function trimDetails(details: JsonValue | undefined): JsonValue | undefined {

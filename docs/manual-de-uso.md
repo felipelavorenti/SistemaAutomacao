@@ -44,7 +44,7 @@ Se você abrir um fluxo que usa uma conexão de um cliente que você não enxerg
 
 **Execute Command e SSH.** Esses dois nós rodam comandos em servidores, então só o perfil Administrador pode incluir, alterar ou tirar um deles de um fluxo (salvar, importar ou executar um fluxo com essa mudança). Um Editor ainda pode editar o resto do fluxo, desde que não mexa nesses nós. Cada comando executado vai para a Auditoria.
 
-**Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo. Ao gerar, escolha a validade: 30 dias, 90 dias, 1 ano (padrão) ou Não vence. A lista mostra quando cada token vence; vencido, ele para de funcionar, e é preciso gerar outro. Os tokens criados antes da validade existir não vencem.
+**Tokens de API.** Em Minha conta, cada usuário pode criar tokens para chamar a API do Info8n a partir de outros sistemas. O token tem as mesmas permissões de quem o criou e pode ser revogado ali mesmo. Ao gerar, escolha a validade: 30 dias, 90 dias, 1 ano (padrão) ou Não vence. A lista mostra quando cada token vence e quando foi usado pela última vez (com até 1 minuto de atraso); vencido, ele para de funcionar, e é preciso gerar outro. Os tokens criados antes da validade existir não vencem.
 
 Para usar um token, o outro sistema manda o header `Authorization: Bearer sa_...` em cada chamada. Para disparar um fluxo, ele chama `POST /api/workflows/{id}/run` e depois consulta o resultado em `GET /api/executions/{id}`. O menu Referência da API mostra todas as chamadas dentro do Info8n. A mesma lista, com os parâmetros, um exemplo de chamada e um exemplo de resposta de cada uma, está na [documentação da API](https://claude.ai/code/artifact/80ceb5b2-a2ea-4297-abe8-73dad394d2b9). Para uma integração, crie um usuário só para ela, com o menor perfil que resolve, e gere o token com esse usuário.
 
@@ -593,7 +593,7 @@ Toda criação, alteração e exclusão de tabelas e linhas feita na tela ou pel
 
 ### Execuções
 
-Toda execução, de qualquer origem, aparece em Execuções, da mais recente para a mais antiga. Os filtros são fluxo, status, tipo, período (de e até) e uma busca pelo nome do fluxo, do nó ou pela mensagem de erro.
+Toda execução, de qualquer origem, aparece em Execuções, da mais recente para a mais antiga. Os filtros são fluxo, status, tipo, período (de e até) e uma busca pelo nome do fluxo, do nó ou pela mensagem de erro. A lista se atualiza sozinha: de 5 em 5 segundos enquanto há alguma execução Na fila, Executando ou Esperando, de 30 em 30 segundos quando não há, e fica parada enquanto a aba está em segundo plano (ao voltar para ela, atualiza na hora).
 
 Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os que esperam vaga aparecem no topo da lista como Na fila, com o horário desde quando aguardam, e começam sozinhos conforme os anteriores terminam.
 

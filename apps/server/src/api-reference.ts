@@ -195,7 +195,7 @@ const GROUPS: ApiGroup[] = [
         profile: 'any',
         summary: 'Tokens de API do próprio usuário.',
         response:
-          'last_used_at é a hora da última chamada feita com o token (null se ele ainda não foi usado). expires_at é quando o token deixa de valer (null: não vence). O token em si nunca volta.',
+          'last_used_at é a hora da última chamada feita com o token, com até 1 minuto de atraso (null se ele ainda não foi usado). expires_at é quando o token deixa de valer (null: não vence). O token em si nunca volta.',
       },
       {
         method: 'POST',

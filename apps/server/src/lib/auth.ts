@@ -104,6 +104,8 @@ export async function login(db: Db, email: string, password: string, ttlHours: n
 
   await db.query('UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1', [user.id]);
   const token = randomToken();
+  // Sessão vencida não vale mais para nada: sai da tabela a cada login novo.
+  await db.query('DELETE FROM sessions WHERE expires_at < now()');
   await db.query(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3))`, [
     sha256(token),
     user.id,
@@ -123,9 +125,16 @@ export async function authenticate(db: Db, sessionToken?: string, apiToken?: str
     const row = await one<{ user_id: string }>(db, 'SELECT user_id FROM sessions WHERE token_hash = $1 AND expires_at > now()', [sha256(sessionToken)]);
     userId = row?.user_id;
   } else if (apiToken) {
+    // O último uso só é regravado quando passou mais de um minuto da gravação anterior: um sistema que chama a API
+    // várias vezes por segundo não faz uma gravação no banco por chamada.
     const row = await one<{ user_id: string }>(
       db,
-      'UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > now()) RETURNING user_id',
+      `WITH t AS (SELECT user_id, last_used_at FROM api_tokens WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > now())),
+            touched AS (
+              UPDATE api_tokens SET last_used_at = now()
+              WHERE token_hash = $1 AND EXISTS (SELECT 1 FROM t WHERE last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+            )
+       SELECT user_id FROM t`,
       [sha256(apiToken)],
     );
     userId = row?.user_id;
