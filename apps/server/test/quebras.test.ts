@@ -4,7 +4,7 @@ import { Queue, Worker } from 'bullmq';
 import type { FastifyInstance } from 'fastify';
 import { Redis } from 'ioredis';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { parseKey, type Config } from '../src/config.js';
 import { createDb, migrate, one, type Db } from '../src/db/db.js';
@@ -907,6 +907,27 @@ describe.skipIf(!available)('Correções de quebra', () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(await scheduledRuns(both)).toHaveLength(1);
     await until(async () => (await scheduledRuns(both)).join() === 'success', 'a execução terminar');
+  });
+
+  it('o Postgres derrubando uma conexão parada não encerra o processo', async () => {
+    const probe = createDb(DATABASE_URL);
+    try {
+      expect(probe.listenerCount('error')).toBeGreaterThan(0);
+      const { pid } = (await one<{ pid: number }>(probe, 'SELECT pg_backend_pid() AS pid'))!;
+      expect(probe.idleCount).toBe(1);
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await db.query('SELECT pg_terminate_backend($1)', [pid]);
+        await until(async () => probe.idleCount === 0, 'o pool descartar a conexão derrubada');
+        expect(errors).toHaveBeenCalledWith('Uma conexão parada com o Postgres caiu:', expect.any(String));
+      } finally {
+        errors.mockRestore();
+      }
+      // A próxima consulta abre outra conexão.
+      expect((await one<{ ok: number }>(probe, 'SELECT 1 AS ok'))!.ok).toBe(1);
+    } finally {
+      await probe.end();
+    }
   });
 
   // ---------- Q1: desligar o servidor no meio de uma execução ----------
