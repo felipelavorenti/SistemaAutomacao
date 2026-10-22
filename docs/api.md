@@ -1742,7 +1742,7 @@ dueAt é quando o fluxo devia ter começado. A lista vem vazia quando nenhum flu
 
 ### GET /api/executions/{id}
 
-Execução completa, com os dados de cada nó. Consulte até status sair de queued, running ou waiting.
+Execução completa, com os dados de cada nó e, em definition, o fluxo da versão que rodou (workflow_version), mesmo que ele tenha sido salvo de novo depois. Consulte até status sair de queued, running ou waiting.
 
 **Perfil:** Qualquer perfil
 
@@ -1761,7 +1761,7 @@ curl "$INFO8N/api/executions/4b31556c-2e1d-48da-9043-d1a708320b46" \
 
 **Exemplo de resposta**
 
-runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Pausada (status waiting), wait_info diz o que ela espera: kind time, webhook ou form, o nó (nodeName) e until; start_node_id é o gatilho de onde começou. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados. definition é o fluxo da versão que rodou (workflow_version), mesmo que o fluxo tenha sido salvo de novo depois.
+runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Pausada (status waiting), wait_info diz o que ela espera: kind time, webhook ou form, o nó (nodeName) e until; start_node_id é o gatilho de onde começou. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.
 
 ```json
 {
