@@ -22,6 +22,7 @@ const queue = new ExecutionQueue(redis);
 const active = await many<{ id: string; active: boolean; definition: WorkflowDefinition }>(db, 'SELECT id, active, definition FROM workflows WHERE active');
 await queue.reconcileSchedules(active);
 await queue.scheduleCleanup(config.executionRetentionDays > 0);
+if (config.executionRetentionDays > 0) console.log(`Execuções terminadas e comandos SQL com mais de ${config.executionRetentionDays} dias são apagados todo dia às 03:30 UTC (EXECUTION_RETENTION_DAYS=0 guarda tudo).`);
 
 const worker = config.runWorkerInProcess ? startWorker({ db, config, redis: createRedis(config.redisUrl), subscriber: createRedis(config.redisUrl) }) : null;
 

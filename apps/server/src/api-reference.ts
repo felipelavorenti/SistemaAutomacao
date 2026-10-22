@@ -468,7 +468,7 @@ const GROUPS: ApiGroup[] = [
           limit,
         ],
         response:
-          'duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".',
+          'As execuções terminadas ficam guardadas por 30 dias por padrão (EXECUTION_RETENTION_DAYS no .env; 0 guarda tudo); depois disso saem da lista. duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".',
       },
       {
         method: 'GET',
@@ -485,7 +485,7 @@ const GROUPS: ApiGroup[] = [
         params: [id('da execução')],
         response:
           'runs traz um item por nó executado, na ordem em que rodaram; input e output são listas por entrada e por saída do nó, cada uma com itens {"json": {...}}. O resultado do fluxo é a saída do último nó executado, runs[-1].output[0]. Pausada (status waiting), wait_info diz o que ela espera: kind time, webhook ou form, o nó (nodeName) e until; start_node_id é o gatilho de onde começou. Quando a entrada e a saída de um nó passam de 256 KB juntas, os itens dele vêm trocados por {"_truncado": true, "itens", "bytes"}. runs vem null quando os dados não foram guardados: execução com sucesso agendada ou de subfluxo, com KEEP_SUCCESS_DATA desligado (o padrão). summary resume cada nó sem os dados, e children lista os subfluxos chamados.',
-        errors: ['404: não existe ou é de um fluxo numa pasta sem acesso'],
+        errors: ['404: não existe, é de um fluxo numa pasta sem acesso ou já passou do prazo em que as execuções ficam guardadas (30 dias por padrão)'],
       },
       {
         method: 'GET',
@@ -539,7 +539,7 @@ const GROUPS: ApiGroup[] = [
           limit,
         ],
         response:
-          'id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).',
+          'Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão). id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).',
       },
     ],
   },

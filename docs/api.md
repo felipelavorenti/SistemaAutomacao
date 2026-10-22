@@ -1670,7 +1670,7 @@ curl "$INFO8N/api/executions?status=error&limit=2" \
 
 **Exemplo de resposta**
 
-duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".
+As execuções terminadas ficam guardadas por 30 dias por padrão (EXECUTION_RETENTION_DAYS no .env; 0 guarda tudo); depois disso saem da lista. duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".
 
 ```json
 [
@@ -1878,7 +1878,7 @@ runs traz um item por nó executado, na ordem em que rodaram; input e output sã
 
 **Erros próprios**
 
-- 404: não existe ou é de um fluxo numa pasta sem acesso
+- 404: não existe, é de um fluxo numa pasta sem acesso ou já passou do prazo em que as execuções ficam guardadas (30 dias por padrão)
 
 ### GET /api/executions/{id}/files/{ref}
 
@@ -2013,7 +2013,7 @@ curl "$INFO8N/api/db-commands?clientId=bbac4429-0366-4778-957c-0c1d0e6d7c10&limi
 
 **Exemplo de resposta**
 
-id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).
+Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão). id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).
 
 ```json
 [
