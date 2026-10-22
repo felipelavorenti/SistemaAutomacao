@@ -49,7 +49,7 @@ O repositório [felipelavorenti/SistemaAutomacao](https://github.com/felipelavor
 - `nodes/`: um arquivo por grupo de nós, registrados em `registry.ts`. Os gatilhos de eventos ficam em `webhook.ts` e `triggers-listen.ts`, e os formulários em `forms.ts`. Exemplos: `http-request.ts`, `database.ts`, `flow.ts` (Loop, Stop and Error, Code, Chamado por outro fluxo, Execute Workflow), `data.ts` (Split Out, Aggregate, Merge), `edit-fields.ts`, `metabase.ts`, `clickup.ts`, `gmail.ts` (com o login do Google em `google.ts`), `triggers.ts`.
 - `expressions/`: `template.ts` separa texto e `{{ }}`; `sandbox.ts` avalia no isolate V8.
 - `python/runner.ts`: pool de processos com Pyodide para o nó Code em Python.
-- `database/`: drivers de SQL Server, Oracle e Postgres, e parâmetros nomeados.
+- `database/`: drivers de SQL Server, Oracle e Postgres, parâmetros nomeados e o montador do INSERT em lote (`buildInsertSql`, `insertBatchRows`, `insertParams`, em `params.ts`).
 - `n8n/import.ts`: converte fluxos exportados do n8n.
 - `validate.ts`: acha pendências no fluxo (gatilho ausente, campo obrigatório, expressão quebrada).
 - `catalog.ts`: monta chamadas a partir das APIs cadastradas por ERP.
@@ -717,6 +717,7 @@ Buscar rascunhos lista `GET /drafts` (com `q` e `maxResults`, seguindo `nextPage
 
 - A tabela `audit_log` registra quem criou, alterou, ativou, desativou, excluiu ou executou cada coisa, com IP, antes e depois, sem os segredos.
 - Cada comando SQL executado nos bancos dos clientes fica em `db_commands`, com cliente, conexão, fluxo, nó, quem disparou, parâmetros, linhas, duração e erro.
+- Inserir linhas, no nó Banco de dados, agrupa itens seguidos com a mesma tabela e as mesmas colunas (`insertRows`, em `nodes/database.ts`) e manda cada grupo num INSERT só, até `batchSize` linhas (propriedade `Linhas por comando`, 500 por padrão; nós salvos sem ela usam o padrão). O limite do banco vem de `insertBatchRows`: Postgres 60.000 parâmetros por comando, SQL Server 2.000 parâmetros e 1.000 linhas, Oracle 999 colunas no `INSERT ALL`. Postgres e SQL Server usam `VALUES (...), (...)`; o Oracle usa `INSERT ALL INTO ... INTO ... SELECT 1 FROM DUAL`, porque as versões antigas não têm VALUES com várias linhas. Uma linha mantém o texto de antes (`:p0`, `:p1`); várias usam `:p{linha}_{coluna}`. Cada lote é um comando para a auditoria (uma linha em `db_commands`, com as linhas do lote em `params` até 8 KB e `rows_affected` o total). O lote é atômico, porque é um comando só: se dá erro, nenhuma linha dele entra e o erro diz `Itens a a b`; os lotes anteriores continuam inseridos, e um item cuja leitura falha (expressão, nome de coluna inválido) deixa o lote que já estava montado ser inserido antes do erro. `linhasAfetadas` de cada item é o total do lote dividido pelas linhas (1, salvo gatilho que conte linhas a mais). Executar SQL e Executar procedure continuam com um comando e uma linha de auditoria por item.
 - Cada comando dos nós Execute Command e SSH fica em `audit_log` com a ação `command`, e só o Administrador pode incluir ou alterar esses nós (detalhes em Servidor, integrações e tabelas de dados).
 
 ## API para outros sistemas

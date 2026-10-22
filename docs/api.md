@@ -2013,7 +2013,7 @@ curl "$INFO8N/api/db-commands?clientId=bbac4429-0366-4778-957c-0c1d0e6d7c10&limi
 
 **Exemplo de resposta**
 
-Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão). id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta).
+Os comandos ficam guardados pelo mesmo prazo das execuções (30 dias por padrão). id vem como texto; para a próxima página, mande o id da última linha em beforeId. params são os valores usados no SQL, rows é quantas linhas a consulta devolveu e rows_affected, quantas o comando alterou (null numa consulta). Um INSERT em lote do nó Banco de dados é um comando só: params traz p{linha}_{coluna} de todas as linhas do lote (cortado em 8 KB) e rows_affected o total inserido.
 
 ```json
 [
