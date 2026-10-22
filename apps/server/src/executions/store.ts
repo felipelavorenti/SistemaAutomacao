@@ -32,6 +32,13 @@ export interface NodeRunSummary {
   error?: string;
 }
 
+/**
+ * Definição do fluxo que a execução rodou, para usar numa lista de colunas. A execução de uma versão salva não guarda cópia
+ * (`definition` é NULL): vem de `workflow_versions`. `alias` é o nome da tabela `executions` na consulta.
+ */
+export const executionDefinitionSql = (alias: string): string =>
+  `coalesce(${alias}.definition, (SELECT v.definition FROM workflow_versions v WHERE v.workflow_id = ${alias}.workflow_id AND v.version = ${alias}.workflow_version))`;
+
 export async function createExecution(
   db: Queryable,
   args: {
@@ -54,7 +61,9 @@ export async function createExecution(
   const row = await one<{ id: string }>(
     db,
     `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id, worker_id)
-     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10, $11) RETURNING id`,
+     VALUES ($1, $2, $3, $9, $4,
+             CASE WHEN EXISTS (SELECT 1 FROM workflow_versions v WHERE v.workflow_id = $1 AND v.version = $2 AND v.definition = $5::jsonb) THEN NULL ELSE $5::jsonb END,
+             $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10, $11) RETURNING id`,
     [
       args.workflowId,
       args.workflowVersion,
