@@ -352,4 +352,13 @@ ALTER TABLE executions ALTER COLUMN queued_at SET DEFAULT now();
 ALTER TABLE executions ADD COLUMN cancel_requested boolean NOT NULL DEFAULT false;
 `,
   },
+  {
+    id: '013_definicao_da_versao',
+    sql: `
+-- A execução de uma versão salva do fluxo deixa de guardar uma cópia dele: a definição vem de
+-- workflow_versions (workflow_id, workflow_version). Fica gravada só quando difere da versão salva
+-- (teste do editor com o fluxo ainda não salvo). As execuções de antes mantêm a cópia que já têm.
+ALTER TABLE executions ALTER COLUMN definition DROP NOT NULL;
+`,
+  },
 ];

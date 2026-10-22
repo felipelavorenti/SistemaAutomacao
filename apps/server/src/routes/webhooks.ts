@@ -25,7 +25,7 @@ import {
 import { one } from '../db/db.js';
 import type { ExecutionEvent, ExecutionEvents } from '../executions/events.js';
 import type { ExecutionQueue } from '../executions/queue.js';
-import { createExecution, encodeJson, failQueued } from '../executions/store.js';
+import { createExecution, encodeJson, executionDefinitionSql, failQueued } from '../executions/store.js';
 import { nodeParams, type TriggerManager, type WebhookEntry } from '../triggers/manager.js';
 import type { Db } from '../db/db.js';
 import type { Config } from '../config.js';
@@ -387,7 +387,7 @@ export function webhookRoutes(deps: WebhookDeps) {
     }
     const loadExecution = (id: string) =>
       /^[0-9a-f-]{36}$/i.test(id)
-        ? one<WaitingRow>(deps.db, 'SELECT id, status, mode, workflow_id, definition, start_node_id, wait_info FROM executions WHERE id = $1', [id])
+        ? one<WaitingRow>(deps.db, `SELECT id, status, mode, workflow_id, ${executionDefinitionSql('executions')} AS definition, start_node_id, wait_info FROM executions WHERE id = $1`, [id])
         : Promise.resolve(null);
 
     /** Volta a execução pausada para a fila com os dados que chegaram; false se ela não está mais esperando. */

@@ -53,6 +53,16 @@ export const executionRoutes =
         [id],
       );
       if (!row || !canSeeFolder(user, row.folder_id)) throw notFound('Execução');
+      // Execução de uma versão salva não guarda cópia do fluxo: a definição vem da versão.
+      if (!row.definition) {
+        const version = await one<{ definition: WorkflowDefinition }>(
+          db,
+          'SELECT definition FROM workflow_versions WHERE workflow_id = $1 AND version = $2',
+          [row.workflow_id, row.workflow_version],
+        );
+        if (!version) throw new Error(`A versão ${row.workflow_version} do fluxo desta execução não existe mais`);
+        row.definition = version.definition;
+      }
       return row;
     };
 

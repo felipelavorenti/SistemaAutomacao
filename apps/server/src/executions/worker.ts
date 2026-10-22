@@ -25,7 +25,7 @@ import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
 import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, LOCK_DURATION_MS, QUEUE_NAME, type FailedJob, type JobData } from './queue.js';
-import { CANCELED_BEFORE_PAUSE, cleanupOldExecutions, createExecution, decodeResume, enqueueOrFail, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
+import { CANCELED_BEFORE_PAUSE, cleanupOldExecutions, createExecution, decodeResume, enqueueOrFail, executionDefinitionSql, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
 /** Limites do que fica guardado de cada comando SQL. */
@@ -388,7 +388,7 @@ export function startWorker(deps: {
       }
     };
 
-  const columns = 'id, workflow_id, workflow_version, mode, status, definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data';
+  const columns = `id, workflow_id, workflow_version, mode, status, ${executionDefinitionSql('executions')} AS definition, input, triggered_by, start_node_id, retry_of, resume_state, resume_data`;
   /** Roda uma execução da fila. `alreadyClaimed`: ela já nasceu rodando neste worker (agendamento). */
   const run = async (executionId: string, alreadyClaimed = false) => {
     const claimed = await one<ExecutionRow>(
@@ -578,7 +578,7 @@ export function startWorker(deps: {
   );
   cancelCheckTimer.unref();
 
-  const failedColumns = `e.id, e.workflow_id, e.workflow_version, e.mode, e.status, e.definition, e.input, e.triggered_by, e.start_node_id,
+  const failedColumns = `e.id, e.workflow_id, e.workflow_version, e.mode, e.status, ${executionDefinitionSql('e')} AS definition, e.input, e.triggered_by, e.start_node_id,
     e.retry_of, NULL AS resume_state, NULL AS resume_data`;
   /** Execuções que o worker não encerrou e viraram erro: avisa quem chamou por HTTP e roda o fluxo de erro de cada uma. */
   const notifyFailed = async (rows: ExecutionRow[], message: string) => {

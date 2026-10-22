@@ -1742,7 +1742,7 @@ dueAt é quando o fluxo devia ter começado. A lista vem vazia quando nenhum flu
 
 ### GET /api/executions/{id}
 
-Execução completa, com os dados de cada nó. Consulte até status sair de queued, running ou waiting.
+Execução completa, com os dados de cada nó e, em definition, o fluxo da versão que rodou (workflow_version), mesmo que ele tenha sido salvo de novo depois. Consulte até status sair de queued, running ou waiting.
 
 **Perfil:** Qualquer perfil
 
