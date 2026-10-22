@@ -84,7 +84,8 @@ export async function createExecution(
 export function summarize(runs: NodeRun[]): NodeRunSummary[] {
   const byNode = new Map<string, NodeRunSummary>();
   for (const r of runs) {
-    const inputItems = r.input.reduce((n, i) => n + i.length, 0);
+    const inputItems = r.compacted ? r.compacted.inputItems.reduce((n, i) => n + i, 0) : r.input.reduce((n, i) => n + i.length, 0);
+    const outputCounts = r.compacted ? r.compacted.outputItems : r.output.map((o) => o.length);
     const current = byNode.get(r.nodeId);
     if (!current) {
       byNode.set(r.nodeId, {
@@ -97,7 +98,7 @@ export function summarize(runs: NodeRun[]): NodeRunSummary[] {
         tries: r.tries,
         runs: 1,
         inputItems,
-        outputItems: r.output.map((o) => o.length),
+        outputItems: outputCounts,
         error: r.error?.message,
       });
       continue;
@@ -106,7 +107,7 @@ export function summarize(runs: NodeRun[]): NodeRunSummary[] {
     current.durationMs += r.durationMs;
     current.tries = Math.max(current.tries, r.tries);
     current.inputItems += inputItems;
-    r.output.forEach((o, i) => (current.outputItems[i] = (current.outputItems[i] ?? 0) + o.length));
+    outputCounts.forEach((n, i) => (current.outputItems[i] = (current.outputItems[i] ?? 0) + n));
     if (r.status === 'error') {
       current.status = 'error';
       current.error = r.error?.message;
@@ -115,15 +116,25 @@ export function summarize(runs: NodeRun[]): NodeRunSummary[] {
   return [...byNode.values()];
 }
 
+/** Aviso no lugar dos itens de uma entrada ou saída grande demais (o corte por nó). */
+const truncatedNote = (items: Item[][], bytes: number): Item[][] => items.map((list) => [{ json: { _truncado: true, itens: list.length, bytes } }]);
+/** Aviso no lugar dos itens depois do limite da execução: só a contagem. */
+const unsavedNote = (items: Item[][]): Item[][] => items.map((list) => [{ json: { _naoGuardado: true, itens: list.length } }]);
+
 /** Aplica o corte por nó e, passado o limite da execução, guarda só a contagem. */
 export function trimRuns(runs: NodeRun[]): NodeRun[] {
   let total = 0;
   return runs.map((run) => {
+    if (run.compacted) {
+      // Já veio com o aviso no lugar dos itens (RunRecorder); a contagem fica só no resumo.
+      const { compacted: _compacted, ...kept } = run;
+      total += sizeOfRun(kept);
+      return kept;
+    }
     const { run: trimmed, size } = trimRunSized(run);
     total += size;
     if (total <= MAX_EXECUTION_BYTES) return trimmed;
-    const note = (items: Item[][]) => items.map((list) => [{ json: { _naoGuardado: true, itens: list.length } }]);
-    return { ...trimmed, input: note(run.input), output: note(run.output) };
+    return { ...trimmed, input: unsavedNote(run.input), output: unsavedNote(run.output) };
   });
 }
 
@@ -132,14 +143,76 @@ export function trimRun(run: NodeRun): NodeRun {
   return trimRunSized(run).run;
 }
 
+const sizeOfRun = (r: NodeRun) => Buffer.byteLength(JSON.stringify({ input: r.input, output: r.output }));
+
 /** O corte por nó e o tamanho que ficou, medido uma vez só (o JSON de uma passagem grande é caro de montar). */
 function trimRunSized(run: NodeRun): { run: NodeRun; size: number } {
-  const sizeOf = (r: NodeRun) => Buffer.byteLength(JSON.stringify({ input: r.input, output: r.output }));
-  const size = sizeOf(run);
+  const size = sizeOfRun(run);
   if (size <= MAX_RUN_BYTES) return { run, size };
-  const note = (items: Item[][]) => items.map((list) => [{ json: { _truncado: true, itens: list.length, bytes: size } }]);
-  const trimmed = { ...run, input: note(run.input), output: note(run.output) };
-  return { run: trimmed, size: sizeOf(trimmed) };
+  const trimmed = { ...run, input: truncatedNote(run.input, size), output: truncatedNote(run.output, size) };
+  return { run: trimmed, size: sizeOfRun(trimmed) };
+}
+
+/**
+ * Quantos bytes o JSON de `value` ocupa, no mínimo, parando de somar quando passa de `limit`: serve para saber se
+ * algo passou de um tamanho sem montar o texto inteiro. Nunca conta a mais (texto com acento ou aspas ocupa mais).
+ */
+export function jsonBytesAtLeast(value: unknown, limit: number): number {
+  let bytes = 0;
+  const walk = (v: unknown): void => {
+    if (bytes > limit) return;
+    if (v === null || v === undefined) bytes += 4;
+    else if (typeof v === 'string') bytes += v.length + 2;
+    else if (typeof v === 'number') bytes += Number.isFinite(v) ? String(v).length : 4;
+    else if (typeof v === 'boolean') bytes += v ? 4 : 5;
+    else if (Array.isArray(v)) {
+      bytes += 2 + Math.max(0, v.length - 1);
+      for (let i = 0; i < v.length && bytes <= limit; i++) walk(v[i]);
+    } else if (typeof v === 'object') {
+      const keys = Object.keys(v).filter((k) => {
+        const x = (v as Record<string, unknown>)[k];
+        return x !== undefined && typeof x !== 'function' && typeof x !== 'symbol';
+      });
+      bytes += 2 + Math.max(0, keys.length - 1);
+      for (let i = 0; i < keys.length && bytes <= limit; i++) {
+        bytes += keys[i].length + 3;
+        walk((v as Record<string, unknown>)[keys[i]]);
+      }
+    }
+  };
+  walk(value);
+  return bytes;
+}
+
+/**
+ * Decide o que fica na memória de cada passagem enquanto a execução roda. Sem isto, o histórico segura até o fim
+ * os itens de todas as passagens, e um loop grande enche a memória com dados que o log nem vai guardar. Aplica,
+ * já no meio da execução, os mesmos cortes do `saveResult` (arquivos dos itens fora, corte por nó, limite da
+ * execução), de modo que o que é gravado no fim é igual ao de antes; só deixa de ficar na memória o que seria cortado.
+ * Para execuções que não guardam arquivos (as manuais e as reexecuções guardam).
+ */
+export function createRunRecorder(): (run: NodeRun) => NodeRun {
+  let total = 0;
+  return (run) => {
+    const { runs } = stripBinaries([run], false);
+    const slim = runs[0];
+    const compact = (input: Item[][], output: Item[][]): NodeRun => ({
+      ...slim,
+      input,
+      output,
+      compacted: { inputItems: run.input.map((l) => l.length), outputItems: run.output.map((l) => l.length) },
+    });
+    // Passou do limite da execução: daqui em diante, só a contagem (e sem medir nada).
+    if (total > MAX_EXECUTION_BYTES) return compact(unsavedNote(run.input), unsavedNote(run.output));
+    const known = jsonBytesAtLeast({ input: slim.input, output: slim.output }, MAX_RUN_BYTES);
+    if (known <= MAX_RUN_BYTES) {
+      total += known;
+      return total > MAX_EXECUTION_BYTES ? compact(unsavedNote(run.input), unsavedNote(run.output)) : slim;
+    }
+    const { run: cut, size } = trimRunSized(slim);
+    total += size;
+    return compact(cut.input, cut.output);
+  };
 }
 
 function trimDetails(details: JsonValue | undefined): JsonValue | undefined {

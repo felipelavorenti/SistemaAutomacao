@@ -43,6 +43,12 @@ export interface ExecuteOptions {
   filesDirs?: string[];
   signal?: AbortSignal;
   onNodeFinished?: (run: NodeRun) => void | Promise<void>;
+  /**
+   * Transforma a passagem de um nó antes de ela entrar no histórico da execução (`result.runs`). Serve para não
+   * segurar na memória até o fim os itens que o log não vai guardar. Os próximos nós e `onNodeFinished` recebem
+   * os itens originais; se der erro, vale a passagem original.
+   */
+  retainRun?: (run: NodeRun) => NodeRun;
   registry?: NodeRegistry;
   sandbox?: SandboxOptions;
   /** Tempo máximo padrão de cada nó, em milissegundos. */
@@ -231,7 +237,7 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
       });
       // O nó pediu a pausa e deu certo: ele roda de novo na retomada, então não entra no histórico agora.
       if (waitRequest && run.status === 'success') return pause(node, inputs, waitRequest);
-      runs.push(run);
+      runs.push(retain(run, options.retainRun));
       seq++;
       await options.onNodeFinished?.(run);
 
@@ -284,6 +290,16 @@ export async function executeWorkflow(options: ExecuteOptions): Promise<Executio
     sandbox.dispose();
     void ownPools?.closeAll();
     throw err;
+  }
+}
+
+/** A passagem que fica no histórico; um erro de quem a transforma não derruba a execução. */
+function retain(run: NodeRun, transform?: (run: NodeRun) => NodeRun): NodeRun {
+  if (!transform) return run;
+  try {
+    return transform(run);
+  } catch {
+    return run;
   }
 }
 

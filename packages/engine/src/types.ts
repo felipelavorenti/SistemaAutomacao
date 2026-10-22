@@ -114,6 +114,11 @@ export interface NodeRun {
   error?: NodeError;
   /** Informações extras do nó, ex.: logs do Code e IDs das execuções de subfluxo. */
   meta?: JsonObject;
+  /**
+   * Passagem guardada sem os itens, para o histórico da execução não segurar na memória o que o log não vai
+   * guardar: `input` e `output` já trazem o aviso no lugar dos itens, e aqui ficam as contagens de verdade.
+   */
+  compacted?: { inputItems: number[]; outputItems: number[] };
 }
 
 export type ExecutionStatus = 'success' | 'error' | 'canceled' | 'waiting';
