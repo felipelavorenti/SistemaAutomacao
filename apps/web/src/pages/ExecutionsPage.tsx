@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { formatDate, formatDuration, get, MODE_LABEL, STATUS_LABEL, type ExecutionListItem, type WorkflowListItem } from '../api';
 import { ErrorBox, PageHeader, StatusBadge, useLoad } from '../components/ui';
@@ -52,6 +52,7 @@ export function ExecutionsPage() {
   };
 
   const load = async (append = false) => {
+    lastLoad.current = Date.now();
     try {
       const before = append ? items[items.length - 1]?.created_at : undefined;
       const page = await get<ExecutionListItem[]>(query(before));
@@ -64,11 +65,27 @@ export function ExecutionsPage() {
     }
   };
 
+  // Há algo na fila, rodando ou esperando: a lista muda sozinha e vale olhar de perto.
+  const busy = useRef(false);
+  busy.current = waiting.length > 0 || items.some((e) => ['queued', 'running', 'waiting'].includes(e.status));
+  const lastLoad = useRef(0);
+
   useEffect(() => {
     void load();
-    // Atualiza sozinho enquanto houver execução em andamento.
-    const t = setInterval(() => void load(), 5000);
-    return () => clearInterval(t);
+    // Atualiza sozinho: a cada 5 segundos enquanto houver execução em andamento e a cada 30 quando não há (para
+    // aparecer o que um agendamento ou um webhook acabou de iniciar). Com a aba em segundo plano não busca nada,
+    // e ao voltar para ela busca na hora.
+    const timer = setInterval(() => {
+      if (!document.hidden && (busy.current || Date.now() - lastLoad.current >= 30_000)) void load();
+    }, 5000);
+    const onVisible = () => {
+      if (!document.hidden) void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params]);
 

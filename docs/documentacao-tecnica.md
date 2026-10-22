@@ -125,7 +125,7 @@ Toda execução passa pela fila: a API grava a execução como "na fila", e um w
 
 **Isolamento do código do usuário**
 
-- Expressões `{{ }}` e o nó Code em JavaScript rodam num isolate V8 separado (isolated-vm), com 64 MB de memória e 2 s por expressão. O código não enxerga o servidor, arquivos nem variáveis de ambiente.
+- Expressões `{{ }}` e o nó Code em JavaScript rodam num isolate V8 separado (isolated-vm), com 64 MB de memória e 2 s por expressão. O código não enxerga o servidor, arquivos nem variáveis de ambiente. Cada avaliação roda com `context.eval`. Guardar o script já compilado foi medido (20.000 avaliações no isolated-vm 7) e ganhava só de 4% a 11%, porque o custo está na ida e volta para o isolate e não na compilação; por isso não há cache de scripts.
 - O Code em Python roda no Pyodide dentro de até 2 processos Node separados, com 512 MB cada, sem acesso a arquivos (só leitura do próprio Pyodide) nem a outros programas. Ele consegue abrir conexões de rede.
 - Para quem vem do n8n, as expressões aceitam `.toJsonString()`. Recursos como `$now`, Luxon e `.toISO()` não existem, e o importador avisa onde aparecem.
 
@@ -611,8 +611,8 @@ A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas auto
 | Tabela | Guarda |
 | --- | --- |
 | `users` | Usuários, perfil, hash da senha, tentativas erradas e bloqueio |
-| `sessions` | Sessões de login (só o hash do token) |
-| `api_tokens` | Tokens de API pessoais (só o hash) e a validade (`expires_at`, vazio para não vencer) |
+| `sessions` | Sessões de login (só o hash do token); as vencidas são apagadas a cada login novo |
+| `api_tokens` | Tokens de API pessoais (só o hash) e a validade (`expires_at`, vazio para não vencer); o último uso (`last_used_at`) é regravado no máximo uma vez por minuto |
 | `folders`, `user_folders` | Pastas de fluxos e quem acessa cada uma |
 | `clients`, `user_clients` | Clientes e quem acessa cada um |
 | `connections` | Conexões, com os segredos criptografados |
@@ -632,6 +632,7 @@ A plataforma usa um Postgres próprio, com 19 tabelas criadas e atualizadas auto
 - Execuções agendadas que terminam com sucesso guardam só um resumo. Para guardar também os dados, use `KEEP_SUCCESS_DATA=true`.
 - Execuções com erro, manuais e reexecuções guardam entrada e saída de cada nó, comprimidas com gzip.
 - Cada nó guarda até 256 KB de dados, e cada execução até 16 MB. Acima disso fica só a contagem de itens.
+- Ao gravar o log, o tamanho de cada passagem é medido uma vez só (`trimRunSized`, em `executions/store.ts`), para o corte por nó e a soma do limite da execução.
 - Arquivos dos itens: o conteúdo só é guardado nas execuções manuais e reexecuções (tabela `execution_files`, até 64 MB por execução, arquivos iguais contam uma vez). Nas outras, o histórico fica só com nome, tipo e tamanho.
 - A execução de uma versão salva do fluxo não guarda cópia dele: `definition` fica `NULL` e a definição vem de `workflow_versions` pelo par (`workflow_id`, `workflow_version`), que nunca muda depois de gravado. `createExecution` só grava a cópia quando não existe uma versão com a mesma definição (o teste do editor com o fluxo ainda não salvo, que também não tem `workflow_version`). A conferência é feita no próprio `INSERT`, comparando o `jsonb`, então cada subfluxo de um Loop com 500 itens também não guarda cópia. Quem lê a definição de uma execução usa `executionDefinitionSql` (worker ao pegar a execução, ao dar uma como abandonada e ao rodar o fluxo de erro, e o Wait de formulário) ou, na tela (`GET /executions/{id}`), busca a versão quando `definition` vem vazio. A migração `013_definicao_da_versao` só tira o `NOT NULL` da coluna: as execuções de antes mantêm a cópia que já tinham, e saem com a limpeza por prazo. Salvar o fluxo de novo não muda o `definition` que uma execução antiga devolve, e Executar de novo roda a versão da execução original.
 - Comandos SQL guardam até 32 KB do texto e 8 KB dos parâmetros.
