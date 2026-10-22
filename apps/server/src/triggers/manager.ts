@@ -15,7 +15,7 @@ import {
 import type { Config } from '../config.js';
 import { one, many, type Db } from '../db/db.js';
 import type { ExecutionQueue } from '../executions/queue.js';
-import { createExecution } from '../executions/store.js';
+import { createExecution, enqueueOrFail } from '../executions/store.js';
 import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { decryptJson } from '../lib/crypto.js';
 
@@ -262,7 +262,7 @@ export class TriggerManager {
       input: items,
       startNodeId: node.id,
     });
-    await this.deps.queue.enqueueRun(id);
+    await enqueueOrFail(this.deps.db, this.deps.queue, id);
     return id;
   }
 

@@ -49,7 +49,9 @@ function fakeCtx(type: NodeType, parameters: JsonObject, inputs: Item[][], signa
     resumeUrl: 'http://localhost:3000/webhook-waiting/x',
     resumeFormUrl: 'http://localhost:3000/form-waiting/x',
     publicUrl: 'http://localhost:3000',
+    internalUrl: 'http://localhost:3000',
     // Como num subfluxo: não pode pausar, então espera no próprio worker.
+    canWait: false,
     putToWait: () => false,
     sendResponse: () => undefined,
   };
@@ -313,6 +315,30 @@ describe('Wait', () => {
     // Sem webhook (o limite de tempo acabou), seguem os itens de antes.
     const timeout = await executeWorkflow({ workflow, executionId: 'abc', mode: 'manual', registry, resume: { state: paused.resumeState! } });
     expect(timeout.lastOutput).toEqual([{ json: { a: 1 } }]);
+  });
+
+  it('webhook ou formulário com o limite numa data que já passou não pausa: segue como se o tempo tivesse acabado', async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    for (const resume of ['webhook', 'form']) {
+      const workflow: WorkflowDefinition = {
+        nodes: [
+          { id: 't', name: 'Início', type: 'manualTrigger', position: { x: 0, y: 0 }, parameters: {} },
+          { id: 'w', name: 'Espera', type: 'wait', position: { x: 0, y: 0 }, parameters: { resume, limitWaitTime: true, limitType: 'atSpecifiedTime', maxDateAndTime: past } },
+          { id: 'n', name: 'Depois', type: 'noOp', position: { x: 0, y: 0 }, parameters: {} },
+        ],
+        connections: [
+          { from: 't', fromOutput: 0, to: 'w', toInput: 0 },
+          { from: 'w', fromOutput: 0, to: 'n', toInput: 0 },
+        ],
+      };
+      const result = await executeWorkflow({ workflow, executionId: 'abc', mode: 'manual', triggerItems: [{ json: { a: 1 } }], registry });
+      expect(result.status).toBe('success');
+      expect(result.lastOutput).toEqual([{ json: { a: 1 } }]);
+      // Num subfluxo, o webhook e o formulário são recusados mesmo com o limite vencido, como com o limite no futuro.
+      const sub = await executeWorkflow({ workflow, executionId: 'abc', mode: 'subworkflow', triggerItems: [{ json: { a: 1 } }], registry, canWait: false });
+      expect(sub.status).toBe('error');
+      expect(sub.error?.message).toMatch(/não funciona dentro de um subfluxo/);
+    }
   });
 
   it('$execution.resumeUrl usa o endereço público', async () => {

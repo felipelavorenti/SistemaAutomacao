@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { WorkflowDefinition } from '@sa/engine';
 import { currentUser, type AppDeps } from '../app.js';
 import { many, one } from '../db/db.js';
-import { createExecution, decodeData } from '../executions/store.js';
+import { isAbandoned } from '../executions/queue.js';
+import { createExecution, decodeData, enqueueOrFail } from '../executions/store.js';
 import { audit } from '../lib/audit.js';
 import { canSeeFolder, HttpError, notFound, requireCap, type CurrentUser } from '../lib/permissions.js';
 
@@ -35,6 +36,9 @@ interface ExecutionRow {
   wait_info: unknown;
   resume_state: Buffer | null;
   resume_data: Buffer | null;
+  worker_id: string | null;
+  cancel_requested: boolean;
+  queued_at: Date | null;
 }
 
 export const executionRoutes =
@@ -127,7 +131,7 @@ export const executionRoutes =
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
       // O estado da pausa é interno (pode ter arquivos inteiros); a tela usa wait_till e wait_info.
-      const { data, resume_state: _state, resume_data: _resume, ...rest } = row;
+      const { data, resume_state: _state, resume_data: _resume, worker_id: _worker, cancel_requested: _cancel, queued_at: _queued, ...rest } = row;
       // Subfluxos que esta execução chamou, só os que o usuário pode ver.
       const children = await many(
         db,
@@ -163,24 +167,85 @@ export const executionRoutes =
       return reply.send(file.content);
     });
 
+    type CancelState = { status: string; worker_id: string | null; wait_till: Date | null };
+    /**
+     * Cancela a execução no estado em que ela foi lida. Devolve false quando ela mudou de estado no meio
+     * (um worker a pegou da fila, ela pausou, ou voltou de uma pausa): aí o cancelamento é tentado de novo
+     * no estado novo, em vez de não fazer nada.
+     */
+    const cancelAs = async (id: string, row: CancelState): Promise<boolean> => {
+      if (row.status === 'queued') {
+        const canceled = await one(
+          db,
+          `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada antes de começar' WHERE id = $1 AND status = 'queued' RETURNING id`,
+          [id],
+        );
+        // O worker não vai pegá-la: quem chamou por webhook ou formulário fica sabendo por aqui.
+        if (canceled) await queue.publishFinished(id, 'canceled', 'Cancelada antes de começar').catch(() => undefined);
+        return !!canceled;
+      }
+      if (row.status === 'running') {
+        // Ninguém está rodando (o worker parou): cancela na hora, com os subfluxos que ela chamou.
+        const live = await queue.liveWorkers([row.worker_id]).catch(() => null);
+        if (live && isAbandoned(row.worker_id, live)) {
+          const canceled = await many<{ id: string }>(
+            db,
+            `WITH RECURSIVE tree AS (
+               SELECT id FROM executions WHERE id = $1 AND worker_id IS NOT DISTINCT FROM $2
+               UNION ALL SELECT e.id FROM executions e JOIN tree t ON e.parent_execution_id = t.id WHERE e.status = 'running'
+             )
+             UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada; o worker que a rodava tinha parado'
+             WHERE id IN (SELECT id FROM tree) AND status = 'running' RETURNING id`,
+            [id, row.worker_id],
+          );
+          if (canceled.some((r) => r.id === id)) {
+            await queue.publishFinished(id, 'canceled', 'Cancelada; o worker que a rodava tinha parado').catch(() => undefined);
+            await queue.requestCancel(id);
+            return true;
+          }
+        }
+        // Com o worker vivo, é ele que encerra. O pedido fica gravado nela e nos subfluxos que ela está
+        // rodando: se ela pausar mesmo assim (o aviso chegou depois do último nó), a pausa vira cancelamento;
+        // se o worker parar antes de encerrá-la, ela fica cancelada (e não erro) quando a parada for notada.
+        const requested = await many<{ id: string }>(
+          db,
+          `WITH RECURSIVE tree AS (
+             SELECT id FROM executions WHERE id = $1 AND status = 'running'
+             UNION ALL SELECT e.id FROM executions e JOIN tree t ON e.parent_execution_id = t.id WHERE e.status = 'running'
+           )
+           UPDATE executions SET cancel_requested = true WHERE id IN (SELECT id FROM tree) AND status = 'running' RETURNING id`,
+          [id],
+        );
+        if (!requested.some((r) => r.id === id)) return false;
+        await queue.requestCancel(id);
+        return true;
+      }
+      // Esperando.
+      const canceled = await one(
+        db,
+        `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',
+           resume_state = NULL, resume_data = NULL, wait_till = NULL WHERE id = $1 AND status = 'waiting' RETURNING id`,
+        [id],
+      );
+      if (canceled) await queue.cancelResume(id, row.wait_till);
+      return !!canceled;
+    };
+
     app.post('/executions/:id/cancel', async (request) => {
       const user = currentUser(request);
       requireCap(user, 'workflow:execute');
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const row = await load(user, id);
-      if (row.status === 'queued') {
-        await db.query(`UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada antes de começar' WHERE id = $1 AND status = 'queued'`, [id]);
-      } else if (row.status === 'running') {
-        await queue.requestCancel(id);
-      } else if (row.status === 'waiting') {
-        await db.query(
-          `UPDATE executions SET status = 'canceled', finished_at = now(), error_message = 'Cancelada enquanto esperava',
-             resume_state = NULL, resume_data = NULL, wait_till = NULL WHERE id = $1 AND status = 'waiting'`,
-          [id],
-        );
-        await queue.cancelResume(id);
-      } else {
-        throw new HttpError(400, 'A execução já terminou');
+      const active = (status: string) => status === 'queued' || status === 'running' || status === 'waiting';
+      let state: CancelState | undefined = row;
+      let done = false;
+      for (let attempt = 0; attempt < 5 && state && active(state.status) && !done; attempt++) {
+        done = await cancelAs(id, state);
+        if (!done) state = await one<CancelState>(db, 'SELECT status, worker_id, wait_till FROM executions WHERE id = $1', [id]);
+      }
+      if (!done) {
+        if (!state || !active(state.status)) throw new HttpError(400, 'A execução já terminou');
+        throw new HttpError(409, 'A execução mudou de situação várias vezes durante o cancelamento; tente de novo');
       }
       await audit(db, { userId: user.id, action: 'cancel', entityType: 'execution', entityId: id, entityName: row.workflow_name, ip: request.ip });
       return { ok: true };
@@ -203,7 +268,7 @@ export const executionRoutes =
         retryOf: id,
         startNodeId: row.start_node_id,
       });
-      await queue.enqueueRun(executionId);
+      await enqueueOrFail(db, queue, executionId);
       await audit(db, { userId: user.id, action: 'retry', entityType: 'execution', entityId: executionId, entityName: row.workflow_name, after: { retryOf: id }, ip: request.ip });
       return { executionId };
     });

@@ -84,7 +84,12 @@ Um fluxo pode ter mais de um gatilho, como no n8n: por exemplo, um Agendamento e
 
 **Configurações do fluxo**
 
-O botão Configurações, na barra do editor, tem o **Fluxo de erro**: o fluxo que roda quando uma execução automática deste falha (veja o Error Trigger). A mudança vale depois de salvar.
+O botão Configurações, na barra do editor, tem:
+
+- **Fluxo de erro:** o fluxo que roda quando uma execução automática deste falha (veja o Error Trigger).
+- **Se a execução agendada anterior ainda não terminou:** Rodar mesmo assim (padrão) ou Pular este horário. Com Pular, quando chega a hora do Agendamento e a execução agendada anterior deste fluxo ainda está na fila, rodando ou Esperando num Wait, o horário é pulado e não roda depois; o próximo horário roda normalmente se a anterior já tiver terminado. O horário pulado não aparece em Execuções, para não ocupar espaço. Só conta a execução agendada: testes manuais, webhooks e chamadas por outro fluxo não impedem o agendamento. A execução única (Uma vez, numa data e hora) nunca é pulada. Use quando duas execuções do mesmo fluxo ao mesmo tempo dariam problema (ex.: enviar o mesmo e-mail duas vezes).
+
+As mudanças valem depois de salvar.
 
 **Versões**
 
@@ -171,7 +176,7 @@ Todo fluxo começa por pelo menos um gatilho.
 - **Todo dia:** escolha o horário, com hora, minuto e segundo (ex.: 08:30:00).
 - **Toda semana:** marque os dias da semana e escolha o horário. Ex.: Seg, Qua e Sex às 07:00:00.
 - **Todo mês:** escolha o dia do mês (1 a 31) e o horário. Nos meses que não têm o dia escolhido (ex.: 31 em abril), não roda.
-- **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico.
+- **A cada intervalo:** um número e a unidade (segundos, minutos ou horas). Conta a partir da ativação. Cada execução fica em Execuções, então intervalos de poucos segundos enchem o histórico. Se uma execução pode demorar mais que o intervalo, veja Pular este horário nas Configurações do fluxo.
 - **Uma vez, numa data e hora:** roda uma única vez no momento escolhido, com dia, hora, minuto, segundo e milissegundo (ex.: 05/10/2026 14:30:00,250), e depois o fluxo é desativado sozinho (a Auditoria registra a desativação). A data precisa estar no futuro para ativar. Para rodar de novo, escolha outra data e ative outra vez.
 - **Expressão cron:** para casos que as opções acima não cobrem. São 5 campos (minuto, hora, dia do mês, mês, dia da semana), ou 6 com os segundos no começo. `*` é qualquer valor, `*/15` é a cada 15, `1-5` é um intervalo e `8,12,18` é uma lista; no dia da semana, 0 é domingo. Exemplos: `0 8 * * *` todo dia às 8h; `*/15 * * * *` a cada 15 minutos; `0 8-18 * * 1-5` de hora em hora das 8h às 18h, de segunda a sexta; `*/30 * * * * *` a cada 30 segundos.
 
@@ -340,9 +345,9 @@ Vários e-mails de uma vez viram uma execução com um item por e-mail. E-mails 
 - **Quando a URL de retomada for chamada (webhook):** o fluxo fica parado até alguém chamar `{{ $execution.resumeUrl }}` (o endereço `/webhook-waiting/<id da execução>`, mais o Sufixo do caminho, se houver). Mande esse endereço antes, num HTTP Request, num e-mail ou numa mensagem. A chamada vira o item de saída, com headers, query e body, como no Webhook, e tem as mesmas opções de método, autenticação, IPs, robôs e resposta. Chamar de novo depois de retomado dá 409.
 - **Quando um formulário for enviado:** o fluxo fica parado até alguém enviar o formulário do endereço `{{ $execution.resumeFormUrl }}`; os campos e a saída são como no Form Trigger. Bom para aprovações: o fluxo manda um e-mail com o link, o gestor aprova ou recusa, e o fluxo segue com a resposta.
 
-Nos dois últimos, **Limitar o tempo de espera** faz o fluxo seguir sozinho depois de um intervalo ou numa data, com os itens que chegaram no Wait.
+Nos dois últimos, **Limitar o tempo de espera** faz o fluxo seguir sozinho depois de um intervalo ou numa data, com os itens que chegaram no Wait. Se a data do limite já passou quando o fluxo chega no Wait, ele segue na hora, sem esperar.
 
-Esperas de mais de 1 minuto **pausam a execução de verdade**: ela fica Esperando em Execuções, não ocupa vaga de execução simultânea, não tem limite de prazo e continua mesmo se o Info8n for reiniciado. Esperas mais curtas acontecem com a execução rodando. Cancelar uma execução Esperando a encerra na hora. Dentro de um subfluxo (chamado pelo Execute Workflow), o Wait não pausa: espera rodando, até 24 dias, e não aceita webhook nem formulário. Os endereços de retomada usam o PUBLIC_URL do .env; sem ele, apontam para localhost e só funcionam no próprio servidor (peça ao administrador para configurar). Exemplo: esperar 10 minutos entre enviar um pedido ao ERP e consultar o status dele.
+Esperas de mais de 1 minuto **pausam a execução de verdade**: ela fica Esperando em Execuções, não ocupa vaga de execução simultânea, não tem limite de prazo e continua mesmo se o Info8n for reiniciado. Esperas mais curtas acontecem com a execução rodando. Cancelar uma execução Esperando a encerra na hora. Dentro de um subfluxo (chamado pelo Execute Workflow), o Wait não pausa: espera rodando, até 24 dias, e não aceita webhook nem formulário. Os endereços de retomada usam o PUBLIC_URL do .env; sem ele, apontam para http://localhost:3000, que só abre num navegador do próprio servidor e que, no Docker, um fluxo do Info8n não alcança (peça ao administrador para configurar). Exemplo: esperar 10 minutos entre enviar um pedido ao ERP e consultar o status dele.
 
 **No Operation.** Não faz nada: repassa os itens como chegaram. Serve para organizar o desenho do fluxo ou marcar um ponto de junção.
 
@@ -418,7 +423,7 @@ Exemplo: Listar pasta em `/retorno` com um Filter por `name` terminando em `.ret
 
 **SSH.** Roda comandos e envia ou baixa arquivos num servidor por SSH, como o nó SSH do n8n. Use uma conexão SSH, com senha, chave privada ou as duas. No recurso Comando, Rodar comando executa o Comando na Pasta onde rodar (padrão `/`) e devolve code (código de saída), signal, stdout e stderr; um código diferente de 0 não é erro, confira code no próximo nó. No recurso Arquivo, Enviar arquivo grava o arquivo do Campo do arquivo na pasta do Caminho, com o Nome do arquivo no servidor (vazio usa o nome do arquivo do item), e Baixar arquivo traz o arquivo do Caminho para o Campo do arquivo. **Só o perfil Administrador pode criar ou alterar este nó**, e cada comando executado fica registrado na Auditoria.
 
-**Execute Command.** Roda um comando no servidor do Info8n (no Docker, dentro do container do app, com sh), como o nó Execute Command do n8n. Com Rodar uma vez só (padrão) roda uma vez; desligado, roda uma vez por item, com as expressões daquele item. Devolve exitCode, stdout e stderr. Se o comando terminar com código diferente de 0, o nó dá erro com o código e a última linha de stderr. A saída pode ter até 64 MB; um comando que não termina segue rodando até a execução ser cancelada. **Só o perfil Administrador pode criar ou alterar este nó**, e cada comando executado fica registrado na Auditoria.
+**Execute Command.** Roda um comando no servidor do Info8n (no Docker, dentro do container do worker, com sh; só a pasta /files é a mesma do app), como o nó Execute Command do n8n. Com Rodar uma vez só (padrão) roda uma vez; desligado, roda uma vez por item, com as expressões daquele item. Devolve exitCode, stdout e stderr. Se o comando terminar com código diferente de 0, o nó dá erro com o código e a última linha de stderr. A saída pode ter até 64 MB; um comando que não termina segue rodando até a execução ser cancelada. **Só o perfil Administrador pode criar ou alterar este nó**, e cada comando executado fica registrado na Auditoria.
 
 **Git.** Clona, puxa, faz commit e push em repositórios Git, como o nó Git do n8n. A Pasta do repositório precisa estar dentro das pastas liberadas em FILES_DIRS (no Docker, `/files`, ex.: `/files/repos/relatorios`). Em Login, Sem login serve para repositórios públicos ou locais; Usuário e senha (ou token) usa uma conexão Git e vale para endereços `https://` (no GitHub e no GitLab, use um token de acesso pessoal no lugar da senha). Operações:
 
@@ -433,7 +438,7 @@ Por segurança, os ganchos (hooks) do repositório não rodam, e Adicionar confi
 
 **RSS Read.** Lê os itens de um feed RSS ou Atom, uma vez por item que chega, como o nó RSS Read do n8n. Informe a URL do feed; Ignorar erros de certificado (SSL) serve para feeds internos. Cada notícia vira um item, com title, link, pubDate, isoDate, content, contentSnippet, creator e guid. Para disparar um fluxo quando sai notícia nova, use o gatilho RSS Feed Trigger.
 
-**Info8n (API).** Usa a API do próprio Info8n de dentro de um fluxo, como o nó n8n do n8n. Use uma conexão API do Info8n, com um token criado em Minha conta, Tokens de API; o nó faz só o que o dono do token pode fazer. Endereço do Info8n vazio usa este Info8n (PUBLIC_URL). Recursos e operações:
+**Info8n (API).** Usa a API do próprio Info8n de dentro de um fluxo, como o nó n8n do n8n. Use uma conexão API do Info8n, com um token criado em Minha conta, Tokens de API; o nó faz só o que o dono do token pode fazer. Endereço do Info8n vazio usa este Info8n. Recursos e operações:
 
 - **Fluxo:** Listar (Só os ativos, Nome contém, Trazer todos ou Quantidade), Buscar, Criar e Alterar (Fluxo em JSON, com name, folderId e definition; no Alterar, o que ficar de fora mantém o atual), Excluir, Ativar, Desativar e Executar (Itens de entrada em JSON, uma lista de objetos; devolve o ID da execução, que roda na fila).
 - **Execução:** Listar (Do fluxo e Situação), Buscar, Executar de novo e Cancelar.
@@ -464,7 +469,7 @@ Na janela do nó, a aba Configurações muda o comportamento dele sem mexer nos 
 | Desativar nó | O nó não executa e repassa os itens que chegaram, como se não estivesse ali. Aparece apagado no desenho. | Desligado |
 | Continuar em caso de erro | Em vez de parar o fluxo, o nó devolve um item com os campos error (a mensagem) e details, e o fluxo segue. | Desligado |
 | Tentar de novo quando falhar | Repete o nó quando ele falha. Você define o total de tentativas (1 a 10, contando a primeira) e a espera entre elas. | Desligado; 3 tentativas; 1 s |
-| Tempo limite do nó | Quanto tempo o nó pode levar. Passou disso, falha com erro de tempo limite (e tenta de novo, se configurado). | 120 s; Metabase 300 s; Execute Workflow 1 h |
+| Tempo limite do nó | Quanto tempo o nó pode levar. Passou disso, o nó para antes do item seguinte e falha com erro de tempo limite (e tenta de novo, se configurado; a tentativa nova começa do primeiro item). | 120 s; Metabase 300 s; Execute Workflow 1 h |
 | Anotações | Texto livre para explicar o nó a quem abrir o fluxo depois. | Vazio |
 
 **Como a espera cresce.** A espera aumenta a cada tentativa: com 1 s, a segunda tentativa espera 1 s, a terceira 2 s, a quarta 3 s, e assim por diante.
@@ -508,6 +513,7 @@ Uma conexão guarda o endereço e a credencial de um sistema externo, para os n�
 - **Testar conexão:** bancos, Metabase, ClickUp, Gmail, SMTP, FTP, SFTP e SSH têm o botão Testar conexão no formulário, que tenta conectar antes de salvar.
 - **Senhas e tokens:** ficam criptografados e nunca voltam para a tela. Ao editar, deixe o campo em branco para manter o valor atual. Se você mudar o servidor, a porta ou a URL, digite a senha (ou o token) de novo: o Info8n não deixa levar a senha salva para outro endereço.
 - **Conexão por expressão:** o campo de conexão de um nó também aceita expressão. Na hora de rodar, o Info8n confere se o responsável pela execução tem acesso ao cliente da conexão: quem clicou em Executar ou Tentar de novo, ou, nas execuções automáticas (agendamento, webhook, gatilhos, fluxo de erro), quem salvou o fluxo por último. Sem acesso, o nó falha dizendo isso. A mesma conferência vale para o cliente no ERP e para o subfluxo do Execute Workflow escolhidos por expressão.
+- **Alterar com fluxos rodando:** mudar uma conexão de banco não derruba quem está usando. O nó Banco de dados que já começou termina com os dados antigos (todos os itens dele); os nós que começarem depois usam os dados novos.
 - **Excluir:** uma conexão usada por algum fluxo não pode ser excluída; o sistema lista quais fluxos a usam.
 - **Rede:** o Info8n acessa os bancos e as APIs a partir do servidor onde está instalado. Se um banco de cliente só aceita conexões de certos IPs, libere o IP desse servidor.
 
@@ -597,7 +603,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 | Executando | Em andamento |
 | Esperando | Parada num Wait ou num Form; a tela da execução diz em qual nó, o que espera e até quando |
 | Sucesso | Terminou sem erro |
-| Erro | Parou num nó; a coluna Erro diz qual e por quê |
+| Erro | Parou num nó; a coluna Erro diz qual e por quê. Também quando o servidor foi desligado ou reiniciado no meio (veja abaixo) |
 | Cancelada | Alguém cancelou |
 
 | Tipo | Origem |
@@ -613,7 +619,7 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 **A tela da execução** mostra quem disparou, quando começou, quanto durou e a versão do fluxo que rodou. Se houve erro, o painel vermelho diz em qual nó, a mensagem e os detalhes (por exemplo, a resposta da API ou o código do erro do banco). Abaixo, a lista Nós executados traz cada nó na ordem em que rodou, com a quantidade de itens e o tempo. Clique num nó para ver a entrada e a saída dele, as tentativas, os logs do código e os links para os subfluxos que ele chamou. Um nó dentro de um Loop aparece uma vez por volta.
 
 - **Executar de novo:** roda outra vez a mesma versão do fluxo, com a mesma entrada. A nova execução aponta para a original.
-- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando.
+- **Cancelar:** interrompe uma execução na fila, em andamento ou esperando. Em andamento, ela para no nó em que está, em geral na hora (até uns 15 segundos se o Redis estava reiniciando). Se o worker que a rodava parou (por exemplo, o servidor caiu e ainda não voltou), ela é encerrada na hora, junto com os subfluxos que chamou, depois que o Info8n percebe que ele parou: um minuto, ou uns 5 se ele estava em outra máquina que caiu. Quem esperava a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada. Se a execução mudou de situação no mesmo instante em que você cancelou (saiu da fila e começou a rodar, pausou num Wait ou voltou de uma pausa), o cancelamento vale para a situação nova. Se ela já ia pausar quando o cancelamento chegou, ela fica Cancelada em vez de Esperando. Um nó que roda uma vez para cada item (Database, Send Email, Data Table, Execute Workflow e os outros) para antes do item seguinte: depois do cancelamento, nada novo é gravado, enviado ou chamado, e nenhum subfluxo novo começa. Se o nó estava esperando para tentar de novo, a execução fica Cancelada sem outra tentativa. Se o worker parar depois de você cancelar e antes de encerrá-la (o servidor caiu logo em seguida, por exemplo), ela fica Cancelada, e não Erro, quando o Info8n perceber que ele parou; o fluxo de erro não roda.
 - **Abrir fluxo** e **ver quem chamou** (em subfluxos) levam ao fluxo e à execução de origem.
 
 **O que fica guardado.** Para os logs ocuparem pouco espaço:
@@ -621,7 +627,9 @@ Quando muitos fluxos agendados disparam no mesmo horário, rodam 5 por vez. Os q
 - Execuções agendadas que terminam com sucesso, e os subfluxos chamados por elas, guardam só o resumo: cada nó, o status, a quantidade de itens e o tempo, sem os dados. As que dão erro, as manuais e as reexecuções (com os subfluxos que elas chamam) guardam tudo. O administrador pode mudar isso para guardar tudo sempre.
 - Arquivos dos itens: nas execuções manuais e nas reexecuções, o conteúdo fica guardado (até 64 MB por execução; arquivos iguais contam uma vez) e a lista Arquivos de cada nó tem Abrir e Baixar. Nas outras, só o nome, o tipo e o tamanho ficam no histórico.
 - A entrada e a saída de um nó que passam de 256 KB são trocadas por um aviso com a quantidade de itens (campo \_truncado). Passados 16 MB na execução, os nós seguintes guardam só a contagem (campo \_naoGuardado).
-- Se o administrador configurou um prazo de retenção, execuções mais antigas que ele são apagadas uma vez por dia.
+- Se o administrador configurou um prazo de retenção, execuções mais antigas que ele são apagadas uma vez por dia (às 3h30), aos poucos, para não pesar no banco. Execuções que ainda estão na fila, rodando ou esperando não são apagadas, mesmo antigas.
+
+**Servidor reiniciado ou desligado no meio de uma execução.** Ao desligar o Info8n (atualização, `docker compose restart`), as execuções em andamento são interrompidas e ficam como Erro, com a mensagem "Execução interrompida porque o servidor foi desligado"; a que você tinha acabado de cancelar fica Cancelada. O que for pedido enquanto ele desliga fica Na fila e roda quando ele voltar. Se o servidor caiu de repente (queda de energia, travamento), na volta o Info8n acha as execuções que ficaram como Executando sem ninguém rodando e, em até uns 3 minutos (até uns 7 se o worker estava em outra máquina que caiu), as marca como Erro, com a mensagem "Execução interrompida: o servidor foi reiniciado ou o worker parou no meio dela"; isso vale também para os subfluxos que elas chamavam. Nos dois casos, se o fluxo tem Fluxo de erro e a execução era agendada, por webhook ou por gatilho, o fluxo de erro roda. Execuções Esperando num Wait não são afetadas: continuam esperando e seguem na hora certa (ou logo que o servidor volta, se a hora passou com ele fora do ar). Se uma execução Esperando perdeu a volta numa falha, ela volta em poucos minutos. Se uma Na fila perdeu o lugar na fila (por exemplo, o banco de dados caiu na hora em que ela ia começar), ela volta para a fila em poucos minutos e roda; se somou mais de 1 hora assim, sem lugar na fila (depois de uma falha do banco, o tempo em que ela esperou a vez na fila não conta; se o Redis perdeu o job, conta desde que ela entrou na fila ou desde a última falha), ela vira Erro ("ficou mais de 1 hora na fila sem o job que a rodaria") em vez de rodar tão tarde. Se ela nem chegou a entrar na fila (o servidor parou no instante em que ela foi pedida), ela vira Erro ("o job dela não chegou à fila") e não roda sozinha, porque quem a pediu pode ter recebido um erro e tentado de novo. Nos dois casos, o fluxo de erro roda como nos casos acima. A execução interrompida não roda de novo sozinha, nem a agendada; use Executar de novo se precisar. Se o Postgres reiniciar ou perder uma conexão com o Info8n no ar, o Info8n continua rodando e volta a usar o banco sozinho assim que ele responde; só a consulta que estava em andamento no instante da queda falha.
 
 ### Comandos SQL
 
@@ -727,3 +735,9 @@ Na importação, a configuração de tentar de novo vem junto. Confira a aba Con
 | O Google recusou o acesso salvo na conexão do Gmail | Acesso revogado, senha trocada ou app Externo em Teste há mais de 7 dias | Abra a conexão e clique em Conectar com Google de novo. Para não vencer, publique o app no Google Cloud |
 | A conexão do Gmail ainda não foi conectada | Salvou a conexão sem clicar em Conectar com Google | Abra a conexão e clique em Conectar com Google |
 | A execução fica Na fila | O servidor já está rodando o máximo de execuções ao mesmo tempo (5, por padrão) | Aguarde, ou peça ao administrador para aumentar esse limite |
+| Execução com erro "Execução interrompida" | O servidor foi desligado, reiniciado ou caiu enquanto ela rodava | Confira o que ela já tinha feito (dados gravados, e-mails enviados) e use Executar de novo se precisar |
+| HTTP Request para `http://localhost:3000` (o próprio Info8n, ou um `$execution.resumeUrl` sem PUBLIC_URL) dá erro de conexão | No Docker, as execuções rodam no container do worker, onde localhost não é o Info8n | Use `http://app:3000` no lugar de `http://localhost:3000`, ou peça ao administrador para configurar o PUBLIC_URL com um endereço que o servidor também alcance |
+| Execução com erro "Não foi possível pôr a execução na fila" | O Redis recusou gravar quando ela foi pedida (disco ou memória cheios). Com o Redis fora do ar ou reiniciando, o pedido fica esperando ele voltar, e a execução fica Na fila até lá | Tente de novo; se continuar, peça ao administrador para ver o Redis |
+| Execução com erro "ficou mais de 1 hora na fila sem o job que a rodaria" | Ela perdeu o lugar na fila numa falha do Redis ou do banco e não voltou a tempo | Confira se ela ainda precisa rodar e use Executar de novo |
+| Execução com erro "o job dela não chegou à fila" | O servidor parou (ou o Redis caiu) no instante em que ela foi pedida | Confira se quem a pediu já tentou de novo; se não, use Executar de novo |
+| O agendamento não rodou num horário | Pular este horário está ligado e a execução agendada anterior ainda não tinha terminado | É o esperado com essa opção. Veja a duração das execuções e, se for o caso, aumente o intervalo |

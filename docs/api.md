@@ -678,7 +678,7 @@ Cria um fluxo. Sem definition, ele nasce só com o Gatilho manual.
 | --- | --- | --- | --- | --- |
 | `name` | corpo | texto | sim | Nome do fluxo |
 | `folderId` | corpo | uuid | sim | Pasta do fluxo; o usuário precisa ter acesso a ela |
-| `definition` | corpo | objeto | não | Nós e ligações do fluxo: {"nodes": [...], "connections": [...]}, no formato de GET /workflows/{id} |
+| `definition` | corpo | objeto | não | Nós e ligações do fluxo: {"nodes": [...], "connections": [...], "settings": {...}}, no formato de GET /workflows/{id}. settings é opcional: errorWorkflowId (uuid do fluxo de erro, que começa pelo Error Trigger) e skipIfRunning (true: o Agendamento pula o horário quando a execução agendada anterior do fluxo ainda está na fila, rodando ou esperando) |
 
 **Exemplo de chamada**
 
@@ -715,7 +715,8 @@ curl -X POST "$INFO8N/api/workflows" \
         }
       }
     ],
-    "connections": [{"from": "agenda", "fromOutput": 0, "to": "baixo", "toInput": 0}]
+    "connections": [{"from": "agenda", "fromOutput": 0, "to": "baixo", "toInput": 0}],
+    "settings": {"skipIfRunning": true}
   }
 }'
 ```
@@ -750,6 +751,7 @@ curl -X POST "$INFO8N/api/workflows" \
         }
       }
     ],
+    "settings": {"skipIfRunning": true},
     "connections": [{"to": "baixo", "from": "agenda", "toInput": 0, "fromOutput": 0}]
   },
   "version": 1,
@@ -775,7 +777,7 @@ Salva o fluxo. Cada gravação cria uma versão nova.
 | `id` | caminho | uuid | sim | ID do fluxo |
 | `name` | corpo | texto | sim | Nome do fluxo |
 | `folderId` | corpo | uuid | sim | Pasta do fluxo; o usuário precisa ter acesso a ela |
-| `definition` | corpo | objeto | sim | Nós e ligações do fluxo: {"nodes": [...], "connections": [...]}, no formato de GET /workflows/{id} |
+| `definition` | corpo | objeto | sim | Nós e ligações do fluxo: {"nodes": [...], "connections": [...], "settings": {...}}, no formato de GET /workflows/{id}. settings é opcional: errorWorkflowId (uuid do fluxo de erro, que começa pelo Error Trigger) e skipIfRunning (true: o Agendamento pula o horário quando a execução agendada anterior do fluxo ainda está na fila, rodando ou esperando) |
 | `baseVersion` | corpo | número | não | Versão que foi editada. Se outra pessoa salvou depois dela, a gravação é recusada |
 
 **Exemplo de chamada**
@@ -1036,6 +1038,7 @@ Use o executionId em GET /executions/{id} para acompanhar a execução e pegar o
 
 - 403: a definition cria ou altera um nó Execute Command ou SSH e o usuário não é Administrador
 - 404: o fluxo não existe ou está numa pasta sem acesso
+- 500: o Redis recusou pôr a execução na fila (ex.: disco ou memória cheios); ela fica com status error. Com o Redis fora do ar, a chamada espera ele voltar
 
 ### POST /api/workflows/{id}/listen
 
@@ -1310,7 +1313,7 @@ Importa um fluxo exportado. Ele entra desativado.
 | --- | --- | --- | --- | --- |
 | `name` | corpo | texto | sim | Nome do fluxo |
 | `folderId` | corpo | uuid | sim | Pasta do fluxo; o usuário precisa ter acesso a ela |
-| `definition` | corpo | objeto | sim | Nós e ligações do fluxo: {"nodes": [...], "connections": [...]}, no formato de GET /workflows/{id} |
+| `definition` | corpo | objeto | sim | Nós e ligações do fluxo: {"nodes": [...], "connections": [...], "settings": {...}}, no formato de GET /workflows/{id}. settings é opcional: errorWorkflowId (uuid do fluxo de erro, que começa pelo Error Trigger) e skipIfRunning (true: o Agendamento pula o horário quando a execução agendada anterior do fluxo ainda está na fila, rodando ou esperando) |
 
 **Exemplo de chamada**
 
@@ -1667,7 +1670,7 @@ curl "$INFO8N/api/executions?status=error&limit=2" \
 
 **Exemplo de resposta**
 
-duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há).
+duration_ms é quanto a execução levou, em milissegundos (null enquanto não termina). wait_till é quando uma execução pausada (status waiting) volta sozinha (null quando espera só o webhook ou o formulário). data_size é o tamanho dos dados guardados, compactados, em bytes (null quando não foram guardados). custom_data traz os pares gravados pelo nó Execution Data (null quando não há). Uma execução que estava rodando quando o servidor foi desligado, reiniciado ou caiu, ou que ficou mais de 1 hora na fila depois de perder o job numa falha do Redis ou do banco, fica com status error e error_message começando por "Execução interrompida".
 
 ```json
 [
@@ -1938,6 +1941,8 @@ curl -X POST "$INFO8N/api/executions/6add9343-6e56-49d2-b8ef-81a3a3021946/cancel
 
 **Exemplo de resposta**
 
+Na fila, ela fica canceled na hora, com error_message "Cancelada antes de começar". Em andamento, o worker que roda a execução a interrompe no nó atual, e ela fica canceled logo depois (se o aviso pelo Redis se perder numa reconexão, o worker acha o pedido no banco em até 15 segundos); se ela ia pausar quando o pedido chegou, fica canceled com error_message "Execução cancelada", em vez de waiting. Se a execução mudou de situação no meio do cancelamento (saiu da fila, pausou ou voltou de uma pausa), o cancelamento vale para a situação nova. Se o worker dela parou há mais de um minuto (uns 5 se ele estava em outra máquina que caiu), ela e os subfluxos em andamento dela ficam canceled na hora, com error_message "Cancelada; o worker que a rodava tinha parado"; se ele parou há menos tempo, ou parar antes de encerrá-la, elas ficam canceled com essa mensagem quando a parada for notada (não error). Depois do cancelamento, um nó que roda para cada item (Database, Send Email, Data Table, Execute Workflow e outros) para antes do item seguinte: nada novo é gravado, enviado ou chamado, e nenhum subfluxo novo começa. Um nó que esperava para tentar de novo não tenta. Quem espera a resposta de um webhook ou formulário dessa execução recebe o fim como cancelada.
+
 ```json
 {"ok": true}
 ```
@@ -1945,6 +1950,7 @@ curl -X POST "$INFO8N/api/executions/6add9343-6e56-49d2-b8ef-81a3a3021946/cancel
 **Erros próprios**
 
 - 400: a execução já terminou
+- 409: a execução mudou de situação várias vezes durante o cancelamento; tente de novo
 
 ### POST /api/executions/{id}/retry
 
@@ -1976,6 +1982,7 @@ executionId é a nova execução, com mode retry e retry_of apontando para a ori
 **Erros próprios**
 
 - 400: a execução ainda está em andamento
+- 500: o Redis recusou pôr a execução na fila (ex.: disco ou memória cheios); a nova execução fica com status error. Com o Redis fora do ar, a chamada espera ele voltar
 
 ### GET /api/db-commands
 

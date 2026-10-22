@@ -574,6 +574,8 @@ function waitAmountMs(raw: JsonValue, unit: string): number {
   return amount * UNIT_MS[unit]!;
 }
 
+const SUBFLOW_WAIT_ERROR = 'Esperar um webhook ou formulário não funciona dentro de um subfluxo; ponha o Wait no fluxo principal';
+
 /** Campos do webhook de retomada que o servidor usa (já com as expressões resolvidas). */
 const WAIT_WEBHOOK_FIELDS = [
   'httpMethod',
@@ -716,6 +718,8 @@ export const wait: NodeType = {
     }
 
     if (resume === 'webhook' || resume === 'form') {
+      // Antes de olhar o limite: num subfluxo, um limite que já passou não pode fazer o Wait funcionar só às vezes.
+      if (!ctx.canWait) throw new NodeOperationError(SUBFLOW_WAIT_ERROR);
       let until: number | undefined;
       if ((await ctx.getParam('limitWaitTime', 0)) === true) {
         if ((await ctx.getParam('limitType', 0)) === 'atSpecifiedTime') {
@@ -724,6 +728,9 @@ export const wait: NodeType = {
           until = Date.now() + waitAmountMs(await ctx.getParam('resumeAmount', 0), String(await ctx.getParam('resumeUnit', 0)));
         }
       }
+      // Limite que já passou: o tempo de espera acabou, e o fluxo segue com os mesmos itens, como na volta
+      // pelo tempo. Pausar aqui faria um fluxo que volta a este Wait pausar e voltar sem parar.
+      if (until !== undefined && until <= Date.now()) return [input];
       const config: JsonObject = {};
       if (resume === 'webhook') {
         for (const name of WAIT_WEBHOOK_FIELDS) config[name] = await ctx.getParam(name, 0);
@@ -739,7 +746,7 @@ export const wait: NodeType = {
       }
       ctx.meta.resumeUrl = resume === 'webhook' ? ctx.resumeUrl : ctx.resumeFormUrl;
       if (!ctx.putToWait({ kind: resume, until, config })) {
-        throw new NodeOperationError('Esperar um webhook ou formulário não funciona dentro de um subfluxo; ponha o Wait no fluxo principal');
+        throw new NodeOperationError(SUBFLOW_WAIT_ERROR);
       }
       return [input];
     }

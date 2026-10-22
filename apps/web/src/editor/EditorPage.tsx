@@ -201,7 +201,7 @@ function Editor() {
   };
 
   const removeNode = (nodeId: string) => {
-    update((d) => ({ nodes: d.nodes.filter((n) => n.id !== nodeId), connections: d.connections.filter((c) => c.from !== nodeId && c.to !== nodeId) }));
+    update((d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== nodeId), connections: d.connections.filter((c) => c.from !== nodeId && c.to !== nodeId) }));
     setSelectedId((s) => (s === nodeId ? null : s));
     setOpenId((s) => (s === nodeId ? null : s));
   };
@@ -226,6 +226,7 @@ function Editor() {
       parameters: {},
     };
     update((d) => ({
+      ...d,
       nodes: [...d.nodes, node],
       // Liga automaticamente ao nó selecionado, como no n8n.
       connections: selected && desc.inputs > 0 ? [...d.connections, { from: selected.id, fromOutput: 0, to: node.id, toInput: 0 }] : d.connections,
@@ -621,6 +622,7 @@ function SettingsModal({
   onSave: (settings: WorkflowSettings) => void;
 }) {
   const [errorWorkflowId, setErrorWorkflowId] = useState(settings.errorWorkflowId ?? '');
+  const [skipIfRunning, setSkipIfRunning] = useState(settings.skipIfRunning === true);
   return (
     <Modal title="Configurações do fluxo" onClose={onClose}>
       <Field
@@ -636,10 +638,22 @@ function SettingsModal({
           ))}
         </select>
       </Field>
+      <Field
+        label="Se a execução agendada anterior ainda não terminou"
+        hint="Vale para o gatilho Schedule. Pular evita duas execuções agendadas deste fluxo ao mesmo tempo; o horário pulado não roda depois."
+      >
+        <select value={skipIfRunning ? 'skip' : 'run'} disabled={readOnly} onChange={(e) => setSkipIfRunning(e.target.value === 'skip')}>
+          <option value="run">Rodar mesmo assim</option>
+          <option value="skip">Pular este horário</option>
+        </select>
+      </Field>
       {!readOnly && (
         <div className="modal-actions">
           <button onClick={onClose}>Cancelar</button>
-          <button className="primary" onClick={() => onSave({ ...settings, errorWorkflowId: errorWorkflowId || undefined })}>
+          <button
+            className="primary"
+            onClick={() => onSave({ ...settings, errorWorkflowId: errorWorkflowId || undefined, skipIfRunning: skipIfRunning || undefined })}
+          >
             Aplicar
           </button>
         </div>

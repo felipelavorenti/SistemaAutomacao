@@ -1,6 +1,6 @@
 import { CodeError, ExpressionSandbox, type SandboxOptions } from './expressions/sandbox.js';
 import type { ApiEndpointData } from './catalog.js';
-import { DatabasePools } from './database/drivers.js';
+import { DatabasePools, type DatabaseLease } from './database/drivers.js';
 import type { CommandLog, ConnectionData, DatabaseCommandLog, DatabaseSession, DataTableStore, FileData, NodeExecuteContext, NodeType, SubworkflowResult } from './node-types.js';
 import { MemoryDataTableStore } from './data-tables.js';
 
@@ -61,6 +61,11 @@ export interface ExecuteOptions {
   python?: PythonRunner;
   /** Endereço público do Info8n, para $execution.resumeUrl e as URLs de webhook e formulário. */
   publicUrl?: string;
+  /**
+   * Endereço pelo qual o worker chama o próprio Info8n (nó Info8n (API) sem endereço). Sem ele, vale
+   * o publicUrl. No Docker o worker roda num container separado e localhost não é o Info8n.
+   */
+  internalUrl?: string;
   /** A execução pode pausar (Wait, Form)? Subfluxos não podem: esperam no próprio worker. */
   canWait?: boolean;
   /** Continua uma execução pausada. */
@@ -295,9 +300,15 @@ function findStartNode(workflow: WorkflowDefinition, registry: NodeRegistry, sta
   return trigger;
 }
 
-export function executionUrls(options: Pick<ExecuteOptions, 'publicUrl' | 'executionId'>): { resumeUrl: string; resumeFormUrl: string; publicUrl: string } {
+export function executionUrls(options: Pick<ExecuteOptions, 'publicUrl' | 'internalUrl' | 'executionId'>): {
+  resumeUrl: string;
+  resumeFormUrl: string;
+  publicUrl: string;
+  internalUrl: string;
+} {
   const publicUrl = (options.publicUrl ?? 'http://localhost:3000').replace(/\/+$/, '');
-  return { publicUrl, resumeUrl: `${publicUrl}/webhook-waiting/${options.executionId}`, resumeFormUrl: `${publicUrl}/form-waiting/${options.executionId}` };
+  const internalUrl = options.internalUrl?.replace(/\/+$/, '') || publicUrl;
+  return { publicUrl, internalUrl, resumeUrl: `${publicUrl}/webhook-waiting/${options.executionId}`, resumeFormUrl: `${publicUrl}/form-waiting/${options.executionId}` };
 }
 
 async function runNode(
@@ -340,6 +351,8 @@ async function runNode(
 
   let lastError: NodeError = { message: 'Erro desconhecido' };
   for (let attempt = 1; attempt <= maxTries; attempt++) {
+    // Cancelada na espera entre tentativas: não começa outra.
+    if (options.signal?.aborted) throw new ExecutionCanceled();
     const scope = await sandbox.createScope({
       nodeOutputs,
       execution: { id: options.executionId, mode: options.mode, resumeUrl: urls.resumeUrl, resumeFormUrl: urls.resumeFormUrl },
@@ -347,6 +360,14 @@ async function runNode(
     });
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+    // Pools de banco usados nesta tentativa: devolvidos no fim, para a troca da conexão não fechar um em uso.
+    const leases = new Leases();
+    // Cancelada ou passou do tempo: o nó já foi dado como encerrado, mas o código dele (um laço por item)
+    // pode continuar rodando. Daí em diante ele não lê mais parâmetros nem mexe em banco, tabela,
+    // conexão, resposta ou subfluxo; o laço para no item seguinte.
+    const live = () => {
+      if (signal.aborted) throw new ExecutionCanceled();
+    };
     try {
       const output = await withAbort(
         type.execute({
@@ -354,10 +375,12 @@ async function runNode(
           inputs,
           signal,
           getParam: (name, itemIndex = 0) => {
+            live();
             const value: JsonValue = node.parameters[name] !== undefined ? node.parameters[name] : (defaults[name] ?? null);
             return scope.resolve(value, inputs[0] ?? [], itemIndex);
           },
           getConnection: async (id) => {
+            live();
             if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
             return options.getConnection(id);
           },
@@ -366,7 +389,7 @@ async function runNode(
             if (!options.getFile) throw new NodeOperationError('Arquivos não estão disponíveis nesta execução');
             return options.getFile(id);
           },
-          database: (connectionId) => openDatabase(connectionId, node, options, pools),
+          database: (connectionId) => openDatabase(connectionId, node, options, pools, leases, live),
           getApiEndpoint: async (erpClientId, endpointId) => {
             if (!options.getApiEndpoint) throw new NodeOperationError('O catálogo de APIs não está disponível nesta execução');
             return options.getApiEndpoint(erpClientId, endpointId);
@@ -385,15 +408,20 @@ async function runNode(
             }),
           executeWorkflow: async (workflowId, items) => {
             if (!options.executeSubworkflow) throw new NodeOperationError('Não é possível executar outro fluxo nesta execução');
+            live();
             return options.executeSubworkflow({ workflowId, items, signal });
           },
           state,
           meta,
           mode: options.mode,
           ...urls,
+          canWait: options.canWait !== false,
           putToWait: pause.putToWait,
           resumeData: pause.resumeData,
-          sendResponse: (response) => options.onResponse?.(response),
+          sendResponse: (response) => {
+            live();
+            options.onResponse?.(response);
+          },
           logCommand: async (entry) => {
             try {
               await options.onCommand?.({ ...entry, nodeName: node.name, nodeType: node.type });
@@ -401,7 +429,7 @@ async function runNode(
               // A auditoria não pode derrubar a execução.
             }
           },
-          dataTables: options.dataTables!,
+          dataTables: guardedDataTables(options.dataTables!, live),
         }),
         signal,
       );
@@ -411,6 +439,7 @@ async function runNode(
       lastError = toNodeError(err, timeout.aborted ? timeoutMs : undefined);
     } finally {
       scope.release();
+      leases.releaseAll();
     }
     if (attempt < maxTries) await sleep(wait * attempt, options.signal);
   }
@@ -422,10 +451,36 @@ async function runNode(
   return done({ status: 'error', output: [], tries: maxTries, error: lastError });
 }
 
-async function openDatabase(connectionId: string, node: NodeInstance, options: ExecuteOptions, pools: DatabasePools): Promise<DatabaseSession> {
+/** Pools emprestados numa tentativa de um nó. Um nó que passou do tempo e pede banco depois do fim devolve na hora. */
+class Leases {
+  private list: DatabaseLease[] = [];
+  private done = false;
+
+  add(lease: DatabaseLease): void {
+    if (this.done) lease.release();
+    else this.list.push(lease);
+  }
+
+  releaseAll(): void {
+    this.done = true;
+    for (const lease of this.list.splice(0)) lease.release();
+  }
+}
+
+async function openDatabase(
+  connectionId: string,
+  node: NodeInstance,
+  options: ExecuteOptions,
+  pools: DatabasePools,
+  leases: Leases,
+  live: () => void,
+): Promise<DatabaseSession> {
+  live();
   if (!options.getConnection) throw new NodeOperationError('Conexões não estão disponíveis nesta execução');
   const connection = await options.getConnection(connectionId);
-  const client = pools.get(connection);
+  const lease = pools.acquire(connection);
+  leases.add(lease);
+  const { client } = lease;
 
   const logged = async <T extends { rows: unknown[]; rowsAffected: number | null }>(
     operation: DatabaseCommandLog['operation'],
@@ -433,6 +488,7 @@ async function openDatabase(connectionId: string, node: NodeInstance, options: E
     params: JsonValue,
     run: () => Promise<T>,
   ): Promise<T> => {
+    live();
     const started = Date.now();
     const entry = { nodeName: node.name, connectionId, connectionType: connection.type, operation, sql, params };
     const report = async (fields: Pick<DatabaseCommandLog, 'rows' | 'rowsAffected' | 'error'>) => {
@@ -468,7 +524,24 @@ function toNodeError(err: unknown, timedOutAfterMs?: number): NodeError {
   return { message: String(err) };
 }
 
+/** Tabelas de dados que recusam qualquer operação depois que a tentativa do nó foi encerrada. */
+function guardedDataTables(store: DataTableStore, live: () => void): DataTableStore {
+  return new Proxy(store, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop);
+      if (typeof value !== 'function') return value;
+      return async (...args: unknown[]) => {
+        live();
+        return value.apply(target, args);
+      };
+    },
+  });
+}
+
 function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  // O nó pode falhar depois de a tentativa ser encerrada (cancelada ou fora do tempo); sem quem a
+  // observe, essa falha derrubaria o processo (unhandledRejection).
+  promise.catch(() => undefined);
   return new Promise((resolve, reject) => {
     if (signal.aborted) return reject(signal.reason);
     const onAbort = () => reject(signal.reason);

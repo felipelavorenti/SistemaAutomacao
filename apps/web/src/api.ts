@@ -50,6 +50,8 @@ export interface Connection {
 export interface WorkflowSettings {
   /** Fluxo que roda quando este falha numa execução automática (começa pelo Error Trigger). */
   errorWorkflowId?: string;
+  /** Agendamento: pula o horário quando a execução agendada anterior ainda não terminou. */
+  skipIfRunning?: boolean;
 }
 
 export interface WorkflowDefinition {

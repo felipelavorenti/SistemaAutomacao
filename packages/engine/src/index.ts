@@ -12,6 +12,7 @@ export { DEFAULT_TIMEZONE, ScheduleError, scheduleRepeat, type ScheduleRepeat } 
 export { getPath } from './nodes/paths.js';
 export {
   DatabasePools,
+  type DatabaseLease,
   DATABASE_CONNECTION_TYPES,
   testDatabaseConnection,
   type DbClient,

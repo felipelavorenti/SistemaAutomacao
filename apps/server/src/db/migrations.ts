@@ -329,4 +329,27 @@ CREATE TABLE data_table_rows (
 ALTER TABLE api_tokens ADD COLUMN expires_at timestamptz;
 `,
   },
+  {
+    id: '011_recuperacao_execucoes',
+    sql: `
+-- Worker que está rodando a execução: na subida (e a cada minuto), execução 'running' de um worker que
+-- não está mais conectado ao Redis vira erro, em vez de ficar "Em execução" para sempre.
+ALTER TABLE executions ADD COLUMN worker_id text;
+-- Apagar uma execução limpa o retry_of de quem a repetiu; sem índice, cada exclusão lia a tabela inteira.
+CREATE INDEX executions_retry_idx ON executions (retry_of) WHERE retry_of IS NOT NULL;
+`,
+  },
+  {
+    id: '012_entrada_na_fila',
+    sql: `
+-- Quando a execução entrou na fila pela última vez (criada, ou de volta de uma pausa). A procura de
+-- execuções sem job põe de novo na fila só a que entrou há pouco; a antiga vira erro. As execuções de
+-- antes ficam sem a hora (o default vem depois do ADD COLUMN), e vale a created_at delas.
+ALTER TABLE executions ADD COLUMN queued_at timestamptz;
+ALTER TABLE executions ALTER COLUMN queued_at SET DEFAULT now();
+-- Alguém pediu para cancelar enquanto ela rodava: se ela pausar mesmo assim (o pedido chegou depois do
+-- último nó), fica cancelada em vez de esperar.
+ALTER TABLE executions ADD COLUMN cancel_requested boolean NOT NULL DEFAULT false;
+`,
+  },
 ];

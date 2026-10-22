@@ -34,6 +34,11 @@ export interface Config {
   trustProxy: boolean | string[];
   /** Endereço do Info8n que o navegador usa (ex.: https://info8n.empresa.com.br), para o login com Google. */
   publicUrl?: string;
+  /**
+   * Endereço pelo qual o worker chama o próprio Info8n (nó Info8n (API) sem endereço). No Docker o
+   * worker roda num container separado, onde localhost não é o Info8n: o compose usa http://app:3000.
+   */
+  internalUrl?: string;
   webDistDir?: string;
   /** Pastas do servidor que os nós Read/Write Files from Disk podem usar. */
   filesDirs: string[];
@@ -71,6 +76,7 @@ export function loadConfig(): Config {
     secureCookies: process.env.SECURE_COOKIES === 'true',
     trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
     publicUrl: process.env.PUBLIC_URL?.replace(/\/+$/, '') || undefined,
+    internalUrl: process.env.INTERNAL_URL?.replace(/\/+$/, '') || undefined,
     webDistDir: process.env.WEB_DIST_DIR,
     filesDirs: (process.env.FILES_DIRS ?? '')
       .split(/[;,]/)

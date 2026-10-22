@@ -58,7 +58,7 @@ function parseJsonParam(value: JsonValue, what: string): JsonObject {
 }
 
 async function api(ctx: NodeExecuteContext, connection: ConnectionData, method: string, route: string, body?: JsonValue, query?: Record<string, string | undefined>): Promise<JsonValue> {
-  const base = (str(connection.data.baseUrl).trim() || ctx.publicUrl).replace(/\/+$/, '').replace(/\/api$/, '');
+  const base = (str(connection.data.baseUrl).trim() || ctx.internalUrl).replace(/\/+$/, '').replace(/\/api$/, '');
   const url = new URL(`${base}/api${route}`);
   for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== '') url.searchParams.set(k, v);
   return callApi({

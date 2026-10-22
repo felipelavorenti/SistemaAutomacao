@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { promisify } from 'node:util';
+import { gunzipSync, gzip, gzipSync } from 'node:zlib';
 import type { BinaryData, ExecutionResult, Item, JsonObject, JsonValue, NodeRun, ResumeData, ResumeState, WorkflowDefinition } from '@sa/engine';
 import { one, type Queryable } from '../db/db.js';
+
+/** Compacta fora da thread principal: um log grande não segura o worker (nem a renovação do job na fila). */
+const gzipAsync = promisify(gzip);
 
 export type ExecutionMode = 'manual' | 'schedule' | 'subworkflow' | 'retry' | 'webhook' | 'trigger' | 'error';
 
@@ -41,14 +45,16 @@ export async function createExecution(
     parentExecutionId?: string | null;
     /** Subfluxos já nascem rodando, dentro da execução de quem chamou. */
     status?: 'queued' | 'running';
+    /** Worker que roda a execução (subfluxos: o mesmo de quem chamou). */
+    workerId?: string | null;
     /** Gatilho de onde começa (webhook, formulário, Error Trigger…); sem ele, o primeiro gatilho do fluxo. */
     startNodeId?: string | null;
   },
 ): Promise<string> {
   const row = await one<{ id: string }>(
     db,
-    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id)
-     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10) RETURNING id`,
+    `INSERT INTO executions (workflow_id, workflow_version, mode, status, triggered_by, definition, input, retry_of, parent_execution_id, started_at, start_node_id, worker_id)
+     VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8, CASE WHEN $9 = 'running' THEN now() END, $10, $11) RETURNING id`,
     [
       args.workflowId,
       args.workflowVersion,
@@ -60,6 +66,7 @@ export async function createExecution(
       args.parentExecutionId ?? null,
       args.status ?? 'queued',
       args.startNodeId ?? null,
+      args.workerId ?? null,
     ],
   );
   return row!.id;
@@ -168,9 +175,17 @@ export function stripBinaries(runs: NodeRun[], keepFiles: boolean): { runs: Node
   return { runs: stripped, files: [...files.values()] };
 }
 
-export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false): Promise<void> {
+/** Mensagem da execução que ia pausar, mas alguém pediu para cancelar enquanto ela rodava. */
+export const CANCELED_BEFORE_PAUSE = 'Execução cancelada';
+
+/**
+ * Grava o fim da execução e devolve o status gravado. `owner`: só grava se ela ainda é deste worker e está
+ * rodando; devolve null quando outro já a encerrou (cancelada ou marcada como interrompida), e aí nada
+ * muda. A pausa de uma execução com o cancelamento pedido (cancel_requested) é gravada como cancelada.
+ */
+export async function saveResult(db: Queryable, id: string, result: ExecutionResult, keepData: boolean, keepFiles = false, owner?: string): Promise<string | null> {
   const stripped = stripBinaries(result.runs, keepData && keepFiles);
-  const data = keepData ? gzipSync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
+  const data = keepData ? await gzipAsync(JSON.stringify({ runs: trimRuns(stripped.runs) })) : null;
   for (const file of stripped.files) {
     await db.query(
       `INSERT INTO execution_files (execution_id, ref, file_name, mime_type, size, content) VALUES ($1, $2, $3, $4, $5, $6)
@@ -180,11 +195,16 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
   }
   const error = result.error ? { ...result.error, details: trimDetails(result.error.details) } : null;
   const waiting = result.status === 'waiting';
-  await db.query(
-    `UPDATE executions SET status = $2, started_at = $3, finished_at = $4, summary = $5, data = $6, data_size = $7,
-       error = $8, error_message = $9, error_node = $10, input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
-       wait_till = $14, wait_info = $15, resume_state = $16, resume_data = NULL
-     WHERE id = $1`,
+  const res = await db.query<{ status: string }>(
+    `UPDATE executions SET status = CASE WHEN $13 AND cancel_requested THEN 'canceled' ELSE $2 END, started_at = $3,
+       finished_at = CASE WHEN $13 AND cancel_requested THEN now() ELSE $4::timestamptz END, summary = $5, data = $6, data_size = $7,
+       error = CASE WHEN $13 AND cancel_requested THEN $19::jsonb ELSE $8::jsonb END,
+       error_message = CASE WHEN $13 AND cancel_requested THEN $18::text ELSE $9 END, error_node = $10,
+       input = CASE WHEN $11 OR $13 THEN input END, custom_data = $12,
+       wait_till = CASE WHEN cancel_requested THEN NULL ELSE $14::timestamptz END, wait_info = CASE WHEN cancel_requested THEN NULL ELSE $15::jsonb END,
+       resume_state = CASE WHEN cancel_requested THEN NULL ELSE $16::bytea END, resume_data = NULL
+     WHERE id = $1 AND ($17::text IS NULL OR (status = 'running' AND worker_id = $17))
+     RETURNING status`,
     [
       id,
       result.status,
@@ -202,8 +222,12 @@ export async function saveResult(db: Queryable, id: string, result: ExecutionRes
       waiting ? (result.wait?.until ?? null) : null,
       waiting && result.wait ? JSON.stringify(result.wait) : null,
       waiting && result.resumeState ? encodeJson(result.resumeState) : null,
+      owner ?? null,
+      CANCELED_BEFORE_PAUSE,
+      JSON.stringify({ message: CANCELED_BEFORE_PAUSE }),
     ],
   );
+  return res.rows[0]?.status ?? null;
 }
 
 export function encodeJson(value: unknown): Buffer {
@@ -231,13 +255,66 @@ export function customData(runs: NodeRun[]): string | null {
   return Object.keys(merged).length ? JSON.stringify(merged) : null;
 }
 
-export async function failExecution(db: Queryable, id: string, message: string): Promise<void> {
-  await db.query(
+/** Marca a execução como erro. `owner`: como no saveResult, só a que ainda é deste worker; devolve se gravou. */
+export async function failExecution(db: Queryable, id: string, message: string, owner?: string): Promise<boolean> {
+  const res = await db.query(
     `UPDATE executions SET status = 'error', finished_at = now(), started_at = coalesce(started_at, now()),
        error_message = $2, error = $3, resume_state = NULL, resume_data = NULL, wait_till = NULL
-     WHERE id = $1 AND status IN ('queued', 'running')`,
-    [id, message, JSON.stringify({ message })],
+     WHERE id = $1 AND CASE WHEN $4::text IS NULL THEN status IN ('queued', 'running') ELSE status = 'running' AND worker_id = $4 END`,
+    [id, message, JSON.stringify({ message }), owner ?? null],
   );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
+ * Execução que não chegou à fila (o Redis falhou ao enfileirar): vira erro. Quem pediu recebeu o erro e
+ * pode tentar de novo; sem isto, ela ficaria Na fila, e a procura de execuções sem job a encerraria
+ * minutos depois. Só a que ainda está na fila: se o job chegou ao Redis apesar do erro, ele não roda.
+ */
+export async function failQueued(db: Queryable, id: string, err: unknown): Promise<void> {
+  const message = `Não foi possível pôr a execução na fila: ${err instanceof Error ? err.message : String(err)}`;
+  await db
+    .query(
+      `UPDATE executions SET status = 'error', started_at = coalesce(started_at, now()), finished_at = now(), error_message = $2, error = $3
+       WHERE id = $1 AND status = 'queued'`,
+      [id, message, JSON.stringify({ message })],
+    )
+    .catch((e) => console.error(`Execução ${id} não foi marcada como erro:`, e));
+}
+
+/** Põe na fila uma execução recém-criada; se o Redis falhar, ela vira erro (failQueued) e o erro segue. */
+export async function enqueueOrFail(db: Queryable, queue: { enqueueRun(id: string): Promise<void> }, id: string): Promise<void> {
+  try {
+    await queue.enqueueRun(id);
+  } catch (err) {
+    await failQueued(db, id, err);
+    throw err;
+  }
+}
+
+/** Quantas linhas cada comando da limpeza apaga: tudo de uma vez seguraria o banco com meses de histórico. */
+export const CLEANUP_BATCH = 5000;
+
+/**
+ * Apaga, em lotes, os comandos SQL e as execuções terminadas mais antigos que o prazo. Execuções na
+ * fila, rodando ou esperando ficam, mesmo antigas. Os comandos saem primeiro: apagar a execução antes
+ * faria o banco limpar a referência de cada comando dela (milhares por execução) dentro do mesmo lote.
+ */
+export async function cleanupOldExecutions(db: Queryable, days: number, batch = CLEANUP_BATCH): Promise<{ executions: number; dbCommands: number }> {
+  const deleteAll = async (sql: string) => {
+    let total = 0;
+    for (;;) {
+      const res = await db.query(sql, [days, batch]);
+      total += res.rowCount ?? 0;
+      if ((res.rowCount ?? 0) < batch) return total;
+    }
+  };
+  const dbCommands = await deleteAll(`DELETE FROM db_commands WHERE id IN (SELECT id FROM db_commands WHERE at < now() - make_interval(days => $1) LIMIT $2)`);
+  const executions = await deleteAll(
+    `DELETE FROM executions WHERE id IN (
+       SELECT id FROM executions WHERE created_at < now() - make_interval(days => $1) AND status IN ('success', 'error', 'canceled') LIMIT $2)`,
+  );
+  return { executions, dbCommands };
 }
 
 export function decodeData(data: Buffer | null): { runs: NodeRun[] } | null {

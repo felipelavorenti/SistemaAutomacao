@@ -5,7 +5,11 @@ export type Db = pg.Pool;
 export type Queryable = pg.Pool | pg.PoolClient;
 
 export function createDb(connectionString: string): Db {
-  return new pg.Pool({ connectionString, max: 10 });
+  const pool = new pg.Pool({ connectionString, max: 10 });
+  // Conexão ociosa que o Postgres derrubou (reinício, failover, rede): sem este aviso tratado o Node encerra o processo
+  // e leva junto as execuções em andamento. O pool descarta a conexão morta e abre outra na próxima consulta.
+  pool.on('error', (err) => console.error('Uma conexão parada com o Postgres caiu:', err.message));
+  return pool;
 }
 
 export async function one<T extends pg.QueryResultRow>(db: Queryable, sql: string, params: unknown[] = []): Promise<T | undefined> {

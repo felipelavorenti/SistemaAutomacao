@@ -154,6 +154,10 @@ export interface NodeExecuteContext {
   resumeFormUrl: string;
   /** Endereço público do Info8n (para montar URLs de webhook e formulário). */
   publicUrl: string;
+  /** Endereço pelo qual o worker chama o próprio Info8n (INTERNAL_URL; sem ele, o público). */
+  internalUrl: string;
+  /** Se a execução pode pausar (putToWait); false num subfluxo. */
+  canWait: boolean;
   /**
    * Pausa a execução depois deste nó: a vaga do worker fica livre e o nó roda de novo na retomada,
    * com `resumeData`. Devolve false quando a execução não pode pausar (subfluxo); aí o nó decide.
