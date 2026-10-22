@@ -177,6 +177,46 @@ describe('executeWorkflow', () => {
   });
 });
 
+describe('retainRun (o que fica no histórico)', () => {
+  const code = (id: string, name: string, jsCode: string): NodeInstance => ({ id, name, type: 'code', position: { x: 0, y: 0 }, parameters: { mode: 'all', jsCode } });
+  const flow = chain(trigger, code('a', 'Gera', "return [{ json: { n: 1, texto: 'grande' } }, { json: { n: 2, texto: 'grande' } }];"), code('b', 'Soma', 'return $input.all().map((i) => ({ json: { n: i.json.n + 10, texto: i.json.texto } }));'));
+
+  it('o histórico guarda a versão devolvida; os próximos nós e onNodeFinished recebem a passagem original', async () => {
+    const finished: { name: string; output: unknown }[] = [];
+    const result = await run(flow, {
+      retainRun: (r) => ({ ...r, input: [], output: [[]], compacted: { inputItems: r.input.map((l) => l.length), outputItems: r.output.map((l) => l.length) } }),
+      onNodeFinished: (r) => void finished.push({ name: r.nodeName, output: r.output }),
+    });
+    expect(result.status).toBe('success');
+    // O fluxo andou com os itens de verdade...
+    expect(result.lastOutput.map((i) => i.json.n)).toEqual([11, 12]);
+    expect(finished.find((f) => f.name === 'Gera')!.output).toEqual([[{ json: { n: 1, texto: 'grande' } }, { json: { n: 2, texto: 'grande' } }]]);
+    // ...e o histórico ficou com o que o gravador devolveu.
+    const gera = result.runs.find((r) => r.nodeName === 'Gera')!;
+    expect(gera.output).toEqual([[]]);
+    expect(gera.compacted).toEqual({ inputItems: [1], outputItems: [2] });
+    expect(result.runs.find((r) => r.nodeName === 'Soma')!.compacted).toEqual({ inputItems: [2], outputItems: [2] });
+  });
+
+  it('se retainRun der erro, vale a passagem original e a execução segue', async () => {
+    const result = await run(flow, {
+      retainRun: () => {
+        throw new Error('quebrou');
+      },
+    });
+    expect(result.status).toBe('success');
+    const gera = result.runs.find((r) => r.nodeName === 'Gera')!;
+    expect(gera.output[0]).toHaveLength(2);
+    expect(gera.compacted).toBeUndefined();
+  });
+
+  it('sem retainRun, nada muda', async () => {
+    const result = await run(flow);
+    expect(result.runs.every((r) => r.compacted === undefined)).toBe(true);
+    expect(result.runs.find((r) => r.nodeName === 'Soma')!.output[0].map((i) => i.json.n)).toEqual([11, 12]);
+  });
+});
+
 describe('validateWorkflow', () => {
   it('aponta gatilho ausente, campo obrigatório, nó solto e expressão quebrada', () => {
     const issues = validateWorkflow({

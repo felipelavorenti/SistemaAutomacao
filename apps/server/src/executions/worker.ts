@@ -25,7 +25,7 @@ import { ExecutionAccess, executionOwner } from '../lib/access.js';
 import { audit } from '../lib/audit.js';
 import { PgDataTableStore } from '../lib/data-tables.js';
 import { CANCEL_CHANNEL, ExecutionQueue, executionChannel, HEARTBEAT_TTL_MS, isAbandoned, LOCK_DURATION_MS, QUEUE_NAME, type FailedJob, type JobData } from './queue.js';
-import { CANCELED_BEFORE_PAUSE, cleanupOldExecutions, createExecution, decodeResume, enqueueOrFail, executionDefinitionSql, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
+import { CANCELED_BEFORE_PAUSE, cleanupOldExecutions, createExecution, createRunRecorder, decodeResume, enqueueOrFail, executionDefinitionSql, failExecution, saveResult, shouldKeepData, type ExecutionMode } from './store.js';
 import type { ExecutionEvent } from './events.js';
 
 /** Limites do que fica guardado de cada comando SQL. */
@@ -348,6 +348,9 @@ export function startWorker(deps: {
         status: 'running',
         workerId,
       });
+      // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
+      const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
+      const keepFiles = keepAs === 'manual' || keepAs === 'retry';
       const controller = new AbortController();
       const onParentAbort = () => controller.abort();
       signal.addEventListener('abort', onParentAbort, { once: true });
@@ -370,10 +373,9 @@ export function startWorker(deps: {
           internalUrl,
           // O subfluxo roda dentro do worker de quem chamou: não pode pausar.
           canWait: false,
+          retainRun: keepFiles ? undefined : createRunRecorder(),
         }).then(interruptedOnShutdown(byUser));
-        // Chamado a partir de um teste manual: guarda os dados do subfluxo também, para depurar.
-        const keepAs: ExecutionMode = rootMode === 'manual' || rootMode === 'retry' ? rootMode : 'subworkflow';
-        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepAs === 'manual' || keepAs === 'retry', workerId);
+        await saveResult(db, id, result, shouldKeepData(keepAs, result.status, config.keepSuccessData), keepFiles, workerId);
         // Sem pausa (canWait: false), o subfluxo nunca termina esperando.
         return { executionId: id, status: result.status === 'waiting' ? 'error' : result.status, output: result.lastOutput, error: result.error };
       } catch (err) {
@@ -408,6 +410,8 @@ export function startWorker(deps: {
       controller.abort();
     }
     const byUser = () => canceledByUser.has(executionId);
+    // As manuais e as reexecuções guardam os arquivos dos itens; nas outras, a memória não precisa segurar o que o log corta.
+    const keepFiles = claimed.mode === 'manual' || claimed.mode === 'retry';
     let responded = false;
     const { access, ...deps } = executionDeps(executionId, {
       workflowId: claimed.workflow_id,
@@ -434,8 +438,8 @@ export function startWorker(deps: {
           responded = true;
           void publish(executionId, { type: 'response', response });
         },
+        retainRun: keepFiles ? undefined : createRunRecorder(),
       }).then(interruptedOnShutdown(byUser));
-      const keepFiles = claimed.mode === 'manual' || claimed.mode === 'retry';
       const saved = await saveResult(db, executionId, result, shouldKeepData(claimed.mode, result.status, config.keepSuccessData), keepFiles, workerId);
       // Outro já encerrou a execução (cancelada, ou dada como interrompida): o resultado desta rodada não
       // vale. Quem chamou por HTTP fica sabendo como ela ficou (repetir o aviso não faz mal: vale o primeiro).
