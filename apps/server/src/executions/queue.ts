@@ -221,11 +221,13 @@ export class ExecutionQueue {
       if (existing?.data.kind === 'scheduled' && existing.data.once === repeat.at && ['delayed', 'waiting'].includes(await existing.getState())) return;
       await this.removeOnce(onceId);
       // Data que já passou não roda: o fluxo foi ativado ou o servidor voltou depois da hora.
-      if (repeat.at <= Date.now()) return;
+      const now = Date.now();
+      if (repeat.at <= now) return;
+      // O disparo é o momento de criação do job mais o atraso: com o mesmo relógio nos dois, cai no milissegundo pedido.
       await this.queue.add(
         'scheduled',
         { kind: 'scheduled', workflowId: workflow.id, once: repeat.at },
-        { jobId: onceId, delay: repeat.at - Date.now(), removeOnComplete: true, removeOnFail: true },
+        { jobId: onceId, timestamp: now, delay: repeat.at - now, removeOnComplete: true, removeOnFail: true },
       );
       return;
     }
